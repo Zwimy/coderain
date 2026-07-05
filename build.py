@@ -26,7 +26,7 @@ args = [
     "--collect-submodules", "coderain.modules",
     "desktop.py",
 ]
-print(f"building → dist/{NAME}/  (zip: {ZIP}.zip)")
+print(f"building -> dist/{NAME}/  (zip: {ZIP}.zip)")
 subprocess.run(args, cwd=ROOT, check=True)
 
 zip_path = ROOT / "dist" / ZIP
