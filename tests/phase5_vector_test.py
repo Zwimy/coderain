@@ -1,6 +1,6 @@
 """Phase 5 — vector semantic recall (offline; a deterministic fake embedder)."""
 import os, sys, re, shutil, tempfile, hashlib
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.memory import Library
 from coderain.modules import vector as vec
 

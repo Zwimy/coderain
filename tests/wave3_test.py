@@ -9,7 +9,7 @@ beats structure + beat_advance; companion side-chat stays out of the
 transcript and surfaces as a digest; generator rarity attr.
 """
 import os, sys, shutil, tempfile, json
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.modules import rpg as rpg_mod
 from coderain import validator as V
 from coderain.config import load_config

@@ -1,4 +1,4 @@
-"""Run all StoryEngine test suites (offline; no model/network needed).
+"""Run all Coderain test suites (offline; no model/network needed).
 
     py run_tests.py            # or: .venv\\Scripts\\python.exe run_tests.py
 

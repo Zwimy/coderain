@@ -11,7 +11,7 @@
   document.body.prepend(canvas);
   const ctx = canvas.getContext("2d");
 
-  const GLYPHS = "アカサタナハマヤラ0123456789STORYENGINE".split("");
+  const GLYPHS = "アカサタナハマヤラ0123456789CODERAIN".split("");
   const STEP = 16;                       // column width / row height (px)
   let cols, drops;
 

@@ -1,6 +1,6 @@
 """Regressions for the pre-Phase-5 bug sweep — storage/saves (agent B findings)."""
 import os, sys, shutil, tempfile, zipfile
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.memory import Library, MemoryStore
 
 root = os.path.join(tempfile.gettempdir(), "se_p5_sweep")
