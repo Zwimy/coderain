@@ -9,7 +9,7 @@ import sys
 import tempfile
 import zlib
 
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain import cards                             # noqa: E402
 from coderain import templates                         # noqa: E402
 from coderain.memory import Library, MemoryStore       # noqa: E402

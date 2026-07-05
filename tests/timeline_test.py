@@ -5,7 +5,7 @@ entries carry a `turns:` attr; turns_range/recall_turns fetch the exact verbatim
 turns; and folded ranges stay stable across a later retry/undo on the tail.
 """
 import os, sys, shutil, tempfile, json, re
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.memory import Library
 from coderain.summarizer import Summarizer
 

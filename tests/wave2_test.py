@@ -8,7 +8,7 @@ neighbor retrieval; custom lore files (declare, seed, activate, scenario copy);
 the reveal delta end-to-end incl. undo re-hide; stat-list validation.
 """
 import os, sys, shutil, tempfile, json
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain import validator as V
 from coderain.config import load_config
 from coderain.engine import Engine

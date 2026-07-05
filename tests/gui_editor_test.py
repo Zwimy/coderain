@@ -2,7 +2,7 @@
 entries through the real Entry machinery — form save == hand-edited Markdown.
 """
 import os, sys, shutil, tempfile
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.memory import Library
 
 root = os.path.join(tempfile.gettempdir(), "se_guieditor")

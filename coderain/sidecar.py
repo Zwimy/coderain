@@ -1,6 +1,6 @@
 """Sidecar channel + RPG state-block defaults — CORE module (MIT).
 
-Split out of the Pro mechanics module (open-core, 2026-07-05) because the free
+Split out of the RPG module because the
 engine needs both halves even when the paid RPG layer is absent:
 
 - **Sidecar filtering** is leak-prevention, not mechanics: any model may emit a

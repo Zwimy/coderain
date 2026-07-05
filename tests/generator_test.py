@@ -8,7 +8,7 @@ FictionLab shape — generated INTRODUCTION lands as `## Opening` (the save's fi
 message) and the opt-in prompt improver rewrites the brief before generation.
 """
 import os, sys, shutil, tempfile, json
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain import templates
 from coderain.generator import (GenerationError, ScenarioSpec,
                                    generate_scenario)

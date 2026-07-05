@@ -1,5 +1,5 @@
 import os, sys, shutil, tempfile, json, re
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.modules import rpg as rpg_mod
 from coderain.config import load_config
 from coderain.engine import Engine

@@ -3,7 +3,7 @@ already-seeded instructions/ for UNEDITED masters, while never clobbering a user
 edits. Covers the pre-ship footgun from HANDOFF (stale rpg-rules after a rename).
 """
 import os, sys, shutil, tempfile, json
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from pathlib import Path
 from coderain import templates as T
 from coderain.memory import Library

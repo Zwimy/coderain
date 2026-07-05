@@ -5,7 +5,7 @@ auto / floor / garbage handling, long-context (131k+) flow-through, and the
 models hint table used by Settings (and later the PWA).
 """
 import sys
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain import models as M
 from coderain.config import Config, Profile, build_profile, context_budget
 

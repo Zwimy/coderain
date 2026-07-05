@@ -9,7 +9,7 @@ import sys
 import tempfile
 import zipfile
 
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain import templates                       # noqa: E402
 from coderain.generator import (ScenarioSpec, assist_field,   # noqa: E402
                                    complete_scenario)

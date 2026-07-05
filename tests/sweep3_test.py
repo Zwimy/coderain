@@ -7,7 +7,7 @@ import shutil
 import sys
 import tempfile
 
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain import templates                       # noqa: E402
 from coderain.memory import Entry, Library, MemoryStore  # noqa: E402
 

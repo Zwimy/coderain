@@ -1,5 +1,4 @@
-# StoryEngine core (MIT). The optional Pro package additionally needs
-# `cryptography` (Ed25519 license verification) — listed in its own docs.
+# Coderain — runtime dependencies (MIT).
 openai>=1.30.0
 pyyaml>=6.0
 python-dotenv>=1.0.0

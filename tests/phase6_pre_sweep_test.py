@@ -1,6 +1,6 @@
 """Regressions for the pre-Phase-6 bug sweep (Phase 5 vector + RPG-retry findings)."""
 import os, sys, re, shutil, tempfile, hashlib
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.memory import Library
 from coderain.config import load_config
 from coderain.engine import Engine

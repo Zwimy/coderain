@@ -75,6 +75,7 @@ easter egg.
 Coderain is free. If you'd like to chip in:
 
 - ⭐ Star the repo — it genuinely helps.
+- ☕ [Ko-fi](https://ko-fi.com/zwimy) — buy me a coffee.
 - 💚 [GitHub Sponsors](https://github.com/sponsors/Zwimy)
 - 🐛 Issues & PRs welcome — importing more chat/card formats, new lorebook
   behaviors, and translations are great first contributions.

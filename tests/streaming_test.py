@@ -6,7 +6,7 @@ ThinkFilter.feed() per fetch chunk (async/push) and must produce exactly what th
 desktop generator produces.
 """
 import sys, random
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.streaming import ThinkFilter, filter_think
 from coderain import llm as _llm  # re-export still importable for old callers
 

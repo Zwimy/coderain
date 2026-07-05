@@ -5,7 +5,7 @@ Builds the real App against a temp library with an existing save (so opening
 generation never fires) and drives the widgets directly.
 """
 import os, sys, shutil, tempfile
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain.memory import Library
 
 root = os.path.join(tempfile.gettempdir(), "se_guipanel")

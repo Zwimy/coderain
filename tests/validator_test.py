@@ -7,7 +7,7 @@ saves, the events log, full-state undo (world deltas roll back), the validator
 re-ask flow, and the summarizer's monotonic fallback guard.
 """
 import os, sys, shutil, tempfile, json
-sys.path.insert(0, r"F:\Seven\StoryEngine")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain import validator as V
 from coderain.config import load_config
 from coderain.engine import Engine
