@@ -1,0 +1,33 @@
+# --- secrets / local env ---
+.env
+.venv/
+venv/
+
+# --- python ---
+__pycache__/
+*.pyc
+
+# --- user data (auto-seeded on first run; never ship or track) ---
+saves/
+scenarios/
+instructions/
+characters.json
+library.json
+config.yaml
+
+# --- build outputs (PyInstaller) ---
+build/
+dist/
+*.spec
+
+# --- local working material (not part of the product) ---
+working ideas screenshots/
+spike/
+*.zip
+
+# --- internal working docs (kept local, not part of the public repo) ---
+HANDOFF.md
+SPEC-V2.md
+ROADMAP.md
+DISTRIBUTION-PLAN.md
+SILLYTAVERN-IMPROVEMENT-PLAN.md

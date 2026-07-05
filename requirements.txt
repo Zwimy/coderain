@@ -1,0 +1,15 @@
+# StoryEngine core (MIT). The optional Pro package additionally needs
+# `cryptography` (Ed25519 license verification) — listed in its own docs.
+openai>=1.30.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# web app (the main UI): FastAPI server + SSE streaming + uploads
+fastapi>=0.111
+uvicorn>=0.30
+httpx>=0.27
+python-multipart>=0.0.9
+
+# desktop app (build.py / desktop.py) — not needed to run the web server
+# pywebview>=5    # native window (uses Edge WebView2 on Windows)
+# pyinstaller>=6  # frozen build

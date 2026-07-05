@@ -1,0 +1,606 @@
+"""The turn loop: assemble context, generate, persist, and fold memory.
+
+Generation has two modes:
+- default: stream prose (fast, works on any model)
+- lookup-tool: when config generation.use_memory_tool is on, the model can call
+  lookup_memory(query) mid-generation to pull details on demand. Meant for
+  capable/hosted (big-context) models; not streamed.
+"""
+from __future__ import annotations
+
+from typing import Iterator
+
+from . import features
+from . import sidecar as sidecar_mod
+from . import validator as validator_mod
+from .config import Config, context_budget
+from .llm import LLM
+from .memory import Entry, MemoryStore
+from .summarizer import Summarizer
+
+LOOKUP_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "lookup_memory",
+        "description": "Search the story's memory (characters, locations, factions, "
+                       "items, canon events, threads) for details before writing. "
+                       "Use when you need to recall something specific.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "name, alias, or keyword to look up"},
+            },
+            "required": ["query"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "recall_turns",
+        "description": "Fetch the exact past turns behind a timeline entry, VERBATIM. "
+                       "Use ONLY when you need the fine detail of an earlier moment "
+                       "the timeline shorthand references — not for every mention. "
+                       "Accepts an event/keyword, a scene like 'scene-2', or a turn "
+                       "range like 'T6-10'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string",
+                              "description": "event/keyword, scene slug, or 'T6-10'"},
+            },
+            "required": ["reference"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "recall_entity",
+        "description": "Entity index: 'what happened with X?' — the entry plus "
+                       "every past episode whose metadata names that character or "
+                       "location, with turn pointers for verbatim drill-down.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "character/location name or slug"},
+            },
+            "required": ["name"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "recall_quest",
+        "description": "Quest index: 'what advanced this quest?' — the thread "
+                       "entry, its live status, and every episode that touched it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "quest/thread name or slug"},
+            },
+            "required": ["name"],
+        },
+    },
+}]
+
+
+def _any_applied(events: list[str]) -> bool:
+    """True when at least one REAL delta landed — validator rejection warnings
+    are UI events, not applied state, and must not keep an orphan player turn."""
+    return any(not e.startswith("validator:") for e in events)
+
+
+class Engine:
+    def __init__(self, config: Config, store: MemoryStore):
+        self.cfg = config
+        self.store = store
+        self.llm = LLM(config.profile, config.generation)
+        self.summarizer = Summarizer(config, store, self.llm)
+        self.short_term = int(config.memory.get("short_term_turns", 12))
+        # Explicit number, or `auto`/0 = fill the profile's window (long-context
+        # cloud models get everything above the reply reserve).
+        self.budget = context_budget(config)
+        self.scenes_tail = 4
+        # Open-core seam: premium modules resolve through coderain.features —
+        # None when a module is trimmed from the build, and every use below
+        # degrades gracefully (core must run fully without them).
+        self.rpg_mod = (features.module("rpg")
+                        if features.enabled("rpg") else None)
+        self.use_tool = bool(config.generation.get("use_memory_tool", False)) \
+            and features.enabled("memory_tool")
+        # Opt-in Trinity Brain (Director -> Lore-keeper -> Writer). Off by default;
+        # single-brain path below is untouched when disabled.
+        # Base is a callable so unpinned Trinity stages track engine.llm swaps
+        # (tests / Settings rebuild) instead of capturing a stale client.
+        # Quad applies the envelope BEFORE the narrator turn is appended, so its
+        # events-log record must carry the index the narrator turn is ABOUT to
+        # get — otherwise the ledger's numbering diverges from the single-brain
+        # convention (narrator index) and branch replay filters break.
+        trinity_mod = (features.module("trinity")
+                       if features.enabled("multi_brain") else None)
+        self.trinity = (trinity_mod.TrinityBrain(
+                            lambda: self.llm, store, config, config.rpg,
+                            self._dispatch_tool, LOOKUP_TOOL,
+                            apply_envelope=lambda env, rpg_on:
+                            self.apply_envelope(
+                                env, rpg_on,
+                                log_turn=len(store.turns()) + 1))
+                        if trinity_mod is not None
+                        and config.generation.get("trinity_brain", False)
+                        else None)
+        self._rpg_events: list[str] = []
+        self._swipes = None            # ST-02 alternates for the last narrator turn
+        self._pre_turn_rpg = None
+        # Md mutations aren't covered by the state.json snapshot, so undo/retry
+        # reverts them explicitly: reveals get re-hidden, canon events added by
+        # this turn get removed, consumed event rules get un-consumed.
+        self._pre_turn_reveals: list[str] = []
+        self._pre_turn_canon: list[str] = []
+        self._pre_turn_events: list[str] = []
+        # Optional Phase 5 semantic recall (off unless retrieval.enabled + Pro).
+        # Reuses the chat client so it's provider-agnostic; None keeps assembly
+        # unchanged.
+        self.retriever = None
+        vector_mod = (features.module("vector")
+                      if features.enabled("vector_recall") else None)
+        if vector_mod is not None:
+            try:
+                self.retriever = vector_mod.build_retriever(
+                    store, self.llm.client, config.retrieval)
+            except Exception:  # noqa: BLE001 — retrieval setup never breaks the engine
+                self.retriever = None
+
+    def _messages(self, history, player_input):
+        messages = self.store.assemble(history, player_input,
+                                       scenes_tail=self.scenes_tail,
+                                       budget_tokens=self.budget,
+                                       retriever=self.retriever)
+        return self._augment_style(self._augment_rpg(messages))
+
+    def _augment_style(self, messages):
+        """Wave 4 response controls: the length knob + the save's custom
+        instructions, appended to the system prompt as style directives."""
+        if not messages:
+            return messages
+        parts = []
+        length = str(self.cfg.generation.get("response_length", "medium")).lower()
+        if length == "short":
+            parts.append("Keep narration TIGHT: 1-2 short paragraphs per turn.")
+        elif length == "long":
+            parts.append("Write fuller scenes: 4-6 paragraphs; linger on detail, "
+                         "dialogue, and atmosphere.")
+        custom = self.store.custom_instructions()
+        if custom:
+            parts.append(custom)
+        if not parts:
+            return messages
+        add = "\n\n# STYLE DIRECTIVES\n" + "\n".join(f"- {p}" for p in parts)
+        return [{**messages[0], "content": messages[0]["content"] + add},
+                *messages[1:]]
+
+    def _augment_rpg(self, messages):
+        """When RPG mechanics are on for this story, append the rpg rules + the live
+        character sheet to the system prompt. No-op (and zero overhead) when off."""
+        if not messages or not self.store.rpg_enabled():
+            return messages
+        rules = self.store.read("rpg-rules.md").strip()
+        # Quad mode narrates check outcomes the same turn they resolve, so the
+        # "narrate this now" nudge would cause a re-narration next turn.
+        sheet = (self.rpg_mod.context_block(
+                     self.store, prompt_narrate=self.trinity is None)
+                 if self.rpg_mod is not None else "")
+        add = "\n\n# RPG MODULE (mechanics ON)\n\n" + rules
+        if sheet:
+            add += "\n\n## Your character sheet\n" + sheet
+        return [{**messages[0], "content": messages[0]["content"] + add},
+                *messages[1:]]
+
+    def _snapshot_rpg(self):
+        """Deep-copy the WHOLE mutable state before a turn — with Wave 1's world
+        deltas (time/flags/location) in play, retry/undo must roll back everything
+        a turn applied, not just the rpg block (SPEC-V2 §1.4)."""
+        return validator_mod.snapshot_state(self.store)
+
+    def restore_pre_turn_rpg(self) -> None:
+        """Undo the state changes of the turn about to be retried/undone. Call
+        before re-running the last action; no-op when nothing was captured. Note:
+        this restores the full state.json, so a fold's fallback time write that
+        landed AFTER the snapshot is reverted too — acceptable, since the per-turn
+        time_advance delta (re-applied on retry) is the clock's driver now."""
+        snap = getattr(self, "_pre_turn_rpg", None)
+        if snap is not None:
+            self.store.set_world_state(snap)
+            # One snapshot covers ONE turn: a second consecutive undo must not
+            # re-apply this (now stale) state on top of an older transcript.
+            self._pre_turn_rpg = None
+        for slug in getattr(self, "_pre_turn_reveals", []):
+            self.store.set_hidden(slug, True)
+        for slug in getattr(self, "_pre_turn_canon", []):
+            self.store.remove_entry("canon-events.md", slug)
+        for slug in getattr(self, "_pre_turn_events", []):
+            self.store.mark_event_consumed(slug, False)
+        self._pre_turn_reveals = []
+        self._pre_turn_canon = []
+        self._pre_turn_events = []
+        # The undone turn's envelope must leave the replay ledger too (callers
+        # truncate the transcript first), or a later branch re-applies it.
+        self.store.truncate_event_log(len(self.store.turns()))
+
+    def opening(self, on_stage=None) -> Iterator[str]:
+        self._rpg_events = []
+        self._pre_turn_rpg = self._snapshot_rpg()
+        self._pre_turn_reveals = []
+        self._pre_turn_canon = []
+        self._pre_turn_events = []
+        # Wave 4: an authored '## Opening' in premise.md is used VERBATIM as the
+        # first scene — no model call (FictionLab's greeting message).
+        override = self.store.opening_override()
+        if override:
+            if on_stage:
+                on_stage("Opening: authored greeting (no generation)")
+            self.store.append_turn("narrator", override)
+            yield override
+            return
+        messages = self._messages(
+            [], "Begin the story. Set the opening scene and place me in it.")
+        yield from self._generate_and_store(messages, on_stage)
+
+    def turn(self, player_input: str, on_stage=None) -> Iterator[str]:
+        self._rpg_events = []
+        self._pre_turn_rpg = self._snapshot_rpg()
+        self._pre_turn_reveals = []
+        self._pre_turn_canon = []
+        self._pre_turn_events = []
+        self.store.append_turn("player", player_input)
+        history = self.store.recent_turns(self.short_term)[:-1]
+        messages = self._messages(history, player_input)
+        stored = yield from self._generate_and_store(messages, on_stage)
+        if not stored:
+            # Model produced nothing visible (e.g. only <think>). Don't leave an
+            # orphan player turn dangling in the transcript.
+            self.store.drop_last_turns(1)
+
+    def continue_story(self, on_stage=None) -> Iterator[str]:
+        """Carry the prose forward with NO player action — the 'Continue' button.
+        Unlike `turn`, nothing is appended to the transcript as a player line; the
+        model simply extends the last scene, so the pipeline is otherwise identical
+        (Director plan → validate → Writer)."""
+        self._rpg_events = []
+        self._pre_turn_rpg = self._snapshot_rpg()
+        self._pre_turn_reveals = []
+        self._pre_turn_canon = []
+        self._pre_turn_events = []
+        history = self.store.recent_turns(self.short_term)
+        messages = self._messages(
+            history,
+            "Continue the narration from exactly where it left off. Do not "
+            "repeat what was already written and do not summarize — push the "
+            "current scene forward with fresh action or detail.")
+        yield from self._generate_and_store(messages, on_stage)
+
+    def _ensure_swipes(self) -> dict | None:
+        """Swipe state for the LAST narrator turn (ST-02). Seeds from the current
+        text on first swipe. None when the tail isn't a narrator turn."""
+        turns = self.store.turns()
+        if not turns or turns[-1]["role"] != "narrator":
+            return None
+        if self._swipes is None:
+            self._swipes = {"variants": [turns[-1]["text"]], "idx": 0}
+        return self._swipes
+
+    def swipe_browse(self, direction: int) -> dict | None:
+        """Move within already-generated variants — NO model call. Rewrites the
+        last narrator turn to the selected variant. {text, idx, count} or None."""
+        sw = self._ensure_swipes()
+        if sw is None:
+            return None
+        sw["idx"] = max(0, min(len(sw["variants"]) - 1, sw["idx"] + direction))
+        text = sw["variants"][sw["idx"]]
+        self.store.update_turn(len(self.store.turns()) - 1, text)
+        return {"text": text, "idx": sw["idx"], "count": len(sw["variants"])}
+
+    def swipe_generate(self, on_stage=None) -> "Iterator[str]":
+        """Generate a NEW alternative for the last narrator turn and select it
+        (swipe past the end of the list). Reuses the retry rollback so mechanics
+        don't stack; prior variants are kept for browsing."""
+        sw = self._ensure_swipes()
+        if sw is None:
+            return
+        turns = self.store.turns()
+        n = len(turns)
+        if n >= 2 and turns[-2]["role"] == "player":
+            player_input = turns[-2]["text"]
+            self.store.drop_last_turns(2)
+            self.restore_pre_turn_rpg()
+            gen = self.turn(player_input, on_stage=on_stage)
+        elif n == 1:
+            self.store.drop_last_turns(1)
+            self.restore_pre_turn_rpg()
+            gen = self.opening(on_stage=on_stage)
+        else:
+            self.store.drop_last_turns(1)
+            self.restore_pre_turn_rpg()
+            gen = self.continue_story(on_stage=on_stage)
+        yield from gen
+        tail = self.store.turns()
+        if tail and tail[-1]["role"] == "narrator":
+            sw["variants"].append(tail[-1]["text"])
+            sw["idx"] = len(sw["variants"]) - 1
+
+    def impersonate(self) -> str:
+        """Draft the PLAYER's next action in first person (ST 'Impersonate',
+        ST-04). Returns a short suggestion; stores nothing — the UI drops it in
+        the composer for the player to edit or send."""
+        history = self.store.recent_turns(self.short_term)
+        messages = self._messages(
+            history,
+            "Suggest MY next move as the player: first person, 1-2 sentences, "
+            "only the action or dialogue I take — do NOT narrate any outcomes "
+            "or write as the narrator.")
+        if not self.cfg.generation.get("think", False) and messages:
+            messages = [{**messages[0],
+                         "content": messages[0]["content"] + "\n\n/no_think"},
+                        *messages[1:]]
+        raw = "".join(self.llm.stream(messages))     # stream() filters <think>
+        visible, _ = sidecar_mod.strip_sidecar(raw)  # drop any ```rpg block
+        return visible.strip()
+
+    def undo_last(self) -> bool:
+        """Remove the last exchange WITHOUT regenerating — the player is left at the
+        prior state to try a different action. Mirrors the retry rollback (drop the
+        last narrator + its player turn, roll back this turn's RPG mechanics) but does
+        not call the model. Returns False when there's nothing to undo.
+
+        Single-level within the session: `restore_pre_turn_rpg` holds one snapshot, so
+        a second consecutive undo won't further rewind mechanics (multi-level undo
+        would need per-turn persisted snapshots). Only ever touches the retry-able tail
+        (turns not yet folded/timelined), so timeline pointers stay valid."""
+        turns = self.store.turns()
+        if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2:
+            self.store.drop_last_turns(2)
+        elif turns and turns[-1]["role"] == "player":
+            self.store.drop_last_turns(1)  # orphan player turn (empty generation)
+        else:
+            return False
+        self.restore_pre_turn_rpg()
+        return True
+
+    def maybe_fold(self) -> list[str]:
+        """Run due memory folds after a turn. Returns event strings for the UI —
+        RPG mechanics events (from this turn's sidecar) first, then fold events."""
+        events = self._rpg_events + self.summarizer.maybe_fold()
+        self._rpg_events = []
+        return events
+
+    def _generate_and_store(self, messages, on_stage=None) -> "Iterator[str]":
+        """Yields visible prose chunks (hiding any RPG sidecar); returns True iff a
+        narrator turn was stored. When RPG is on, resolves the sidecar afterward."""
+        rpg_on = self.store.rpg_enabled()
+        sidecar = None
+        trinity_events = None
+        if self.trinity is None:
+            # Single-brain: the one model IS the logic agent, so it gets the
+            # event rules (in quad mode only the Director sees them).
+            ev_block = self.store.event_rules_block()
+            if ev_block and messages:
+                messages = [{**messages[0],
+                             "content": messages[0]["content"] + "\n\n" + ev_block
+                             + "\n\n(Enforce these silently; NEVER reveal an "
+                               "unfired rule in prose.)"},
+                            *messages[1:]]
+        if self.trinity is not None:
+            # Quad pipeline: the Logic Agent's envelope is validated and RESOLVED
+            # before the Narrator writes (so prose narrates the actual outcome);
+            # trinity returns the already-applied events, not a sidecar.
+            # Simple Story mode = the FAST mode: no mechanics to plan, so the
+            # Logic Agent is skipped entirely — one LLM call per turn. Authored
+            # event rules are the exception: only the Director can fire them, so
+            # their presence forces the full pipeline even in simple mode.
+            simple = (not rpg_on and self.store.mode() == "simple"
+                      and not self.store.event_rules())
+            chunks: list[str] = []
+            trinity_events = yield from self.trinity.generate(
+                messages, rpg_on, on_stage, chunks, skip_logic=simple,
+                event_rules=self.store.event_rules_block())
+            narration = "".join(chunks).strip()
+        elif self.use_tool:
+            raw = self._generate_with_tool(messages)
+            # Strip/parse the sidecar in EVERY mode: world/lore deltas are valid
+            # with RPG off (only mechanics are gated, in apply_envelope), and a
+            # stray ```rpg block must never reach the reader verbatim.
+            narration, sidecar = sidecar_mod.strip_sidecar(raw)
+            if narration:
+                yield narration
+        else:
+            # Qwen3 soft switch: /no_think for fast prose. Copy the system message
+            # so we never mutate the caller's assembled context.
+            if not self.cfg.generation.get("think", False) and messages:
+                messages = [{**messages[0],
+                             "content": messages[0]["content"] + "\n\n/no_think"},
+                            *messages[1:]]
+            chunks: list[str] = []
+            hidden: list[str] = []
+            stream = self.llm.stream(messages)
+            # Filter in EVERY mode (see the tool path above): never leak a
+            # ```rpg block, and keep the world/lore delta channel open.
+            stream = sidecar_mod.filter_sidecar(stream, hidden)
+            for piece in stream:
+                chunks.append(piece)
+                yield piece
+            narration = "".join(chunks).strip()
+            if hidden:
+                sidecar = sidecar_mod.parse_sidecar("".join(hidden))
+        if narration:
+            self.store.append_turn("narrator", narration)
+        # Apply mechanics even when the model emitted ONLY a sidecar (no visible
+        # prose) — otherwise a terse mechanical turn would silently lose its check
+        # and deltas. A turn counts as "stored" if it produced prose OR mechanics,
+        # so the player's action isn't dropped as an orphan when it had an effect.
+        applied = False
+        if trinity_events is not None:
+            # Quad path already validated + applied inside trinity.generate.
+            self._rpg_events += trinity_events
+            applied = _any_applied(trinity_events)
+        elif sidecar:
+            events = self.apply_envelope(sidecar, rpg_on)
+            self._rpg_events += events
+            applied = _any_applied(events)
+        return bool(narration) or applied
+
+    def apply_envelope(self, env: dict, rpg_on: bool,
+                       log_turn: int | None = None) -> list[str]:
+        """The Backend Validator seam (SPEC-V2 §1.4), shared by both producers:
+        validate the proposed envelope, surface every dropped delta loudly, apply
+        world deltas (always) + reveals + mechanics (when RPG is on), and append
+        the clean envelope to the events log for undo/branch replay. The record's
+        turn index is the NARRATOR turn the envelope belongs to — pass `log_turn`
+        when applying before that turn is appended (the quad pipeline does)."""
+        stats = list(sidecar_mod.cfg_get(self.cfg.rpg, "stats"))
+        clean, rejected = validator_mod.validate(env, self.store, stats=stats)
+        events = [f"validator: dropped {r['delta']} — {r['reason']}"
+                  for r in rejected]
+        events += validator_mod.apply_world(self.store, clean)
+        events += self._apply_reveals(clean)
+        events += self._apply_quest_canon(clean)
+        events += self._apply_event_rules(clean)
+        if rpg_on:
+            if self.rpg_mod is not None:
+                events += self.rpg_mod.apply(self.store, clean, self.cfg.rpg)
+            else:
+                # RPG save opened on a free install: prose continues, the
+                # mechanics are skipped LOUDLY (never silently absorb deltas).
+                events.append("rpg: mechanics skipped — the RPG module is "
+                              "not present in this build")
+        if clean.get("check") or clean.get("deltas"):
+            self.store.append_event_log(
+                {"turn": len(self.store.turns()) if log_turn is None
+                 else log_turn, "env": clean})
+        return events
+
+    def _apply_reveals(self, clean: dict) -> list[str]:
+        """Flip validated `reveal` slugs public — the one sanctioned Markdown
+        mutation (SPEC-V2 §2.3): logged as a canon event, tracked per turn so
+        undo/retry re-hides them (state snapshots don't cover md)."""
+        events = []
+        for slug in (clean.get("deltas") or {}).get("reveal", []):
+            e = self.store.set_hidden(slug, False)
+            if e is None:
+                continue
+            self._pre_turn_reveals.append(slug)
+            self._pre_turn_canon.append(f"revealed-{slug}")
+            self.store.merge_entry("canon-events.md", Entry(
+                title=f"Revealed: {e.title}", slug=f"revealed-{slug}",
+                importance=min(5, e.importance),
+                attrs={"when": self.store.clock_str()},
+                body=f"The truth about [[{slug}]] came to light."))
+            events.append(f"revealed: {e.title}")
+        return events
+
+    def _apply_event_rules(self, clean: dict) -> list[str]:
+        """Mark fired once-rules consumed (validated already: exists + not yet
+        consumed). Undo-tracked — retry/undo un-consumes."""
+        events = []
+        rules = {e.slug: e for e in self.store.event_rules()}
+        for slug in (clean.get("deltas") or {}).get("event_fired", []):
+            rule = rules.get(slug)
+            if rule is None:
+                continue
+            once = str(rule.attrs.get("once", "")).strip().lower() in \
+                ("true", "yes", "1", "on")
+            if once and self.store.mark_event_consumed(slug):
+                self._pre_turn_events.append(slug)
+                events.append(f"event: {rule.title} fired (once — consumed)")
+            else:
+                events.append(f"event: {rule.title} fired")
+        return events
+
+    def _apply_quest_canon(self, clean: dict) -> list[str]:
+        """A quest reaching completed/failed is story canon — log it as a canon
+        event (undo-tracked, like reveals). The quests dict itself was already
+        committed by apply_world; the thread entry stays for the summarizer to
+        resolve narratively at the next fold."""
+        events = []
+        for slug, new in ((clean.get("deltas") or {}).get("quest_update")
+                          or {}).items():
+            if new not in ("completed", "failed"):
+                continue
+            thread = next((e for e in self.store.entries("threads.md")
+                           if e.slug == slug), None)
+            title = thread.title if thread else slug
+            canon_slug = f"quest-{slug}-{new}"
+            self._pre_turn_canon.append(canon_slug)
+            self.store.merge_entry("canon-events.md", Entry(
+                title=f"Quest {new}: {title}", slug=canon_slug,
+                importance=4, attrs={"when": self.store.clock_str()},
+                body=f"[[thread:{slug}]] ended: {new}."))
+            events.append(f"quest {new}: {title}")
+        return events
+
+    def companions(self) -> list[str]:
+        """Slugs a side-chat can target: characters flagged `companion: true`
+        plus anyone already in the state's companions block."""
+        marked = [e.slug for e in self.store.entries("characters.md")
+                  if str(e.attrs.get("companion", "")).strip().lower()
+                  in ("true", "yes", "1", "on")]
+        state = list(self.store.rpg_state().get("companions", {}))
+        return list(dict.fromkeys(marked + state))
+
+    def companion_chat(self, name: str, user_text: str) -> Iterator[str]:
+        """Out-of-band side-chat with a companion (SPEC-V2 §3.4): a private
+        conversation between story turns — advice, banter, strategy. Streams the
+        reply; logs to memory/companion-chat.md (NEVER the transcript: no turn
+        counter, no folds). The story sees only a short digest via assemble."""
+        from .templates import slugify
+        slug = slugify(str(name or ""))
+        comp = next((e for e in self.store.entries("characters.md")
+                     if e.slug == slug), None)
+        if comp is None:
+            yield f"(no such character: {name})"
+            return
+        cstate = self.store.rpg_state().get("companions", {}).get(slug, {})
+        mood = ", ".join(f"{k}: {v}" for k, v in cstate.items() if v)
+        tail = self.store.recent_turns(6)
+        story = "\n".join(f"[{t['role'].upper()}] {t['text'][:400]}"
+                          for t in tail)
+        prior = self.store.companion_chat_tail(slug, lines=12)
+        sys = (f"You ARE {comp.title}, a companion travelling with the player in "
+               "an interactive story. This is a PRIVATE conversation between "
+               "story turns — speak in first person, fully in character (see "
+               "your Voice). Give opinions, advice, warnings, banter; ask "
+               "questions back. Do NOT narrate story events, do NOT advance the "
+               "plot, do NOT speak for the player. Keep replies short and "
+               "conversational (2-6 sentences).\n\n# WHO YOU ARE\n"
+               + comp.render()
+               + (f"\n# YOUR CURRENT STATE\n{mood}" if mood else "")
+               + (f"\n\n# WHAT JUST HAPPENED IN THE STORY\n{story}" if story
+                  else "")
+               + (f"\n\n# YOUR EARLIER PRIVATE TALK\n{prior}" if prior else ""))
+        messages = [{"role": "system", "content": sys},
+                    {"role": "user", "content": user_text}]
+        chunks: list[str] = []
+        for piece in self.llm.stream(messages):
+            chunks.append(piece)
+            yield piece
+        reply = "".join(chunks).strip()
+        if reply:
+            self.store.append_companion_chat(slug, user_text, reply)
+
+    def _generate_with_tool(self, messages) -> str:
+        return self.llm.complete_with_tools(
+            messages, LOOKUP_TOOL, self._dispatch_tool).strip()
+
+    def _dispatch_tool(self, name, args):
+        """Resolve a memory tool call (shared by the lookup path and Trinity's
+        Lore-keeper). recall_turns is the on-demand pointer-back into the full
+        transcript behind a timeline shorthand."""
+        if name == "lookup_memory":
+            return self.store.lookup(str(args.get("query", "")))
+        if name == "recall_turns":
+            return self.store.recall_turns(str(args.get("reference", "")))
+        if name == "recall_entity":
+            return self.store.recall_entity(str(args.get("name", "")))
+        if name == "recall_quest":
+            return self.store.recall_quest(str(args.get("name", "")))
+        return f"unknown tool: {name}"
