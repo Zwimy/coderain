@@ -11,6 +11,8 @@ files you can read, edit, diff, and own.
 Free and open source (MIT). If it saves you a subscription, [donations](#support)
 keep it going — but everything is here, forever, for everyone.
 
+![Coderain in action](docs/demo.gif)
+
 ---
 
 ## Why it's different
@@ -37,20 +39,33 @@ keep it going — but everything is here, forever, for everyone.
 
 ## Install
 
-**Desktop (Windows):** download the latest `Coderain-win-x64.zip` from
-[Releases](../../releases), unzip, run `Coderain.exe`. It opens in its own window.
-For local models, install [Ollama](https://ollama.com/download) and pull a model —
-the in-app **Settings → Local** guide walks you through it.
+**Desktop (Windows), zero setup:** download the latest `Coderain-win-x64.zip`
+from [Releases](../../releases), unzip, run `Coderain.exe`. It opens in its own
+window — no Python, no terminal. For local models, install
+[Ollama](https://ollama.com/download) and pull a model — the in-app
+**Settings → Local** guide walks you through it.
 
-**From source (any OS):**
+**From source (any OS)** — one command, no manual venv:
 
 ```bash
 git clone https://github.com/Zwimy/coderain
 cd coderain
-python -m venv .venv && . .venv/Scripts/activate      # or .venv/bin/activate
-pip install -r requirements.txt
-python server.py        # http://127.0.0.1:8377
+python start.py         # Windows: double-click Coderain.bat  •  macOS/Linux: ./run.sh
 ```
+
+The **first run creates a `.venv`, installs the requirements, and opens the web
+app** in your browser (http://127.0.0.1:8377) — you only need Python 3.10+ on
+your PATH. After that, `python start.py` just launches. Other modes:
+`--cli` (terminal), `--no-browser`, `--port 8399`, `--gui` (the retro UI).
+
+<details><summary>Prefer to manage the venv yourself?</summary>
+
+```bash
+python -m venv .venv && . .venv/Scripts/activate   # or .venv/bin/activate
+pip install -r requirements.txt
+python start.py                                    # or: python server.py
+```
+</details>
 
 ## Run local models (optional, free, private)
 

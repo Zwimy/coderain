@@ -1288,4 +1288,6 @@ app.mount("/", StaticFiles(directory=ASSETS / "webapp"), name="webapp")
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8377)
+    import os
+    _port = int((os.environ.get("CODERAIN_PORT") or "8377").strip() or "8377")
+    uvicorn.run(app, host="127.0.0.1", port=_port)

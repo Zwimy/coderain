@@ -8,6 +8,7 @@ every bug found in the phase bug-sweeps.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,13 +17,17 @@ ROOT = Path(__file__).resolve().parent
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 PY = PY if PY.exists() else Path(sys.executable)
 
+# Force UTF-8 for every child so a test that prints a non-ASCII glyph (→, …)
+# doesn't die on a Windows cp1252 console — keeps the suite green on any OS.
+ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
 
 def main() -> int:
     tests = sorted((ROOT / "tests").glob("*.py"))
     failed = []
     for t in tests:
         print(f"=== {t.name} ===")
-        if subprocess.run([str(PY), str(t)]).returncode:
+        if subprocess.run([str(PY), str(t)], env=ENV).returncode:
             failed.append(t.name)
     print("\n" + ("ALL SUITES PASSED" if not failed
                   else "FAILED: " + ", ".join(failed)))
