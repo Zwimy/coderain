@@ -1,20 +1,16 @@
 @echo off
-rem Coderain — double-click to launch the desktop GUI.
-rem Uses the project venv if present (pythonw = no console window), else falls back
-rem to the system launcher. Pass --cli for text mode: Coderain.bat --cli
+rem Coderain — double-click to launch the web app (opens in your browser).
+rem First run creates a .venv and installs dependencies automatically; this
+rem console shows the progress and the address, then stays open as the server log.
+rem   Coderain.bat            web app (default)
+rem   Coderain.bat --cli      terminal / text mode
+rem   Coderain.bat --gui      retro Tkinter UI (easter egg)
+rem start.py finds/creates the .venv and re-launches itself there, so we just
+rem hand off to whatever Python is on PATH (the launcher does the rest).
 cd /d "%~dp0"
-if /i "%~1"=="--cli" goto cli
-
-if exist ".venv\Scripts\pythonw.exe" (
-    start "" ".venv\Scripts\pythonw.exe" "start.py" %*
+where py >nul 2>nul
+if %errorlevel%==0 (
+    py start.py %*
 ) else (
-    start "" pythonw "start.py" %*
-)
-goto :eof
-
-:cli
-if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" "start.py" --cli
-) else (
-    py "start.py" --cli
+    python start.py %*
 )

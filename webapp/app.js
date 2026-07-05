@@ -82,9 +82,21 @@ function navMark() {
     a.classList.toggle("active", a.getAttribute("href") === h));
 }
 
+// A slug segment is only real if it's a non-empty value that isn't a stray
+// JS "undefined"/"null" — those slip in from a stale browser hash (e.g. an old
+// #play/undefined left over from a prior session) and must not 404 the app.
+const validSlug = seg => seg && seg !== "undefined" && seg !== "null";
+
 async function render() {
   navMark();
   const h = location.hash || "#library";
+  // A garbage per-item route → bounce home instead of a cryptic "no such save".
+  for (const [pfx, n] of [["#play/", 6], ["#world/", 7], ["#edit/", 6]]) {
+    if (h.startsWith(pfx) && !validSlug(decodeURIComponent(h.slice(n)))) {
+      location.hash = "#library";
+      return;                          // hashchange re-runs render() for #library
+    }
+  }
   try {
     if (h.startsWith("#play/")) await renderPlay(h.slice(6));
     else if (h.startsWith("#world/")) await renderBuilder(h.slice(7), "scenario");
@@ -94,8 +106,14 @@ async function render() {
     else if (h === "#settings") await renderSettings();
     else await renderLibrary();
   } catch (e) {
-    view.innerHTML = `<div class="page"><h1>Something broke</h1>
-      <p class="muted">${esc(e.message)}</p></div>`;
+    // A missing item (deleted save, dead bookmark) shouldn't read as a crash —
+    // offer a way back rather than a dead end.
+    const gone = /no such (save|scenario)/i.test(e.message || "");
+    view.innerHTML = `<div class="page">
+      <h1>${gone ? "Not found" : "Something broke"}</h1>
+      <p class="muted">${esc(e.message)}</p>
+      <button class="primary" onclick="location.hash='#library'"
+        >← Back to Library</button></div>`;
   }
 }
 
@@ -190,7 +208,11 @@ async function renderLibrary() {
       }
     });
   });
-  view.querySelectorAll(".card").forEach(card => {
+  // Save cards ONLY — [data-slug] excludes world cards (which carry data-scen).
+  // Without the filter a world card gets BOTH handlers, and this one's `else`
+  // branch navigates to #play/undefined (its slug is undefined) — the "no such
+  // save: undefined" crash when deleting a world.
+  view.querySelectorAll(".card[data-slug]").forEach(card => {
     const slug = card.dataset.slug;
     card.addEventListener("click", async ev => {
       const act = ev.target.dataset && ev.target.dataset.act;
