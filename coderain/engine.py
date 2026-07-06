@@ -16,7 +16,7 @@ from . import sidecar as sidecar_mod
 from . import validator as validator_mod
 from .config import Config, context_budget
 from .llm import LLM
-from .memory import Entry, MemoryStore
+from .memory import Entry, MemoryStore, safe_output_regex
 from .summarizer import Summarizer
 
 LOOKUP_TOOL = [{
@@ -428,20 +428,26 @@ class Engine:
                              turn=len(self.store.turns()))
 
     def _apply_output_regex(self, text: str) -> str:
-        """ST-31: run the save's persistent find/replace rules over narrator output
-        before it's stored, so the model's memory sees the cleaned text (tics fade).
-        A bad pattern is skipped, never crashes the turn."""
+        """ST-31: run the save's persistent find/replace rules over narrator output.
+        A bad pattern is skipped; a pattern that could catastrophically backtrack
+        (ReDoS — a real risk since rules ride inside shared/imported worlds) is
+        rejected by safe_output_regex, never executed."""
         rules = self.store.world_state().get("regex_rules")
         if not isinstance(rules, list):
             return text
         for r in rules:
-            if not isinstance(r, dict) or not r.get("find"):
+            if not isinstance(r, dict):
+                continue
+            find = r.get("find")
+            if not isinstance(find, str) or not safe_output_regex(find):
                 continue
             fl = 0
             for ch in str(r.get("flags", "")).lower():
                 fl |= {"i": re.I, "m": re.M, "s": re.S}.get(ch, 0)
+            # Accept SillyTavern/JS-style $1 backreferences (Python re wants \1).
+            repl = re.sub(r"\$(\d)", r"\\\1", str(r.get("replace", "")))
             try:
-                text = re.sub(str(r["find"]), str(r.get("replace", "")), text, flags=fl)
+                text = re.sub(find, repl, text, flags=fl)
             except re.error:
                 continue        # invalid rule -> leave the text unchanged
         return text
@@ -540,10 +546,15 @@ class Engine:
             if hidden:
                 sidecar = sidecar_mod.parse_sidecar("".join(hidden))
         if narration:
-            if prefix:                   # ST-22: the stored turn begins with it too
+            # ST-31 scrubs the MODEL's output; the ST-22 prefix is prepended AFTER
+            # so a cleanup rule can't eat it (the prefix always begins the turn).
+            narration = self._apply_output_regex(narration)
+            if prefix:
                 narration = prefix + narration
-            narration = self._apply_output_regex(narration)   # ST-31 persistent scrub
-            self.store.append_turn("narrator", narration)
+            if narration.strip():        # a rule that empties the turn stores nothing
+                self.store.append_turn("narrator", narration)
+            else:
+                narration = ""
         # Apply mechanics even when the model emitted ONLY a sidecar (no visible
         # prose) — otherwise a terse mechanical turn would silently lose its check
         # and deltas. A turn counts as "stored" if it produced prose OR mechanics,

@@ -15,6 +15,17 @@ import zlib
 import zipfile
 
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
+_DECOMP_CAP = 8 * 1024 * 1024        # 8 MB per PNG text chunk
+
+
+def _zlib_bounded(data: bytes) -> bytes:
+    """Decompress a PNG text chunk with a hard output cap so a zip-bomb zTXt/iTXt
+    (a ~1000:1 chunk) can't exhaust memory at import."""
+    dec = zlib.decompressobj()
+    out = dec.decompress(data, _DECOMP_CAP)
+    if dec.unconsumed_tail:          # more than the cap would decompress -> bomb
+        raise ValueError("compressed text chunk exceeds cap")
+    return out
 
 
 def _png_text_chunks(data: bytes) -> dict[str, str]:
@@ -35,7 +46,7 @@ def _png_text_chunks(data: bytes) -> dict[str, str]:
             key, _, rest = chunk.partition(b"\x00")
             try:  # rest[0] = method byte, rest[1:] = zlib stream
                 out.setdefault(key.decode("latin1"),
-                               zlib.decompress(rest[1:]).decode("latin1"))
+                               _zlib_bounded(rest[1:]).decode("latin1"))
             except Exception:  # noqa: BLE001
                 pass
         elif ctype == b"iTXt":
@@ -44,7 +55,7 @@ def _png_text_chunks(data: bytes) -> dict[str, str]:
                 text = parts[5]
                 if parts[1][:1] == b"\x01":     # compression flag
                     try:
-                        text = zlib.decompress(text)
+                        text = _zlib_bounded(text)
                     except Exception:  # noqa: BLE001
                         pass
                 out.setdefault(parts[0].decode("latin1"),

@@ -37,7 +37,8 @@ from coderain.generator import (PIECE_KINDS, ScenarioSpec,
                                    assist_field, complete_scenario,
                                    generate_scenario)
 from coderain.llm import LLM
-from coderain.memory import Entry, Library, MemoryStore, _safe_zip_member
+from coderain.memory import (Entry, Library, MemoryStore, _safe_zip_member,
+                             safe_output_regex)
 from coderain.profiles import (STAT_NAMES, CharacterProfiles,
                                   PieceLibrary, apply_character,
                                   apply_playable_entry, character_from_entry,
@@ -691,10 +692,12 @@ def _clean_regex_rules(raw) -> list[dict]:
     for r in raw:
         if not isinstance(r, dict):
             continue
-        find = str(r.get("find", "")).strip()
-        if not find:
+        find = r.get("find")
+        # a non-string or ReDoS-prone pattern is dropped on save (import re-checks
+        # at exec time too, since import bypasses this cleaning layer).
+        if not isinstance(find, str) or not safe_output_regex(find):
             continue
-        out.append({"find": find, "replace": str(r.get("replace", "")),
+        out.append({"find": find, "replace": str(r.get("replace", ""))[:1000],
                     "flags": "".join(c for c in str(r.get("flags", "")).lower()
                                      if c in "ims")})
         if len(out) >= 30:

@@ -51,6 +51,27 @@ def _safe_child(root: Path, name: str) -> bool:
         return False
 
 
+_NESTED_QUANT = re.compile(r"\([^)]*[+*][^)]*\)[+*{]")
+
+
+def safe_output_regex(pattern: str) -> bool:
+    """ST-31 guard: reject a user/imported regex likely to catastrophically
+    backtrack (ReDoS) — too long, or a quantified group that itself contains a
+    quantifier: (a+)+, (\\w+\\s*)+, (.*a){25}. A cheap heuristic (not a full ReDoS
+    solver) that blocks the practical bombs while passing ordinary patterns
+    (\\bword\\b, colou?r). Critical because rules ride inside shared/imported
+    worlds and run while the app-wide generation lock is held."""
+    if not pattern or len(pattern) > 200:
+        return False
+    if _NESTED_QUANT.search(pattern):
+        return False
+    try:
+        re.compile(pattern)
+    except re.error:
+        return False
+    return True
+
+
 def _safe_zip_member(dst: Path, name: str) -> bool:
     """True iff extracting archive entry `name` stays under `dst`. Blocks `..`
     segments AND absolute/drive/UNC entries (an absolute join silently drops dst,
@@ -1809,9 +1830,9 @@ class SaveLibrary:
                 if isinstance(cur.get("player", {}).get("stats"), dict):
                     state["rpg"]["player"]["stats"] = dict(cur["player"]["stats"])
                 # Carry forward top-level state that NO event delta can rebuild
-                # (e.g. the author's note) — else a branch before the first fold
-                # silently loses it.
-                for k in ("authors_note",):
+                # (author's note, quick actions, output-regex rules) — else a
+                # branch before the first fold silently loses them.
+                for k in ("authors_note", "quick_actions", "regex_rules"):
                     if k in cur_full:
                         state[k] = cur_full[k]
                 dst_store.set_world_state(state)

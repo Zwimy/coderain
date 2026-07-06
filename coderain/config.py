@@ -140,9 +140,11 @@ def load_config(path: str | Path | None = None) -> Config:
     if not cfg_path.exists():                    # first run of a fresh install
         cfg_path.write_text(_DEFAULT_CONFIG, encoding="utf-8")
     data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit("config.yaml is empty or malformed (expected a mapping)")
 
-    active = data["active_profile"]
-    if active not in data.get("profiles", {}):
+    active = data.get("active_profile")
+    if active is None or active not in data.get("profiles", {}):
         raise SystemExit(
             f"active_profile '{active}' not found. "
             f"Options: {', '.join(data.get('profiles', {}))}"
