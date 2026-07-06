@@ -449,12 +449,14 @@ class Engine:
             except StopIteration as done:
                 return done.value
             if not sent:
-                # Swallow leading whitespace-only chunks (the stored narration is
-                # stripped anyway) and emit the prefix only once REAL prose arrives,
-                # so a sidecar-only turn that streams a stray space/newline before
-                # the ```rpg fence never shows an orphan prefix.
+                # Swallow leading whitespace-only chunks and emit the prefix only
+                # once REAL prose arrives (so a sidecar-only turn that streams a
+                # stray space/newline before the ```rpg fence shows no orphan
+                # prefix). lstrip the first real chunk so the streamed prefix hugs
+                # the prose exactly like the stored narration (which is stripped).
                 if not piece.strip():
                     continue
+                piece = piece.lstrip()
                 yield prefix
                 sent = True
             yield piece

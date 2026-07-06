@@ -127,6 +127,9 @@ def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+_ENEMY_HP_CAP = 100_000     # generous for a boss, bounded so no unkillable enemy
+
+
 def _as_int(v, default=0) -> int:
     try:
         if isinstance(v, bool):
@@ -355,11 +358,15 @@ def apply(store, sidecar: dict, cfg: dict | None = None) -> list[str]:
                 if not slug:
                     continue
                 e = ens.get(slug)
+                # Cap enemy HP: a hallucinated/huge hp_max would be an unkillable
+                # enemy that soft-locks combat (the delta pools are already capped).
                 if e is None:
-                    hp_max = _as_int(spec.get("hp_max", spec.get("hp", 10)), 10)
+                    hp_max = _clamp(_as_int(spec.get("hp_max", spec.get("hp", 10)),
+                                            10), 1, _ENEMY_HP_CAP)
                     e = {"hp": hp_max, "hp_max": hp_max}
                 if "hp_max" in spec:
-                    e["hp_max"] = max(1, _as_int(spec.get("hp_max"), e["hp_max"]))
+                    e["hp_max"] = _clamp(_as_int(spec.get("hp_max"), e["hp_max"]),
+                                         1, _ENEMY_HP_CAP)
                 dmg = _as_int(spec.get("hp_delta"))
                 if dmg:
                     e["hp"] = _clamp(_as_int(e.get("hp", e["hp_max"])) + dmg, 0, e["hp_max"])
