@@ -78,4 +78,49 @@ except SystemExit:
     pass
 print("5) build_profile: incomplete profile -> readable SystemExit (no boot KeyError)")
 
+# ================= second pre-Tier-4 sweep (2026-07-06) =================
+
+# FIX: prefix must hug the prose even when the FIRST real chunk has leading
+# whitespace (real LLMs send the first token as " word") — stream == stored.
+cfgP = load_config()
+cfgP.generation["trinity_brain"] = False
+cfgP.generation["start_reply_with"] = ">>"
+sP = lib.store(lib.saves.create("Lead", mode="simple", premise="."))
+eP = Engine(cfgP, sP)
+eP.llm = type("LeadLLM", (), {"stream": lambda self, m, **k: iter(["  Hello world"])})()
+outP = "".join(eP.turn("go"))
+assert outP == ">>Hello world", f"leading ws in first chunk must be trimmed; got {outP!r}"
+assert sP.turns()[-1]["text"] == ">>Hello world", "stream == stored"
+print("6) prefix: leading whitespace on the first real chunk trimmed (stream==stored)")
+
+# FIX: fold pointer must advance by the ACTUAL chunk length — a short tail chunk
+# with a hand-edited size > after must not overshoot and drop turns.
+cfgF = load_config()
+cfgF.generation["trinity_brain"] = False
+sF = lib.store(lib.saves.create("Fold", mode="simple", premise="."))
+eF = Engine(cfgF, sF)
+eF.summarizer.llm = type("SumLLM", (), {
+    "complete": lambda self, m, **k: "A brief scene.",
+    "stream": lambda self, m, **k: iter(["A brief scene."])})()
+eF.summarizer.medium_after = 3
+eF.summarizer.medium_size = 10                 # size > after: the overshoot trigger
+for i in range(5):                             # 5 turns -> one SHORT (5<10) fold chunk
+    sF.append_turn("player" if i % 2 == 0 else "narrator", f"line {i}")
+eF.summarizer.maybe_fold()
+folded = int(sF.state().get("folded_turns", 0))
+assert folded == 5, f"fold must advance by real chunk length (5), not size (10); got {folded}"
+print("7) fold overshoot: pointer advances by actual chunk length (no lost turns)")
+
+# FIX: enemy HP is magnitude-capped so a hallucinated huge number can't make an
+# unkillable enemy.
+from coderain.modules import rpg as _rpg
+sR = lib.store(lib.saves.create("Duel", mode="rpg", premise="A duel.",
+                                rpg_cfg=load_config().rpg))
+st = sR.rpg_state(); st["enabled"] = True; sR.set_rpg_state(st)
+_rpg.apply(sR, {"deltas": {"enemies": {"boss": {"hp_max": 999999999,
+                                                "hp": 999999999}}}}, load_config().rpg)
+boss = sR.rpg_state().get("enemies", {}).get("boss", {})
+assert 0 < boss.get("hp_max", 0) <= 100000, f"enemy hp_max not capped: {boss}"
+print("8) enemy HP magnitude-capped (no unkillable-enemy soft-lock)")
+
 print("\nALL SWEEP4 CHECKS PASSED")

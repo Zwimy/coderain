@@ -10,6 +10,7 @@ and GUI use — no engine logic lives in this file.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import queue
 import shutil
@@ -63,7 +64,29 @@ _engines: dict[str, Engine] = {}
 _gen_lock = threading.Lock()
 
 
+def _guard_slug(slug: str) -> str:
+    """Reject a slug that isn't a clean id (a real slug equals slugify(slug)) — a
+    boundary guard against path traversal on any endpoint that maps slug -> disk."""
+    if not slug or slug != templates.slugify(slug):
+        raise HTTPException(400, "invalid id")
+    return slug
+
+
+@contextlib.contextmanager
+def _exclusive():
+    """Run a save-mutating (non-streaming) op under the single generation lock,
+    failing fast with 409 rather than blocking if a turn is in flight — so an
+    edit/undo/delete never races a generation nor hangs on a stuck stream."""
+    if not _gen_lock.acquire(blocking=False):
+        raise HTTPException(409, "a turn is generating — try again in a moment")
+    try:
+        yield
+    finally:
+        _gen_lock.release()
+
+
 def _engine(slug: str) -> Engine:
+    _guard_slug(slug)
     if slug not in _engines:
         try:
             store = lib.saves.store(slug)
@@ -75,7 +98,11 @@ def _engine(slug: str) -> Engine:
 
 def _reload_config() -> None:
     global _cfg
-    _cfg = load_config()
+    try:
+        new = load_config()               # a bad persisted config must not kill
+    except SystemExit as e:               # the running server — keep the last good
+        raise HTTPException(400, f"config not applied: {e}")
+    _cfg = new
     _engines.clear()          # engines rebuild lazily against the new config
 
 
@@ -190,9 +217,10 @@ def get_save(slug: str):
 @app.delete("/api/saves/{slug}")
 def delete_save(slug: str):
     _guard_slug(slug)
-    _engines.pop(slug, None)
-    if not lib.saves.delete(slug):
-        raise HTTPException(404, f"no such save: {slug}")
+    with _exclusive():                       # don't rmtree files under a live turn
+        _engines.pop(slug, None)
+        if not lib.saves.delete(slug):
+            raise HTTPException(404, f"no such save: {slug}")
     return {"ok": True}
 
 
@@ -205,7 +233,8 @@ def branch_save(slug: str, body: dict):
     total = len(_engine(slug).store.turns())
     if not 1 <= n <= total:
         raise HTTPException(400, f"turn must be 1..{total}")
-    new_slug, warnings = lib.saves.branch(slug, n, _cfg.rpg)
+    with _exclusive():                       # copy a consistent transcript snapshot
+        new_slug, warnings = lib.saves.branch(slug, n, _cfg.rpg)
     return {"slug": new_slug, "warnings": warnings}
 
 
@@ -237,9 +266,10 @@ def turn(slug: str, body: dict):
 def edit_turn(slug: str, i: int, body: dict):
     """In-place message edit (ST-03)."""
     eng = _engine(slug)
-    if not eng.store.update_turn(i, str(body.get("text", ""))):
-        raise HTTPException(400, f"no turn at index {i}")
-    eng._swipes = None
+    with _exclusive():                       # don't rewrite the transcript mid-turn
+        if not eng.store.update_turn(i, str(body.get("text", ""))):
+            raise HTTPException(400, f"no turn at index {i}")
+        eng._swipes = None
     return {"ok": True}
 
 
@@ -247,7 +277,7 @@ def edit_turn(slug: str, i: int, body: dict):
 def impersonate(slug: str):
     """Draft the player's next action (ST-04). Returns text; stores nothing."""
     eng = _engine(slug)
-    with _gen_lock:
+    with _exclusive():
         return {"text": eng.impersonate()}
 
 
@@ -256,7 +286,8 @@ def swipe_browse(slug: str, body: dict):
     """Browse cached narrator alternates without generating (ST-02)."""
     eng = _engine(slug)
     direction = 1 if int(body.get("dir", 1)) >= 0 else -1
-    out = eng.swipe_browse(direction)
+    with _exclusive():                       # rewrites the tail turn — not mid-gen
+        out = eng.swipe_browse(direction)
     if out is None:
         raise HTTPException(400, "nothing to swipe")
     return out
@@ -272,9 +303,9 @@ def swipe_gen(slug: str):
 @app.post("/api/saves/{slug}/undo")
 def undo(slug: str):
     eng = _engine(slug)
-    with _gen_lock:
+    with _exclusive():
         ok = eng.undo_last()
-    eng._swipes = None
+        eng._swipes = None
     return {"ok": ok, "turns": len(eng.store.turns()),
             "sheet": _sheet_lines(eng)}
 
@@ -282,20 +313,27 @@ def undo(slug: str):
 @app.post("/api/saves/{slug}/retry")
 def retry(slug: str):
     eng = _engine(slug)
-    store = eng.store
-    turns = store.turns()
-    if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2:
-        last_player = turns[-2]["text"]
-        store.drop_last_turns(2)
-    elif turns and turns[-1]["role"] == "player":
-        last_player = turns[-1]["text"]
-        store.drop_last_turns(1)
-    else:
+    turns = eng.store.turns()
+    if not (turns and turns[-1]["role"] in ("narrator", "player")):
         raise HTTPException(400, "nothing to retry yet")
-    eng.restore_pre_turn_rpg()
-    eng._swipes = None
-    return _stream_generation(
-        slug, lambda e, notes: e.turn(last_player, on_stage=notes.append))
+
+    def run(e, notes):
+        # The destructive rollback runs UNDER the generation lock (inside the
+        # stream) so it can't truncate the transcript of an in-flight turn.
+        t = e.store.turns()
+        if t and t[-1]["role"] == "narrator" and len(t) >= 2:
+            last_player = t[-2]["text"]
+            e.store.drop_last_turns(2)
+        elif t and t[-1]["role"] == "player":
+            last_player = t[-1]["text"]
+            e.store.drop_last_turns(1)
+        else:
+            return iter(())               # nothing to retry (raced away)
+        e.restore_pre_turn_rpg()
+        e._swipes = None
+        return e.turn(last_player, on_stage=notes.append)
+
+    return _stream_generation(slug, run)
 
 
 @app.post("/api/saves/{slug}/continue")
@@ -322,6 +360,7 @@ _BASE_PIECE_FILES = ["characters.md", "locations.md", "items.md",
 
 
 def _scen_store(slug: str) -> MemoryStore:
+    _guard_slug(slug)
     scen_dir = lib.scenarios.dir(slug)
     if not (scen_dir / "scenario.json").exists():
         raise HTTPException(404, f"no such scenario: {slug}")
@@ -437,6 +476,7 @@ def scenario_piece_delete(slug: str, rel: str, pslug: str):
 def _declare_custom_type(slug: str, name: str) -> str:
     """Declare (and seed) a custom lore type on a scenario. Returns the
     filename; raises HTTPException on bad names / missing scenario."""
+    _guard_slug(slug)
     import re as _re
     base = str(name).strip().removesuffix(".md")
     if not _re.search(r"[A-Za-z0-9]", base):
@@ -472,6 +512,7 @@ def scenario_add_type(slug: str, body: dict):
 def scenario_delete_type(slug: str, fname: str):
     """Remove a CUSTOM lore type: the declaration AND the file (its pieces go
     with it — the UI confirms first). Built-ins are never deletable."""
+    _guard_slug(slug)
     if fname in _BASE_PIECE_FILES or not fname.endswith(".md") \
             or "/" in fname or "\\" in fname:
         raise HTTPException(400, f"'{fname}' is not a removable lore type")
@@ -510,14 +551,6 @@ def scenario_section_export(slug: str, rel: str):
 # as the story evolves). These mirror the scenario builder endpoints but read
 # and write the loaded save, so the player can edit characters/locations/etc.
 # mid-play. The engine reads the Markdown fresh each turn, so edits go live.
-def _guard_slug(slug: str) -> str:
-    """Reject a slug that isn't a clean id (a real slug equals slugify(slug)) — a
-    boundary guard against path traversal in any endpoint that maps a slug to disk."""
-    if not slug or slug != templates.slugify(slug):
-        raise HTTPException(400, "invalid id")
-    return slug
-
-
 def _save_store(slug: str) -> MemoryStore:
     _guard_slug(slug)
     try:
@@ -949,6 +982,7 @@ _EXPORT_DIR = Path(tempfile.gettempdir()) / "coderain-exports"
 
 @app.get("/api/saves/{slug}/export")
 def export_save(slug: str):
+    _guard_slug(slug)
     _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     try:
         path = lib.saves.export(slug, _EXPORT_DIR / f"save-{slug}.zip")
@@ -1089,6 +1123,7 @@ def import_defaults(file: UploadFile = File(...)):
 
 @app.get("/api/scenarios/{slug}/export")
 def export_scenario(slug: str):
+    _guard_slug(slug)
     _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     try:
         path = lib.scenarios.export(slug, _EXPORT_DIR / f"world-{slug}.zip")

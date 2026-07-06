@@ -299,7 +299,10 @@ class Summarizer:
             chunk = turns[folded:folded + self.medium_size]
             scene_no = len(self.store.entries("memory/scenes.md")) + 1
             events += self._fold_scene(chunk, scene_no, folded + 1)  # 1-based start
-            folded += self.medium_size
+            # Advance by the ACTUAL chunk length, never the configured size — a
+            # short tail chunk (or a hand-edited size > after) must not overshoot
+            # and silently drop the turns in between.
+            folded += len(chunk)
             state["folded_turns"] = folded
             self.store.write_state(state)
 
