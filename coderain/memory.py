@@ -12,6 +12,7 @@ import random
 import re
 import shutil
 import time
+import uuid
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
@@ -51,19 +52,26 @@ def _safe_child(root: Path, name: str) -> bool:
         return False
 
 
+# A quantified group that itself contains a quantifier — (a+)+, (\w+\s*)+, (.*a){25}.
 _NESTED_QUANT = re.compile(r"\([^)]*[+*][^)]*\)[+*{]")
+# A quantified group containing an alternation — (a|a)+$, (a|ab)+ — the other
+# classic backtracking bomb, which _NESTED_QUANT misses (no inner quantifier).
+# Output-scrub rules almost never quantify an alternation, so the false-positive
+# cost is acceptable for the gain of closing this ReDoS class.
+_QUANT_ALT = re.compile(r"\([^)]*\|[^)]*\)[+*{]")
 
 
 def safe_output_regex(pattern: str) -> bool:
     """ST-31 guard: reject a user/imported regex likely to catastrophically
     backtrack (ReDoS) — too long, or a quantified group that itself contains a
-    quantifier: (a+)+, (\\w+\\s*)+, (.*a){25}. A cheap heuristic (not a full ReDoS
-    solver) that blocks the practical bombs while passing ordinary patterns
-    (\\bword\\b, colou?r). Critical because rules ride inside shared/imported
-    worlds and run while the app-wide generation lock is held."""
+    quantifier or an alternation: (a+)+, (\\w+\\s*)+, (.*a){25}, (a|a)+. A cheap
+    heuristic (not a full ReDoS solver) that blocks the practical bombs while
+    passing ordinary patterns (\\bword\\b, colou?r). Critical because rules ride
+    inside shared/imported worlds and run while the app-wide generation lock is
+    held."""
     if not pattern or len(pattern) > 200:
         return False
-    if _NESTED_QUANT.search(pattern):
+    if _NESTED_QUANT.search(pattern) or _QUANT_ALT.search(pattern):
         return False
     try:
         re.compile(pattern)
@@ -534,12 +542,32 @@ class MemoryStore:
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     def write(self, rel: str, text: str) -> None:
-        """Atomic write (temp then os.replace) to the file's effective layer."""
+        """Atomic write (temp then os.replace) to the file's effective layer.
+        The temp name is per-write unique so two concurrent writers to the same
+        file can't clobber each other's in-progress `.tmp` (they still serialize
+        at the final os.replace, which is atomic)."""
         p = self.resolve_write_path(rel)
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, p)
+        tmp = p.with_suffix(p.suffix + f".{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            # os.replace is atomic, but on Windows it raises a sharing violation
+            # (WinError 5) if an AV scanner/indexer — or a concurrent writer —
+            # has the target momentarily open. Retry briefly before giving up.
+            for attempt in range(10):
+                try:
+                    os.replace(tmp, p)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.02)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
 
     def make_override(self, rel: str) -> bool:
         """Fork a save-local copy of an inherited rule file so edits affect only this
