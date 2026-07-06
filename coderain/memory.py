@@ -1217,7 +1217,7 @@ class MemoryStore:
 
         # sections: (priority, title, body). priority 0 = always keep.
         sections: list[tuple[int, str, str]] = []
-        premise = _strip_h1(self.read("premise.md"))
+        premise = _premise_prose(self.read("premise.md"))
         if premise:
             sections.append((0, "Premise", premise))
         player = self.entries("player.md")
@@ -1543,6 +1543,20 @@ def _strip_h1(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _premise_prose(text: str) -> str:
+    """The premise PROSE only: minus the H1 header AND the verbatim `## Opening`
+    greeting (which is turn 1 of the transcript, not standing world context — it
+    shouldn't also ride in the premise section every turn)."""
+    out: list[str] = []
+    for ln in _strip_comments(text).splitlines():
+        if ln.startswith("# "):
+            continue
+        if ln.strip().lower().startswith("## opening"):
+            break
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
 def _recent_paragraphs(text: str, n: int) -> str:
     body = _strip_h1(text)
     if not body:
@@ -1682,9 +1696,11 @@ class ScenarioLibrary:
         return False
 
     def ensure_default(self) -> None:
+        """Seed the bundled showcase world on a fresh install. Only when the
+        library is empty, so a user who deletes it isn't force-fed it again."""
         if not self.list():
-            self.create("Frontier Town", templates.DEFAULT_PREMISE,
-                        description="Default grim low-fantasy starter world.")
+            from . import default_scenario
+            default_scenario.seed(self.root / default_scenario.SLUG)
 
 
 class SaveLibrary:

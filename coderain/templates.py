@@ -631,6 +631,50 @@ def seed_scenario(scen_dir: Path, title: str, premise: str,
             _write(scen_dir / rel, FILE_SKELETONS[rel])
 
 
+def _seed_save_aids(save_dir: Path, scen_dir: Path | None, state: dict) -> None:
+    """Copy a scenario's recommended play aids (aids.json) into a new save's state
+    and custom-instructions. Scenarios have no state.json of their own, so this is
+    how an authored world ships quick actions / an author's-note / output-regex
+    with it. Shape-cleaned only; the engine re-validates regex at exec time."""
+    if scen_dir is None:
+        return
+    try:
+        aids = json.loads((scen_dir / "aids.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(aids, dict):
+        return
+    qa = aids.get("quick_actions")
+    if isinstance(qa, list):
+        state["quick_actions"] = [str(s).strip() for s in qa
+                                  if isinstance(s, str) and s.strip()][:20]
+    rr = aids.get("regex_rules")
+    if isinstance(rr, list):
+        rules = []
+        for r in rr:
+            if not isinstance(r, dict) or not isinstance(r.get("find"), str):
+                continue
+            rules.append({"find": r["find"],
+                          "replace": str(r.get("replace", ""))[:1000],
+                          "flags": "".join(c for c in str(r.get("flags", "")).lower()
+                                           if c in "ims")})
+            if len(rules) >= 30:
+                break
+        state["regex_rules"] = rules
+    an = aids.get("authors_note")
+    if isinstance(an, dict):
+        depth = an.get("depth") if an.get("depth") in ("system", "tail") else "system"
+        try:
+            every = max(1, int(an.get("every", 1)))
+        except (TypeError, ValueError):
+            every = 1
+        state["authors_note"] = {"depth": depth, "every": every}
+        note = str(an.get("content", "") or "").strip()
+        if note:
+            _write(save_dir / "custom-instructions.md",
+                   "# Custom instructions (this save)\n\n---\n" + note + "\n")
+
+
 def new_save(save_dir: Path, scen_dir: Path | None, title: str,
              scenario_slug: str = "", rpg_enabled: bool = False,
              premise: str = "", mode: str = "",
@@ -678,6 +722,7 @@ def new_save(save_dir: Path, scen_dir: Path | None, title: str,
             val = start_time.get(key)
             if isinstance(val, str) and val.strip():
                 t[key] = val.strip()
+    _seed_save_aids(save_dir, scen_dir, state)   # scenario's recommended play aids
     _write(save_dir / "state.json", json.dumps(state, indent=2))
     if mode not in ("simple", "rpg"):
         mode = "rpg" if rpg_enabled else "simple"
