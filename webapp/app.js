@@ -927,7 +927,10 @@ async function renderPlay(slug) {
           <button id="undo">Undo</button>
           <button id="retry">Retry</button>
           <button id="branch">Branch…</button>
+          <button id="aids-btn" title="quick actions &amp; output cleanup rules"
+            >Aids</button>
         </div>
+        <div id="quick-bar"></div>
         <div id="composer-inner">
           <button id="suggest" title="let the AI draft your next action">✍</button>
           <textarea id="action" placeholder="What do you do?"></textarea>
@@ -1038,11 +1041,13 @@ async function renderPlay(slug) {
         chunk: m => { d.classList.remove("pending"); body.textContent += m.text;
                       transcript.scrollTop = transcript.scrollHeight; },
         done: m => { setEvents(m.events); setSheet(m.sheet || []);
-                     $(".clock").textContent = m.clock || ""; stage.textContent = ""; },
+                     $(".clock").textContent = m.clock || "";
+                     if (m.text != null) body._settle = m.text; stage.textContent = ""; },
         error: m => { stage.textContent = "error: " + m.text; },
       });
     } catch (e) { stage.textContent = "error: " + e.message; }
     d.classList.remove("pending");
+    if (body._settle != null && body.textContent) body.textContent = body._settle;
     paint(d, body.textContent);
     swipe = {count: swipe.count + 1, idx: swipe.count};
     setBusy(false); renderSwipeBar();
@@ -1076,6 +1081,7 @@ async function renderPlay(slug) {
     const live = addTurn("narrator", "");
     const liveBody = bodyOf(live);
     live.classList.add("pending");   // blinking caret until prose streams in
+    let settled = null;              // ST-31: the regex-cleaned stored text
     try {
       await sse(path, body, {
         stage: m => { stage.textContent = m.text; },
@@ -1084,6 +1090,7 @@ async function renderPlay(slug) {
                       transcript.scrollTop = transcript.scrollHeight; },
         done: m => { setEvents(m.events); setSheet(m.sheet || []);
                      $(".clock").textContent = m.clock || "";
+                     if (m.text != null) settled = m.text;
                      stage.textContent = ""; },
         error: m => { stage.textContent = "error: " + m.text; },
       });
@@ -1091,6 +1098,8 @@ async function renderPlay(slug) {
       stage.textContent = "error: " + e.message;
     }
     live.classList.remove("pending");
+    // ST-31: settle the raw streamed turn onto the cleaned, stored version.
+    if (settled != null && liveBody.textContent) liveBody.textContent = settled;
     if (!liveBody.textContent) live.remove();
     else paint(live, liveBody.textContent);   // ST-06: apply markdown
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
@@ -1101,8 +1110,6 @@ async function renderPlay(slug) {
   s.turns.forEach(t => addTurn(t.role, t.text));
   setSheet(s.sheet || []);
   renderSwipeBar();
-
-  if (!s.turns.length) await run(`/api/saves/${slug}/opening`);
 
   $("#suggest").addEventListener("click", async () => {
     if (busy) return;
@@ -1125,6 +1132,66 @@ async function renderPlay(slug) {
   $("#action").addEventListener("keydown", ev => {
     if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); send(); }
   });
+
+  // ST-30: quick-action buttons — a canned action fills the composer and sends.
+  const renderQuickBar = actions => {
+    const bar = $("#quick-bar");
+    if (!bar) return;
+    bar.innerHTML = (actions || []).map((a, i) =>
+      `<button class="qa" data-i="${i}">${esc(a)}</button>`).join("");
+    bar.querySelectorAll(".qa").forEach(b => b.addEventListener("click", () => {
+      if (busy) return;
+      $("#action").value = actions[Number(b.dataset.i)] || "";
+      send();
+    }));
+  };
+  renderQuickBar(s.quick_actions);
+
+  $("#aids-btn").addEventListener("click", async () => {          // ST-30 + ST-31
+    const aids = await api(`/api/saves/${slug}/aids`);
+    openModal(`
+      <h1>Play aids</h1>
+      <label>Quick actions <span class="muted">(this story — one per line)</span></label>
+      <textarea id="qa-list" rows="4"
+        placeholder="Look around&#10;Check my inventory&#10;Wait and listen"
+        >${esc((aids.quick_actions || []).join("\n"))}</textarea>
+      <label>Output cleanup rules <span class="muted">(regex find &rarr; replace,
+      applied to narration &amp; saved)</span></label>
+      <div id="rx-rows"></div>
+      <button id="rx-add" class="mini">+ rule</button>
+      <div class="modal-actions">
+        <button id="aids-cancel">Cancel</button>
+        <button class="primary" id="aids-save">Save</button>
+      </div>`);
+    const rxRows = $("#rx-rows");
+    const addRow = r => {
+      const div = document.createElement("div");
+      div.className = "rx-row row";
+      div.innerHTML =
+        `<input class="rx-find" placeholder="find (regex)" value="${esc(r.find || "")}">`
+        + `<input class="rx-repl" placeholder="replace" value="${esc(r.replace || "")}">`
+        + `<input class="rx-flags" placeholder="ims" style="max-width:4.5em" value="${esc(r.flags || "")}">`
+        + `<button class="rx-del mini">✕</button>`;
+      div.querySelector(".rx-del").addEventListener("click", () => div.remove());
+      rxRows.appendChild(div);
+    };
+    (aids.regex_rules || []).forEach(addRow);
+    $("#rx-add").addEventListener("click", () => addRow({}));
+    $("#aids-cancel").addEventListener("click", closeModal);
+    $("#aids-save").addEventListener("click", async () => {
+      const quick = $("#qa-list").value.split("\n").map(t => t.trim()).filter(Boolean);
+      const rules = [...rxRows.querySelectorAll(".rx-row")].map(r => ({
+        find: r.querySelector(".rx-find").value,
+        replace: r.querySelector(".rx-repl").value,
+        flags: r.querySelector(".rx-flags").value,
+      })).filter(r => r.find.trim());
+      await api(`/api/saves/${slug}/aids`,
+                {method: "PUT", body: {quick_actions: quick, regex_rules: rules}});
+      closeModal();
+      renderQuickBar((await api(`/api/saves/${slug}`)).quick_actions);
+    });
+  });
+
   $("#back").addEventListener("click", () => { location.hash = "#library"; });
   $("#continue").addEventListener("click", () => {
     if (!busy) run(`/api/saves/${slug}/continue`);
@@ -1199,6 +1266,10 @@ async function renderPlay(slug) {
       closeModal();
     });
   });
+
+  // A brand-new save generates its opening now that every control is wired — so
+  // the quick-action bar / Aids / composer are all live while it streams.
+  if (!s.turns.length) await run(`/api/saves/${slug}/opening`);
 }
 
 function talkDrawer(slug, companions) {
@@ -1605,6 +1676,15 @@ async function renderSettings() {
       </details>
     </div>
 
+    <div class="setting-panel">
+      <h2>Quick actions (global)</h2>
+      <p class="muted">Canned action buttons shown in every story's play bar — one
+      per line. Each story can add its own from the play view (Aids).</p>
+      <textarea id="qa-global" rows="3"
+        placeholder="Look around&#10;Check my inventory&#10;Wait and listen"
+        >${esc((st.quick_actions || []).join("\n"))}</textarea>
+    </div>
+
     <div class="savebar">
       <button class="primary" id="save-settings">Save &amp; apply</button>
       <span id="save-status"></span>
@@ -1679,6 +1759,7 @@ async function renderSettings() {
         repetition_penalty: $("#gc-rep").value,
         seed: $("#gc-seed").value,
       },
+      quick_actions: $("#qa-global") ? $("#qa-global").value : "",
       local: {
         director: $("#lm-director") ? $("#lm-director").value : "",
         writer: $("#lm-writer") ? $("#lm-writer").value : "",

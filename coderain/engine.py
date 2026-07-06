@@ -8,6 +8,7 @@ Generation has two modes:
 """
 from __future__ import annotations
 
+import re
 from typing import Iterator
 
 from . import features
@@ -426,6 +427,25 @@ class Engine:
                              day=str(tm.get("day", "")), seed=seed,
                              turn=len(self.store.turns()))
 
+    def _apply_output_regex(self, text: str) -> str:
+        """ST-31: run the save's persistent find/replace rules over narrator output
+        before it's stored, so the model's memory sees the cleaned text (tics fade).
+        A bad pattern is skipped, never crashes the turn."""
+        rules = self.store.world_state().get("regex_rules")
+        if not isinstance(rules, list):
+            return text
+        for r in rules:
+            if not isinstance(r, dict) or not r.get("find"):
+                continue
+            fl = 0
+            for ch in str(r.get("flags", "")).lower():
+                fl |= {"i": re.I, "m": re.M, "s": re.S}.get(ch, 0)
+            try:
+                text = re.sub(str(r["find"]), str(r.get("replace", "")), text, flags=fl)
+            except re.error:
+                continue        # invalid rule -> leave the text unchanged
+        return text
+
     def _reply_prefix(self) -> str:
         """ST-22 'Start reply with': a persistent literal prefix every generated
         narrator turn begins with (e.g. a quote, an asterisk, a name). Cross-provider
@@ -522,6 +542,7 @@ class Engine:
         if narration:
             if prefix:                   # ST-22: the stored turn begins with it too
                 narration = prefix + narration
+            narration = self._apply_output_regex(narration)   # ST-31 persistent scrub
             self.store.append_turn("narrator", narration)
         # Apply mechanics even when the model emitted ONLY a sidecar (no visible
         # prose) — otherwise a terse mechanical turn would silently lose its check

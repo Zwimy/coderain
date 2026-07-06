@@ -192,6 +192,17 @@ pre.table {
 #play-actions { max-width: 720px; margin: 8px auto 0; display: flex; gap: 6px; }
 #play-actions button { padding: 4px 11px; font-size: 12px; }
 
+/* ST-30 quick actions */
+#quick-bar { max-width: 720px; margin: 6px auto 0; display: flex; gap: 6px;
+             flex-wrap: wrap; }
+#quick-bar:empty { margin: 0; }
+#quick-bar .qa { padding: 3px 10px; font-size: 12px; border-radius: 999px;
+                 opacity: .9; }
+/* ST-31 regex rule rows in the Aids modal */
+.rx-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+.rx-row > input { flex: 1; }
+.rx-row .rx-del { flex: 0 0 auto; }
+
 /* sheet sidebar */
 #sheet {
   width: 270px; flex: 0 0 auto; border-left: 1px solid var(--line);
