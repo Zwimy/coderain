@@ -110,6 +110,15 @@ def _sse(obj: dict) -> str:
     return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
 
 
+def _quick_actions_for(store: MemoryStore) -> list[str]:
+    """ST-30: the global quick actions (config) followed by this save's own, deduped."""
+    merged = _clean_quick_actions(_cfg.raw.get("quick_actions"))
+    for a in _clean_quick_actions(store.world_state().get("quick_actions")):
+        if a not in merged:
+            merged.append(a)
+    return merged
+
+
 def _save_payload(slug: str) -> dict:
     eng = _engine(slug)
     store = eng.store
@@ -123,6 +132,7 @@ def _save_payload(slug: str) -> dict:
         "sheet": _sheet_lines(eng),
         "companions": eng.companions(),
         "clock": store.clock_str(),
+        "quick_actions": _quick_actions_for(store),
     }
 
 
@@ -161,10 +171,15 @@ def _stream_generation(slug: str, run):
             while notes:
                 yield _sse({"t": "stage", "text": notes.pop(0)})
             events = eng.maybe_fold()
+            # ST-31: hand back the final STORED narrator text so the client can
+            # settle the streamed (raw) turn onto the regex-cleaned version.
+            tail = eng.store.turns()
+            final = tail[-1]["text"] if tail and tail[-1]["role"] == "narrator" else None
             yield _sse({"t": "done", "events": events,
                         "sheet": _sheet_lines(eng),
                         "clock": eng.store.clock_str(),
-                        "turns": len(eng.store.turns())})
+                        "turns": len(eng.store.turns()),
+                        "text": final})
         except Exception as e:  # noqa: BLE001 — surface, never hang the stream
             yield _sse({"t": "error", "text": str(e)})
         finally:
@@ -656,6 +671,51 @@ def put_authors_note(slug: str, body: dict):
         every = 1
     state = store.world_state()
     state["authors_note"] = {"depth": depth, "every": every}
+    store.set_world_state(state)
+    return {"ok": True}
+
+
+# ---------- Tier 4 play aids: quick actions (ST-30) + regex rules (ST-31) ----------
+def _clean_quick_actions(raw) -> list[str]:
+    if isinstance(raw, str):
+        raw = raw.split("\n")
+    if not isinstance(raw, list):
+        return []
+    return [s.strip() for s in raw if isinstance(s, str) and s.strip()][:20]
+
+
+def _clean_regex_rules(raw) -> list[dict]:
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        find = str(r.get("find", "")).strip()
+        if not find:
+            continue
+        out.append({"find": find, "replace": str(r.get("replace", "")),
+                    "flags": "".join(c for c in str(r.get("flags", "")).lower()
+                                     if c in "ims")})
+        if len(out) >= 30:
+            break
+    return out
+
+
+@app.get("/api/saves/{slug}/aids")
+def get_aids(slug: str):
+    ws = _save_store(slug).world_state()
+    return {"quick_actions": _clean_quick_actions(ws.get("quick_actions")),
+            "regex_rules": _clean_regex_rules(ws.get("regex_rules"))}
+
+
+@app.put("/api/saves/{slug}/aids")
+def put_aids(slug: str, body: dict):
+    """ST-30 per-save quick actions + ST-31 persistent output regex rules."""
+    store = _save_store(slug)
+    state = store.world_state()
+    state["quick_actions"] = _clean_quick_actions(body.get("quick_actions"))
+    state["regex_rules"] = _clean_regex_rules(body.get("regex_rules"))
     store.set_world_state(state)
     return {"ok": True}
 
@@ -1302,6 +1362,7 @@ def get_settings():
             "repetition_penalty": _cfg.generation.get("repetition_penalty"),
             "seed": _cfg.generation.get("seed"),
         },
+        "quick_actions": _clean_quick_actions(_cfg.raw.get("quick_actions")),
     }
 
 
@@ -1310,6 +1371,8 @@ def put_settings(body: dict):
     raw = _cfg.raw
     mode = body.get("mode") if body.get("mode") in ("local", "hosted") \
         else "local"
+    if "quick_actions" in body:                 # ST-30 global quick actions
+        raw["quick_actions"] = _clean_quick_actions(body.get("quick_actions"))
     gen = body.get("generation") or {}
     raw.setdefault("generation", {})
     if gen.get("response_length") in ("short", "medium", "long"):
