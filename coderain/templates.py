@@ -112,6 +112,23 @@ Any entry may carry these header lines; absent means normal behavior:
   hidden until the story reveals it.
 - `links: slug, slug` — related pieces to surface (as one-liners) whenever this
   entry activates.
+
+### Advanced activation (Tier 2 — all optional, absent = normal)
+- `triggers_all: word, word` — secondary keys that must ALSO all be present for
+  the entry to activate (AND). `triggers_not: word, word` — any of these present
+  SUPPRESSES it (NOT). Great for context-specific variants.
+- `chance: 0-100` — activation probability; rolled reproducibly per turn (a
+  retry keeps the same result). Use for rare flavor that shouldn't fire always.
+- `group: name` — only ONE activated entry of a group is kept, chosen weighted +
+  reproducibly. Perfect for mutually-exclusive rumor/event variants.
+- `delay: N` — dormant until at least N messages have passed. `sticky: N` — once
+  triggered, stays active for the next N messages (even after it scrolls out of
+  context). `cooldown: N` — after firing, stays quiet for N messages unless
+  re-mentioned. Timed effects are derived from the transcript (replay-safe).
+- `semantic: true` — activate by meaning (embedding similarity) instead of
+  keywords; needs the vector recall module enabled.
+- `recurse: true` — this entry's body may trigger further entries (one extra
+  pass only; the entries it pulls in do not themselves recurse).
 Preserve these lines when rewriting an entry; set them on new entries when the
 fiction warrants it (a twist you invent should usually be `hidden: true`).
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import shutil
 import time
@@ -165,6 +166,68 @@ class Entry:
         """Slugs of explicitly linked pieces (`links: slug, slug`)."""
         return [templates.slugify(p) for p in self.attrs.get("links", "").split(",")
                 if p.strip()]
+
+    # --- Tier 2 lorebook activation refinements (all optional) ---
+    def _csv(self, key: str) -> list[str]:
+        return [t.strip() for t in self.attrs.get(key, "").split(",") if t.strip()]
+
+    def triggers_all(self) -> list[str]:
+        """ST-13: extra keys that must ALL be present too (AND). Empty = no gate."""
+        return self._csv("triggers_all")
+
+    def triggers_not(self) -> list[str]:
+        """ST-13: keys that SUPPRESS the entry if any is present (NOT)."""
+        return self._csv("triggers_not")
+
+    def chance(self) -> int | None:
+        """ST-11: activation probability 0-100, or None if unset/unparseable.
+        `isascii` guard: Python int() accepts Unicode digits (e.g. '٣'), which a
+        human never meant as a percentage — treat those as unset, not 3."""
+        raw = self.attrs.get("chance", "").strip().rstrip("%")
+        if not raw or not raw.isascii():
+            return None
+        try:
+            return max(0, min(100, int(raw)))
+        except ValueError:
+            return None
+
+    def group(self) -> str:
+        """ST-12: inclusion-group name; only one activated member of a group is
+        kept (weighted). Empty = ungrouped (always kept if activated)."""
+        return self.attrs.get("group", "").strip()
+
+    def _int_attr(self, key: str) -> int | None:
+        raw = self.attrs.get(key, "").strip()
+        if not raw or not raw.isascii():   # ignore Unicode-digit junk, not "3"
+            return None
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return None
+
+    def delay(self) -> int | None:
+        """ST-10: entry stays dormant until at least N messages have happened."""
+        return self._int_attr("delay")
+
+    def sticky(self) -> int | None:
+        """ST-10: once triggered, stays active for the next N messages even after
+        it leaves the immediate context window."""
+        return self._int_attr("sticky")
+
+    def cooldown(self) -> int | None:
+        """ST-10: after firing, stays quiet for N messages unless re-mentioned."""
+        return self._int_attr("cooldown")
+
+    def semantic(self) -> bool:
+        """ST-17: activate by embedding similarity (the retriever) rather than
+        keywords. Author with `semantic: true` (or `trigger: semantic`)."""
+        return (_attr_true(self.attrs.get("semantic"))
+                or self.attrs.get("trigger", "").strip().lower() == "semantic")
+
+    def recurse(self) -> bool:
+        """ST-14: this entry's body may trigger further entries (one extra pass,
+        depth-capped). Opt-in with `recurse: true`."""
+        return _attr_true(self.attrs.get("recurse"))
 
     def render(self) -> str:
         lines = [f"## {self.title}  {{#{self.slug}}}"]
@@ -956,6 +1019,119 @@ class MemoryStore:
         return "\n\n".join(_masked_render(e) for _, e in hits)
 
     # --- context assembly (narrator prompt) ---
+    def _entry_activates(self, e: "Entry", haystack: str, seed: int,
+                         turn_index: int, recent: list[str],
+                         player_now: str) -> bool:
+        """A non-forced entry's trigger decision, incl. the Tier-2 gates.
+        (pinned/critical entries bypass this — they're always in.)
+
+        Timed effects (ST-10) are derived purely from the transcript — no mutable
+        counters — so they stay replay-safe and survive retries. `recent` is the
+        list of committed turn texts (lowercased); `player_now` is the pending
+        action; `turn_index` is the committed message count."""
+        toks = e.triggers()
+        # ST-10 delay: dormant until at least N messages exist.
+        delay = e.delay()
+        if delay is not None and turn_index < delay:
+            return False
+        # primary: title / slug / aliases / `triggers:` (any hit in context)
+        primary = any(trigger_hit(tok, haystack) for tok in toks)
+        # ST-10 sticky: keep active if triggered within the last N messages, even
+        # once it has scrolled out of the immediate context window.
+        from_sticky = False
+        sticky = e.sticky()
+        if not primary and sticky:
+            window = " ".join(recent[-sticky:])
+            if any(trigger_hit(tok, window) for tok in toks):
+                primary, from_sticky = True, True
+        if not primary:
+            return False
+        # ST-13 secondary keys: ALL of triggers_all must also hit...
+        reqs = e.triggers_all()
+        if reqs and not all(trigger_hit(tok, haystack) for tok in reqs):
+            return False
+        # ...and NONE of triggers_not may be present.
+        if any(trigger_hit(tok, haystack) for tok in e.triggers_not()):
+            return False
+        # ST-10 cooldown: after firing, stay quiet for N messages unless the
+        # player re-mentions it in the current action.
+        cooldown = e.cooldown()
+        if cooldown and not any(trigger_hit(tok, player_now) for tok in toks):
+            prior = " ".join(recent[-cooldown:])
+            if any(trigger_hit(tok, prior) for tok in toks):
+                return False
+        # ST-11 probability: reproducible per (story seed, turn, entry) so a
+        # retry of the same turn keeps the same activations. chance>=100 → always.
+        # A sticky continuation skips the roll — `chance` gates the INITIAL fire
+        # only; otherwise a stuck entry would flicker as the per-turn roll re-rolls.
+        chance = e.chance()
+        if not from_sticky and chance is not None and chance < 100:
+            rng = random.Random(f"{seed}-{turn_index}-{e.slug}-chance")
+            if rng.randint(1, 100) > chance:
+                return False
+        return True
+
+    def _collapse_groups(self, candidates: list, seed: int, turn_index: int) -> list:
+        """ST-12: for each inclusion group among the activated candidates, keep a
+        single winner chosen by seeded weighted random (weight = weight_factor x
+        importance). Ungrouped candidates pass through untouched. Seeded by
+        (seed, turn, group) so a retry of the same turn keeps the same winner."""
+        groups: dict[str, list] = {}
+        out = []
+        for c in candidates:
+            e = c[2]
+            # pinned/critical are ALWAYS in — they never enter the group lottery,
+            # or an "always present" entry could lose it and vanish.
+            g = "" if (e.pinned() or e.weight() == "critical") else e.group()
+            (groups.setdefault(g, []) if g else out).append(c)
+        for name, members in groups.items():
+            if len(members) == 1:
+                out.append(members[0])
+                continue
+            weights = [max(0.0, m[2].weight_factor() * m[2].importance)
+                       for m in members]
+            rng = random.Random(f"{seed}-{turn_index}-{name}-group")
+            out.append(rng.choices(members, weights=weights, k=1)[0]
+                       if sum(weights) > 0 else members[0])
+        return out
+
+    def _recursion_pass(self, picked: dict, matched_slugs: set, by_slug: dict,
+                        seed: int, turn_index: int, recent: list[str],
+                        player_now: str, used_lore: int, lore_budget: int) -> int:
+        """ST-14: entries flagged `recurse: true` let their body activate further
+        entries — exactly one extra pass. The newly-activated entries do NOT
+        recurse (depth cap 1). Hidden/pinned/critical stay out of the pass. Extras
+        respect the remaining lore budget. Returns the updated used_lore."""
+        fuel = " ".join(e.body for group in picked.values() for e in group
+                        if e.recurse()).lower()
+        if not fuel.strip():
+            return used_lore
+        extra: list[tuple[float, str, Entry]] = []
+        for slug, (rel, e) in by_slug.items():
+            if slug in matched_slugs or e.hidden() or e.pinned() \
+                    or e.weight() == "critical":
+                continue
+            if self._entry_activates(e, fuel, seed, turn_index, recent, player_now):
+                extra.append((e.weight_factor() * e.importance, rel, e))
+        extra.sort(key=lambda c: c[0], reverse=True)
+        # ST-12 still holds through recursion: at most one member per inclusion
+        # group survives (counting any group already represented in the first pass).
+        picked_groups = {e.group() for grp in picked.values() for e in grp
+                         if e.group()}
+        for _score, rel, e in extra:
+            g = e.group()
+            if g and g in picked_groups:
+                continue
+            block = len(e.render())
+            if used_lore + block > lore_budget:
+                break
+            picked.setdefault(rel, []).append(e)
+            matched_slugs.add(e.slug)
+            used_lore += block
+            if g:
+                picked_groups.add(g)
+        return used_lore
+
     def assemble(self, history: list[dict], player_input: str,
                  scenes_tail: int = 4, budget_tokens: int = 8000,
                  retriever=None) -> list[dict]:
@@ -1026,11 +1202,26 @@ class MemoryStore:
             sections.append((2, "Timeline (shorthand; recall a [T..] range for detail)",
                              "\n".join(tl_lines)))
 
-        # --- lorebook activation (Wave 2) ---------------------------------
+        # --- lorebook activation (Wave 2 + Tier 2) ------------------------
         # pinned/critical entries are ALWAYS in; the rest activate on a trigger
-        # match (title/slug/aliases + the `triggers:` attr) and compete for a
-        # lore budget ranked by weight x importance. Hidden entries never join
-        # the normal sections — they get their own foreshadow-framed block.
+        # match (title/slug/aliases + the `triggers:` attr), refined by the
+        # optional Tier-2 gates (secondary keys ST-13, probability ST-11), and
+        # compete for a lore budget ranked by weight x importance. Hidden entries
+        # never join the normal sections — they get their own foreshadow block.
+        # turn_index + seed make the probability roll reproducible across a retry
+        # of the same turn (replay-safe, like the RPG dice).
+        all_turns = self.turns()
+        turn_index = len(all_turns)
+        recent_texts = [t.get("text", "").lower() for t in all_turns]
+        player_now = player_input.lower()
+        # A hand-edited state.json may carry a malformed rpg block (null, a list,
+        # a non-int seed) — degrade to seed 0 (still deterministic) rather than
+        # crashing every turn.
+        rpg_block = self.world_state().get("rpg")
+        try:
+            seed = int(rpg_block.get("seed", 0)) if isinstance(rpg_block, dict) else 0
+        except (TypeError, ValueError):
+            seed = 0
         matched_slugs = set()
         candidates: list[tuple[float, str, Entry]] = []   # (score, rel, entry)
         hidden_hits: list[Entry] = []
@@ -1039,8 +1230,8 @@ class MemoryStore:
             for e in self.entries(rel):
                 by_slug.setdefault(e.slug, (rel, e))
                 always = e.pinned() or e.weight() == "critical"
-                hit = always or any(trigger_hit(tok, haystack)
-                                    for tok in e.triggers())
+                hit = always or self._entry_activates(
+                    e, haystack, seed, turn_index, recent_texts, player_now)
                 if not hit:
                     continue
                 if e.hidden():
@@ -1048,6 +1239,33 @@ class MemoryStore:
                     continue
                 score = e.weight_factor() * e.importance + (100 if always else 0)
                 candidates.append((score, rel, e))
+        # ST-17: semantic-triggered lore. Only when at least one entry opts into
+        # `semantic: true` do we spend an extra retriever pass here — kept separate
+        # from the "Recalled" pass below so the common case stays a single call and
+        # the Recalled top-K isn't diluted by already-activated slugs. Promotion
+        # honors the HARD gates (hidden stays hidden, `triggers_not` suppresses,
+        # `chance:0` never fires, `delay` holds) but not the keyword gate itself —
+        # activating without keywords is the whole point of semantic triggering.
+        if retriever is not None and any(e.semantic()
+                                         for _s, (_r, e) in by_slug.items()):
+            already = {c[2].slug for c in candidates}
+            exclude = {e.slug for e in player} | already
+            for e in retriever(haystack, exclude):
+                if not (e.semantic() and not e.hidden() and e.slug in by_slug):
+                    continue
+                if e.slug in already or e.chance() == 0:
+                    continue
+                dly = e.delay()
+                if dly is not None and turn_index < dly:
+                    continue
+                if any(trigger_hit(tok, haystack) for tok in e.triggers_not()):
+                    continue
+                rel = by_slug[e.slug][0]
+                candidates.append((e.weight_factor() * e.importance, rel, e))
+                already.add(e.slug)
+        # ST-12: mutually-exclusive inclusion groups collapse to one winner each
+        # (weighted) before the budget competition.
+        candidates = self._collapse_groups(candidates, seed, turn_index)
         candidates.sort(key=lambda c: c[0], reverse=True)
         lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
         picked: dict[str, list[Entry]] = {}
@@ -1061,6 +1279,11 @@ class MemoryStore:
             matched_slugs.add(e.slug)
             used_lore += block
             linked_wanted += [s for s in e.links() if s in by_slug]
+        # ST-14: one recursion pass — bodies of `recurse: true` entries can trigger
+        # further entries (hard depth cap of 1; the extras never recurse again).
+        used_lore = self._recursion_pass(
+            picked, matched_slugs, by_slug, seed, turn_index,
+            recent_texts, player_now, used_lore, lore_budget)
         for rel in self.gated_registries():
             if rel in picked:
                 label = rel.replace(".md", "").replace("-", " ").title()
@@ -1112,10 +1335,12 @@ class MemoryStore:
 
         # semantic recall (Phase 5, optional): salient entries related to the current
         # context that alias-gating and reference resolution didn't already surface.
+        # Full exclude BEFORE the retriever's top-K slice so the K slots go to fresh
+        # recalls; hidden entries never surface here (they belong only in Secrets).
         if retriever is not None:
             exclude = set(matched_slugs) | set(ref_slugs) | {e.slug for e in player}
             recalled = [e for e in retriever(haystack, exclude)
-                        if e.slug not in exclude]
+                        if e.slug not in exclude and not e.hidden()]
             if recalled:
                 sections.append((3, "Recalled (semantically related)",
                                  "\n\n".join(e.render() for e in recalled)))
