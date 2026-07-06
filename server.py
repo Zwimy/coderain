@@ -55,6 +55,7 @@ HOSTED_KEY_ENV = "HOSTED_API_KEY"
 
 app = FastAPI(title="Coderain")
 lib = Library(ROOT)
+lib.scenarios.ensure_default()   # seed the bundled world on a fresh install (web mode)
 characters = CharacterProfiles(ROOT)
 pieces_lib = PieceLibrary(ROOT)
 
