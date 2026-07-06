@@ -77,6 +77,9 @@ def _extract_raw(data: bytes) -> dict | None:
                 pick = next((n for n in names if n.endswith("card.json")),
                             next((n for n in names if n.endswith(".json")), None))
                 if pick:
+                    # Guard a zip bomb: a tiny .charx can declare a huge member.
+                    if z.getinfo(pick).file_size > 64 * 1024 * 1024:
+                        return None
                     return json.loads(z.read(pick).decode("utf-8"))
         except Exception:  # noqa: BLE001
             return None
