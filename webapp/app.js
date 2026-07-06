@@ -89,6 +89,10 @@ const validSlug = seg => seg && seg !== "undefined" && seg !== "null";
 
 async function render() {
   navMark();
+  // The Talk drawer lives on <body> (not #view), so drop it on any navigation —
+  // otherwise it orphans, floating over the next page with a stale slug handler.
+  const td = document.getElementById("talk-drawer");
+  if (td) td.remove();
   const h = location.hash || "#library";
   // A garbage per-item route → bounce home instead of a cryptic "no such save".
   for (const [pfx, n] of [["#play/", 6], ["#world/", 7], ["#edit/", 6]]) {
@@ -904,6 +908,7 @@ let busy = false;
 
 async function renderPlay(slug) {
   const s = await api(`/api/saves/${slug}`);
+  s.companions = s.companions || [];        // never deref undefined (play head + Talk)
   view.innerHTML = `<div id="play">
     <div id="story-col">
       <div id="play-head">
@@ -1012,22 +1017,26 @@ async function renderPlay(slug) {
     bar.querySelector(".swl").onclick = () => swipeMove(-1);
     bar.querySelector(".swr").onclick = () => swipeMove(1);
   };
+  let swiping = false;                  // serialize ◄/► so fast clicks can't race
   const swipeMove = async dir => {
-    if (busy) return;
-    if (dir < 0) {
-      if (swipe.idx === 0) return;
-      const out = await api(`/api/saves/${slug}/swipe`,
-                            {method: "POST", body: {dir: -1}});
-      paint(lastNarrator(), out.text); swipe = {count: out.count, idx: out.idx};
-      renderSwipeBar();
-    } else if (swipe.idx + 1 < swipe.count) {
-      const out = await api(`/api/saves/${slug}/swipe`,
-                            {method: "POST", body: {dir: 1}});
-      paint(lastNarrator(), out.text); swipe = {count: out.count, idx: out.idx};
-      renderSwipeBar();
-    } else {
-      await swipeGen();                 // past the end → generate a new one
-    }
+    if (busy || swiping) return;
+    swiping = true;
+    try {
+      if (dir < 0) {
+        if (swipe.idx === 0) return;
+        const out = await api(`/api/saves/${slug}/swipe`,
+                              {method: "POST", body: {dir: -1}});
+        paint(lastNarrator(), out.text); swipe = {count: out.count, idx: out.idx};
+        renderSwipeBar();
+      } else if (swipe.idx + 1 < swipe.count) {
+        const out = await api(`/api/saves/${slug}/swipe`,
+                              {method: "POST", body: {dir: 1}});
+        paint(lastNarrator(), out.text); swipe = {count: out.count, idx: out.idx};
+        renderSwipeBar();
+      } else {
+        await swipeGen();               // past the end → generate a new one
+      }
+    } finally { swiping = false; }
   };
   const swipeGen = async () => {
     const d = lastNarrator();
@@ -1047,7 +1056,7 @@ async function renderPlay(slug) {
       });
     } catch (e) { stage.textContent = "error: " + e.message; }
     d.classList.remove("pending");
-    if (body._settle != null && body.textContent) body.textContent = body._settle;
+    if (body._settle && body.textContent) body.textContent = body._settle;
     paint(d, body.textContent);
     swipe = {count: swipe.count + 1, idx: swipe.count};
     setBusy(false); renderSwipeBar();
@@ -1098,8 +1107,9 @@ async function renderPlay(slug) {
       stage.textContent = "error: " + e.message;
     }
     live.classList.remove("pending");
-    // ST-31: settle the raw streamed turn onto the cleaned, stored version.
-    if (settled != null && liveBody.textContent) liveBody.textContent = settled;
+    // ST-31: settle the raw streamed turn onto the cleaned, stored version. Only a
+    // NON-EMPTY settle applies — an empty done.text must never wipe a good turn.
+    if (settled && liveBody.textContent) liveBody.textContent = settled;
     if (!liveBody.textContent) live.remove();
     else paint(live, liveBody.textContent);   // ST-06: apply markdown
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
@@ -1290,13 +1300,14 @@ the story transcript.)\n</div>
     </div>`;
   document.body.appendChild(d);
   const log = $("#talk-log");
+  let sending = false;                  // drawer-local; the server lock guards the rest
   const send = async () => {
     const text = $("#talk-input").value.trim();
     const who = $("#talk-who").value;
-    if (!text || busy) return;
+    if (!text || sending) return;
     $("#talk-input").value = "";
     log.textContent += `\nYou → ${who}: ${text}\n${who}: `;
-    busy = true;
+    sending = true;
     try {
       await sse(`/api/saves/${slug}/talk`, {name: who, text}, {
         chunk: m => { log.textContent += m.text;
@@ -1305,7 +1316,7 @@ the story transcript.)\n</div>
       });
     } catch (e) { log.textContent += `[error: ${e.message}]`; }
     log.textContent += "\n";
-    busy = false;
+    sending = false;
   };
   $("#talk-send").addEventListener("click", send);
   $("#talk-input").addEventListener("keydown", ev => {
