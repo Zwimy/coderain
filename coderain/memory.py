@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import templates
+from .macros import expand_macros
 
 # Registry files whose entries are recall-gated by alias/name match.
 GATED_REGISTRIES = [
@@ -1367,7 +1368,17 @@ class MemoryStore:
 
         system = writer_rules
         if chosen:
-            system += "\n\n# STORY & MEMORY CONTEXT\n\n" + "\n\n".join(chosen)
+            # ST-20: one macro pass over the whole authored context ({{user}},
+            # {{roll::2d6}}, {{random::a::b}}, {{day}}, {{clock}}). Seeded by
+            # (seed, turn) so a retry of the same turn expands identically.
+            tm = self.world_state().get("time")
+            ctx = expand_macros(
+                "\n\n".join(chosen),
+                player=(player[0].title if player else "you"),
+                clock=clock,
+                day=(str(tm.get("day", "")) if isinstance(tm, dict) else ""),
+                seed=seed, turn=turn_index)
+            system += "\n\n# STORY & MEMORY CONTEXT\n\n" + ctx
 
         messages = [{"role": "system", "content": system}]
         for t in history:

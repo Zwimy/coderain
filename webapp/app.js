@@ -912,6 +912,8 @@ async function renderPlay(slug) {
         <div class="clock">${esc(s.clock || "")}</div>
         <button id="edit-btn" title="edit this story's characters, lore &amp; world"
           >Edit</button>
+        <button id="note-btn" title="author's note — steer tone &amp; pacing"
+          >Note</button>
         <button id="talk-btn" ${s.companions.length ? "" : "disabled"}
           title="${s.companions.length ? "private companion chat"
                  : "no companions yet"}">Talk</button>
@@ -1160,6 +1162,43 @@ async function renderPlay(slug) {
   });
   $("#talk-btn").addEventListener("click", () => talkDrawer(slug, s.companions));
   $("#edit-btn").addEventListener("click", () => { location.hash = `#edit/${slug}`; });
+  $("#note-btn").addEventListener("click", async () => {          // ST-21 author's note
+    const an = await api(`/api/saves/${slug}/authors-note`);
+    openModal(`
+      <h1>Author's note</h1>
+      <p class="muted">Standing guidance woven into the prompt — tone, pacing,
+      style. Never shown to the reader.</p>
+      <textarea id="an-content" rows="5"
+        placeholder="e.g. Keep the tone noir and terse; end scenes on a hook."
+        >${esc(an.content)}</textarea>
+      <label>Placement</label>
+      <div class="seg" id="an-depth">
+        <button data-v="system" ${an.depth === "system" ? 'class="on"' : ""}>
+          System prompt</button>
+        <button data-v="tail" ${an.depth === "tail" ? 'class="on"' : ""}>
+          Near the action (binds harder)</button>
+      </div>
+      <label>Inject every N turns</label>
+      <input id="an-every" type="number" min="1" value="${an.every || 1}">
+      <div class="modal-actions">
+        <button id="an-cancel">Cancel</button>
+        <button class="primary" id="an-save">Save</button>
+      </div>`);
+    let depth = an.depth;
+    $("#an-depth").addEventListener("click", ev => {
+      if (!ev.target.dataset.v) return;
+      depth = ev.target.dataset.v;
+      $("#an-depth").querySelectorAll("button").forEach(b =>
+        b.classList.toggle("on", b.dataset.v === depth));
+    });
+    $("#an-cancel").addEventListener("click", closeModal);
+    $("#an-save").addEventListener("click", async () => {
+      await api(`/api/saves/${slug}/authors-note`, {method: "PUT", body: {
+        content: $("#an-content").value, depth,
+        every: Number($("#an-every").value) || 1}});
+      closeModal();
+    });
+  });
 }
 
 function talkDrawer(slug, companions) {
@@ -1408,8 +1447,9 @@ function charModal(statNames, c) {
 
 /* ---------- settings ---------- */
 async function renderSettings() {
-  const [st, local, hosted] = await Promise.all([
+  const [st, local, hosted, profs] = await Promise.all([
     api("/api/settings"), api("/api/models/local"), api("/api/models/hosted"),
+    api("/api/profiles").catch(() => ({profiles: [], active: ""})),
   ]);
   const names = local.installed.map(m => m.name);
   const opt = (list, sel) => list.map(n =>
@@ -1427,6 +1467,32 @@ async function renderSettings() {
         Local (Ollama)</button>
       <button data-v="hosted" ${st.mode === "hosted" ? 'class="on"' : ""}>
         Hosted (your API key)</button>
+    </div>
+
+    <div class="setting-panel">
+      <h2>Connection profiles</h2>
+      <p class="muted">Save a connection (provider + model + context) under a name
+      and switch between them — e.g. "fast local" vs "quality cloud".</p>
+      <div class="row">
+        <div style="flex:1"><label>Saved profiles</label>
+          <select id="pf-list">
+            <option value="">${profs.profiles.length ? "— pick —"
+              : "(none saved yet)"}</option>
+            ${profs.profiles.map(n => `<option ${n === profs.active
+              ? "selected" : ""}>${esc(n)}</option>`).join("")}
+          </select>
+        </div>
+        <div style="align-self:flex-end">
+          <button id="pf-load">Load</button>
+          <button id="pf-del" class="danger">Delete</button>
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:1"><label>Save current connection as…</label>
+          <input id="pf-name" placeholder="fast local"></div>
+        <div style="align-self:flex-end"><button id="pf-save">Save</button></div>
+      </div>
+      <span id="pf-status" class="muted"></span>
     </div>
 
     <div class="setting-panel" id="panel-local">
@@ -1497,6 +1563,48 @@ async function renderSettings() {
       </div>
     </div>
 
+    <div class="setting-panel">
+      <h2>Generation controls</h2>
+      <label>Start every reply with (optional)</label>
+      <input id="gc-prefix" placeholder='e.g. a quote " or an action *'
+        value="${esc(st.generation.start_reply_with || "")}">
+      <p class="muted">Every narrator turn will begin with this literal text —
+      handy to force dialogue or an action tag. Works with any model.</p>
+      <label>Stop sequences (one per line)</label>
+      <textarea id="gc-stop" rows="2"
+        placeholder="text that ends generation, e.g.  User:">${
+        esc((st.generation.stop || []).join("\n"))}</textarea>
+      <div class="row">
+        <div><label>Temperature</label>
+          <input id="gc-temp" type="number" step="0.05" min="0" max="2"
+            value="${st.generation.temperature ?? 0.9}"></div>
+        <div><label>Top-p</label>
+          <input id="gc-topp" type="number" step="0.05" min="0" max="1"
+            value="${st.generation.top_p ?? 0.95}"></div>
+        <div><label>Max tokens</label>
+          <input id="gc-max" type="number" step="50" min="1"
+            value="${st.generation.max_tokens ?? 2500}"></div>
+      </div>
+      <details><summary class="muted">Advanced samplers (blank = model default)</summary>
+        <div class="row">
+          <div><label>Frequency penalty</label>
+            <input id="gc-freq" type="number" step="0.1" min="-2" max="2"
+              value="${st.generation.frequency_penalty ?? ""}"></div>
+          <div><label>Presence penalty</label>
+            <input id="gc-pres" type="number" step="0.1" min="-2" max="2"
+              value="${st.generation.presence_penalty ?? ""}"></div>
+        </div>
+        <div class="row">
+          <div><label>Repetition penalty <span class="muted">(local models)</span></label>
+            <input id="gc-rep" type="number" step="0.05" min="0" max="2"
+              value="${st.generation.repetition_penalty ?? ""}"></div>
+          <div><label>Seed <span class="muted">(fixed = reproducible)</span></label>
+            <input id="gc-seed" type="number" step="1" min="0"
+              value="${st.generation.seed ?? ""}"></div>
+        </div>
+      </details>
+    </div>
+
     <div class="savebar">
       <button class="primary" id="save-settings">Save &amp; apply</button>
       <span id="save-status"></span>
@@ -1528,10 +1636,49 @@ async function renderSettings() {
     $("#hm-base").value = p.base_url;
     $("#hm-ctx").value = p.context;
   });
+  const pfStatus = m => {
+    if (!$("#pf-status")) return;
+    $("#pf-status").textContent = m;
+    setTimeout(() => { if ($("#pf-status")) $("#pf-status").textContent = ""; }, 3000);
+  };
+  $("#pf-save").addEventListener("click", async () => {
+    const name = $("#pf-name").value.trim();
+    if (!name) return pfStatus("enter a name first");
+    try { await api("/api/profiles", {method: "POST", body: {name}}); render(); }
+    catch (e) { pfStatus("error: " + e.message); }
+  });
+  $("#pf-load").addEventListener("click", async () => {
+    const name = $("#pf-list").value;
+    if (!name) return pfStatus("pick a profile");
+    try {
+      await api("/api/profiles/activate", {method: "POST", body: {name}});
+      setBrainline(); render();
+    } catch (e) { pfStatus("error: " + e.message); }
+  });
+  $("#pf-del").addEventListener("click", async () => {
+    const name = $("#pf-list").value;
+    if (!name) return pfStatus("pick a profile");
+    if (!confirm(`Delete profile "${name}"?`)) return;
+    try {
+      await api(`/api/profiles/${encodeURIComponent(name)}`, {method: "DELETE"});
+      render();
+    } catch (e) { pfStatus("error: " + e.message); }
+  });
   $("#save-settings").addEventListener("click", async () => {
     const body = {
       mode,
-      generation: {response_length: length},
+      generation: {
+        response_length: length,
+        start_reply_with: $("#gc-prefix").value,
+        stop: $("#gc-stop").value,
+        temperature: $("#gc-temp").value,
+        top_p: $("#gc-topp").value,
+        max_tokens: $("#gc-max").value,
+        frequency_penalty: $("#gc-freq").value,
+        presence_penalty: $("#gc-pres").value,
+        repetition_penalty: $("#gc-rep").value,
+        seed: $("#gc-seed").value,
+      },
       local: {
         director: $("#lm-director") ? $("#lm-director").value : "",
         writer: $("#lm-writer") ? $("#lm-writer").value : "",

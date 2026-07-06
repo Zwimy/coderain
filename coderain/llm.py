@@ -29,12 +29,30 @@ class LLM:
         )
 
     def _params(self, **overrides) -> dict:
+        g = self.gen
         p = {
-            "temperature": self.gen.get("temperature", 0.9),
-            "top_p": self.gen.get("top_p", 0.95),
-            "max_tokens": self.gen.get("max_tokens", 700),
+            "temperature": g.get("temperature", 0.9),
+            "top_p": g.get("top_p", 0.95),
+            "max_tokens": g.get("max_tokens", 700),
         }
+        # ST-24 custom stop sequences (accepts a list or a single string).
+        stop = g.get("stop")
+        if stop:
+            p["stop"] = stop if isinstance(stop, list) else [stop]
+        # ST-26 sampler surface — the OpenAI-standard subset, only sent when the
+        # user opted in (unset = provider default, no behavior change).
+        for k in ("frequency_penalty", "presence_penalty", "seed"):
+            if g.get(k) is not None:
+                p[k] = g[k]
         p.update(overrides)
+        # repetition_penalty is non-standard (llama.cpp/Ollama) → extra_body so it
+        # reaches those backends without breaking strict OpenAI schemas. Merged AFTER
+        # overrides (and via setdefault) so a caller's own extra_body isn't clobbered
+        # and can still win on the same key.
+        if g.get("repetition_penalty") is not None:
+            eb = dict(p.get("extra_body") or {})
+            eb.setdefault("repetition_penalty", g["repetition_penalty"])
+            p["extra_body"] = eb
         return p
 
     def _raw_stream(self, messages: list[dict], params: dict) -> Iterator[str]:

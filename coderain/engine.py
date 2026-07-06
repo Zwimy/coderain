@@ -159,9 +159,24 @@ class Engine:
                                        retriever=self.retriever)
         return self._augment_style(self._augment_rpg(messages))
 
+    def _authors_note_cfg(self) -> tuple[str, int]:
+        """ST-21: per-save author's-note placement — depth ('system' | 'tail') and
+        frequency ('every' N turns). Stored in state.json under authors_note."""
+        ws = self.store.world_state()
+        an = ws.get("authors_note") if isinstance(ws.get("authors_note"), dict) else {}
+        depth = an.get("depth") if an.get("depth") in ("system", "tail") else "system"
+        try:
+            every = max(1, int(an.get("every", 1)))
+        except (TypeError, ValueError):
+            every = 1
+        return depth, every
+
     def _augment_style(self, messages):
-        """Wave 4 response controls: the length knob + the save's custom
-        instructions, appended to the system prompt as style directives."""
+        """Wave 4 response controls + ST-21 author's note. The length knob always
+        rides the system prompt; the save's custom instructions (the author's note)
+        obey their depth + frequency: 'system' appends to the system prompt, 'tail'
+        injects just before the player's latest action (binds harder); 'every N'
+        only injects on turns whose number is a multiple of N."""
         if not messages:
             return messages
         parts = []
@@ -173,12 +188,28 @@ class Engine:
                          "dialogue, and atmosphere.")
         custom = self.store.custom_instructions()
         if custom:
+            custom = self._expand_authored(custom)   # ST-20 macros in the note too
+        depth, every = self._authors_note_cfg()
+        # Frequency counts EXCHANGES (narrator turns), 1-based on the one we're about
+        # to write — independent of player/narrator parity. every=1 → every turn;
+        # the opening (0 narrator turns so far) is exchange 1, so it isn't a spurious
+        # multiple for every>1.
+        exchange = sum(1 for t in self.store.turns()
+                       if t.get("role") == "narrator") + 1
+        note_now = bool(custom) and (exchange % every == 0)
+        if custom and depth == "system" and note_now:
             parts.append(custom)
-        if not parts:
-            return messages
-        add = "\n\n# STYLE DIRECTIVES\n" + "\n".join(f"- {p}" for p in parts)
-        return [{**messages[0], "content": messages[0]["content"] + add},
-                *messages[1:]]
+        out = messages
+        if parts:
+            add = "\n\n# STYLE DIRECTIVES\n" + "\n".join(f"- {p}" for p in parts)
+            out = [{**messages[0], "content": messages[0]["content"] + add},
+                   *messages[1:]]
+        # tail: only when there's an actual last action to sit in front of (>=2
+        # messages), else the note would land before the system prompt.
+        if custom and depth == "tail" and note_now and len(out) >= 2:
+            note = {"role": "system", "content": "# AUTHOR'S NOTE\n" + custom}
+            out = out[:-1] + [note, out[-1]]     # right before the player's action
+        return out
 
     def _augment_rpg(self, messages):
         """When RPG mechanics are on for this story, append the rpg rules + the live
@@ -238,6 +269,7 @@ class Engine:
         # first scene — no model call (FictionLab's greeting message).
         override = self.store.opening_override()
         if override:
+            override = self._expand_authored(override)   # ST-20 macros in greeting
             if on_stage:
                 on_stage("Opening: authored greeting (no generation)")
             self.store.append_turn("narrator", override)
@@ -374,9 +406,51 @@ class Engine:
         self._rpg_events = []
         return events
 
+    def _expand_authored(self, text: str) -> str:
+        """ST-20: expand macros in a verbatim authored string (the opening), with
+        the same context assemble() uses so results match."""
+        from .macros import expand_macros
+        ws = self.store.world_state()
+        tm = ws.get("time") if isinstance(ws.get("time"), dict) else {}
+        rpg = ws.get("rpg") if isinstance(ws.get("rpg"), dict) else {}
+        try:
+            seed = int(rpg.get("seed", 0))
+        except (TypeError, ValueError):
+            seed = 0
+        player = self.store.entries("player.md")
+        return expand_macros(text, player=(player[0].title if player else "you"),
+                             clock=self.store.clock_str(),
+                             day=str(tm.get("day", "")), seed=seed,
+                             turn=len(self.store.turns()))
+
+    def _reply_prefix(self) -> str:
+        """ST-22 'Start reply with': a persistent literal prefix every generated
+        narrator turn begins with (e.g. a quote, an asterisk, a name). Cross-provider
+        because we prepend it rather than relying on backend prefix-continuation."""
+        v = self.cfg.generation.get("start_reply_with", "")
+        return v if isinstance(v, str) else ""    # ignore a malformed non-string
+
     def _generate_and_store(self, messages, on_stage=None) -> "Iterator[str]":
-        """Yields visible prose chunks (hiding any RPG sidecar); returns True iff a
-        narrator turn was stored. When RPG is on, resolves the sidecar afterward."""
+        """Stream a narrator turn. The reply prefix (ST-22) is injected lazily — just
+        before the first real prose chunk — so it only appears when a turn is actually
+        produced. An empty/sidecar-only turn stores nothing AND shows nothing, so the
+        streamed text always equals the stored text. Returns True iff a turn stored."""
+        prefix = self._reply_prefix()
+        sent = not prefix                # no prefix -> nothing to inject
+        inner = self._produce(messages, prefix, on_stage)
+        while True:
+            try:
+                piece = next(inner)
+            except StopIteration as done:
+                return done.value
+            if not sent:
+                sent = True
+                yield prefix
+            yield piece
+
+    def _produce(self, messages, prefix, on_stage=None) -> "Iterator[str]":
+        """The generation body (all three paths). Yields raw prose chunks and prepends
+        `prefix` to the STORED narration so storage matches what was streamed."""
         rpg_on = self.store.rpg_enabled()
         sidecar = None
         trinity_events = None
@@ -433,6 +507,8 @@ class Engine:
             if hidden:
                 sidecar = sidecar_mod.parse_sidecar("".join(hidden))
         if narration:
+            if prefix:                   # ST-22: the stored turn begins with it too
+                narration = prefix + narration
             self.store.append_turn("narrator", narration)
         # Apply mechanics even when the model emitted ONLY a sidecar (no visible
         # prose) — otherwise a terse mechanical turn would silently lose its check

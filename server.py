@@ -582,6 +582,41 @@ def save_world_full(slug: str):
     }
 
 
+@app.get("/api/saves/{slug}/authors-note")
+def get_authors_note(slug: str):
+    store = _save_store(slug)
+    an = store.world_state().get("authors_note")
+    an = an if isinstance(an, dict) else {}
+    depth = an.get("depth") if an.get("depth") in ("system", "tail") else "system"
+    try:
+        every = max(1, int(an.get("every", 1)))
+    except (TypeError, ValueError):
+        every = 1
+    return {"content": store.custom_instructions(), "depth": depth, "every": every}
+
+
+@app.put("/api/saves/{slug}/authors-note")
+def put_authors_note(slug: str, body: dict):
+    """ST-21: the per-save author's note — content + placement (depth/frequency)."""
+    store = _save_store(slug)
+    content = str(body.get("content", "") or "")
+    # custom_instructions() reads the body BELOW the first `---`; keep whatever
+    # header sits above it (the template's, or the user's own) instead of nuking it.
+    existing = store.read("custom-instructions.md")
+    head = existing.split("---", 1)[0] if "---" in existing \
+        else "# Custom instructions (this save)\n\n"
+    store.write("custom-instructions.md", head + "---\n" + content)
+    depth = body.get("depth") if body.get("depth") in ("system", "tail") else "system"
+    try:
+        every = max(1, int(body.get("every", 1)))
+    except (TypeError, ValueError):
+        every = 1
+    state = store.world_state()
+    state["authors_note"] = {"depth": depth, "every": every}
+    store.set_world_state(state)
+    return {"ok": True}
+
+
 @app.put("/api/saves/{slug}/world/main")
 def save_world_main(slug: str, body: dict):
     store = _save_store(slug)
@@ -1204,6 +1239,15 @@ def get_settings():
             "response_length":
                 _cfg.generation.get("response_length", "medium"),
             "trinity_brain": bool(_cfg.generation.get("trinity_brain", True)),
+            "start_reply_with": _cfg.generation.get("start_reply_with", ""),
+            "stop": _cfg.generation.get("stop", []),
+            "temperature": _cfg.generation.get("temperature", 0.9),
+            "top_p": _cfg.generation.get("top_p", 0.95),
+            "max_tokens": _cfg.generation.get("max_tokens", 2500),
+            "frequency_penalty": _cfg.generation.get("frequency_penalty"),
+            "presence_penalty": _cfg.generation.get("presence_penalty"),
+            "repetition_penalty": _cfg.generation.get("repetition_penalty"),
+            "seed": _cfg.generation.get("seed"),
         },
     }
 
@@ -1219,6 +1263,39 @@ def put_settings(body: dict):
         raw["generation"]["response_length"] = gen["response_length"]
     if "trinity_brain" in gen:
         raw["generation"]["trinity_brain"] = bool(gen["trinity_brain"])
+    # ST-22 persistent reply prefix (literal; every generated turn starts with it)
+    if "start_reply_with" in gen:
+        raw["generation"]["start_reply_with"] = str(gen["start_reply_with"] or "")[:300]
+    # ST-24 custom stop sequences (accepts a list or newline-separated string)
+    if "stop" in gen:
+        stop = gen["stop"]
+        if isinstance(stop, str):
+            stop = stop.split("\n")
+        raw["generation"]["stop"] = ([s.strip() for s in stop
+                                      if isinstance(s, str) and s.strip()][:8]
+                                     if isinstance(stop, list) else [])
+    # ST-26 core samplers (always set; clamped to sane ranges)
+    for key, lo, hi, cast in (("temperature", 0.0, 2.0, float),
+                              ("top_p", 0.0, 1.0, float),
+                              ("max_tokens", 1, 100000, int)):
+        if key in gen and gen[key] not in (None, ""):
+            try:
+                raw["generation"][key] = max(lo, min(hi, cast(gen[key])))
+            except (TypeError, ValueError):
+                pass
+    # ST-26 opt-in samplers: set within range, or clear (None/"") -> provider default
+    for key, lo, hi, cast in (("frequency_penalty", -2.0, 2.0, float),
+                              ("presence_penalty", -2.0, 2.0, float),
+                              ("repetition_penalty", 0.0, 2.0, float),
+                              ("seed", 0, 2**31 - 1, int)):
+        if key in gen:
+            if gen[key] in (None, ""):
+                raw["generation"].pop(key, None)
+            else:
+                try:
+                    raw["generation"][key] = max(lo, min(hi, cast(gen[key])))
+                except (TypeError, ValueError):
+                    pass
 
     if mode == "local":
         loc = body.get("local") or {}
@@ -1276,6 +1353,70 @@ def put_settings(body: dict):
     save_yaml(raw)
     _reload_config()
     return get_settings()
+
+
+# ---------- ST-25 connection profiles (named connection bundles) ----------
+def _profiles_saved() -> dict:
+    p = _cfg.raw.get("connection_profiles")
+    return p if isinstance(p, dict) else {}
+
+
+@app.get("/api/profiles")
+def list_profiles():
+    return {"profiles": sorted(_profiles_saved().keys()),
+            "active": _cfg.raw.get("active_profile_name", "")}
+
+
+@app.post("/api/profiles")
+def save_profile(body: dict):
+    """Snapshot the CURRENT active connection under a name."""
+    name = str(body.get("name", "")).strip()
+    if not name or "/" in name or "\\" in name or len(name) > 60:
+        raise HTTPException(400, "profile name must be 1-60 chars with no slashes")
+    raw = _cfg.raw
+    kind = raw.get("active_profile", "local")
+    src = (raw.get("profiles") or {}).get(kind, {})
+    # Never snapshot an empty connection: a profile without base_url/model would
+    # persist a config that crashes load_config on the next boot.
+    if not (src.get("base_url") and src.get("model")):
+        raise HTTPException(400, "the active connection has no model/URL to save yet")
+    saved = raw.setdefault("connection_profiles", {})
+    saved[name] = {"kind": kind, **{k: src[k] for k in
+                   ("base_url", "model", "api_key_env", "context_tokens")
+                   if k in src}}
+    raw["active_profile_name"] = name
+    save_yaml(raw)
+    _reload_config()
+    return list_profiles()
+
+
+@app.post("/api/profiles/activate")
+def activate_profile(body: dict):
+    name = str(body.get("name", "")).strip()
+    saved = _profiles_saved().get(name)
+    if not isinstance(saved, dict):
+        raise HTTPException(404, f"no such profile: {name}")
+    raw = _cfg.raw
+    kind = saved.get("kind", "local")
+    raw.setdefault("profiles", {})[kind] = {k: v for k, v in saved.items()
+                                            if k != "kind"}
+    raw["active_profile"] = kind
+    raw["active_profile_name"] = name
+    save_yaml(raw)
+    _reload_config()
+    return get_settings()
+
+
+@app.delete("/api/profiles/{name}")
+def delete_profile(name: str):
+    raw = _cfg.raw
+    if isinstance(raw.get("connection_profiles"), dict):
+        raw["connection_profiles"].pop(name, None)
+        if raw.get("active_profile_name") == name:
+            raw["active_profile_name"] = ""
+        save_yaml(raw)
+        _reload_config()
+    return list_profiles()
 
 
 # ---------- static SPA ----------
