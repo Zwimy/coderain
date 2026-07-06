@@ -38,6 +38,32 @@ WEIGHTS = {"minor": 0.5, "supplementary": 0.75, "standard": 1.0,
 
 def _attr_true(v) -> bool:
     return str(v or "").strip().lower() in ("true", "yes", "1", "on")
+
+
+def _safe_child(root: Path, name: str) -> bool:
+    """True iff `root / name` is a DIRECT child of root — blocks a slug like
+    '..\\..\\Windows\\Temp' from escaping the library root (arbitrary rmtree)."""
+    if not name or name in (".", ".."):
+        return False
+    try:
+        return (root / name).resolve().parent == root.resolve()
+    except OSError:
+        return False
+
+
+def _safe_zip_member(dst: Path, name: str) -> bool:
+    """True iff extracting archive entry `name` stays under `dst`. Blocks `..`
+    segments AND absolute/drive/UNC entries (an absolute join silently drops dst,
+    so a `C:/...` or `/etc/...` entry would otherwise write anywhere) — Zip-Slip."""
+    if not name or name.endswith("/"):
+        return False
+    p = Path(name)
+    if p.is_absolute() or p.drive or p.anchor:
+        return False
+    try:
+        return (dst / name).resolve().is_relative_to(dst.resolve())
+    except OSError:
+        return False
 # Governing rule files: global masters resolved save -> scenario -> global (Phase 5).
 RULE_FILES = templates.RULE_FILES
 # Map a promotion "kind" to its home file.
@@ -1578,7 +1604,7 @@ class ScenarioLibrary:
                 if prefix and not n.startswith(prefix):
                     continue
                 rel = n[len(prefix):]
-                if not rel or ".." in rel.split("/"):      # guard zip traversal
+                if not _safe_zip_member(dst, rel):     # guard traversal + absolute
                     continue
                 target = dst / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -1598,6 +1624,8 @@ class ScenarioLibrary:
         return True
 
     def delete(self, slug: str) -> bool:
+        if not _safe_child(self.root, slug):    # never rmtree outside the root
+            return False
         d = self.root / slug
         if d.is_dir():
             shutil.rmtree(d, ignore_errors=True)
@@ -1774,11 +1802,18 @@ class SaveLibrary:
                 # No snapshot but a complete log: rebuild state from a fresh
                 # block, preserving identity (seed keeps rolls deterministic).
                 cur = dst_store.rpg_state()
+                cur_full = dst_store.world_state()   # copied-from-source full state
                 state = templates.initial_state(rpg_cfg)
                 state["rpg"]["enabled"] = bool(cur.get("enabled"))
                 state["rpg"]["seed"] = cur.get("seed", state["rpg"]["seed"])
                 if isinstance(cur.get("player", {}).get("stats"), dict):
                     state["rpg"]["player"]["stats"] = dict(cur["player"]["stats"])
+                # Carry forward top-level state that NO event delta can rebuild
+                # (e.g. the author's note) — else a branch before the first fold
+                # silently loses it.
+                for k in ("authors_note",):
+                    if k in cur_full:
+                        state[k] = cur_full[k]
                 dst_store.set_world_state(state)
                 snap_turns = 0
             else:
@@ -1828,6 +1863,8 @@ class SaveLibrary:
         return True
 
     def delete(self, slug: str) -> bool:
+        if not _safe_child(self.root, slug):    # never rmtree outside the root
+            return False
         d = self.root / slug
         if d.is_dir():
             shutil.rmtree(d, ignore_errors=True)
@@ -1877,7 +1914,7 @@ class SaveLibrary:
                 if prefix and not n.startswith(prefix):
                     continue                              # ignore files outside the save
                 rel = n[len(prefix):]
-                if not rel or ".." in rel.split("/"):     # guard zip path traversal
+                if not _safe_zip_member(dst, rel):        # guard traversal + absolute
                     continue
                 target = dst / rel
                 target.parent.mkdir(parents=True, exist_ok=True)

@@ -108,6 +108,13 @@ def build_profile(data: dict, name: str, model: str | None = None) -> Profile:
             f"profile '{name}' not found. Options: {', '.join(profiles)}"
         )
     p = profiles[name]
+    base_url = p.get("base_url")
+    model = model or p.get("model")
+    if not base_url or not model:
+        # A hand-edited/partial profile must fail with a readable message, not a
+        # bare KeyError at server import (which loads config once at boot).
+        raise SystemExit(
+            f"profile '{name}' is incomplete — it needs both base_url and model")
     key_env = p.get("api_key_env", "")
     api_key = os.getenv(key_env, "") if key_env else ""
     if not api_key:
@@ -115,8 +122,8 @@ def build_profile(data: dict, name: str, model: str | None = None) -> Profile:
         api_key = "not-needed"
     return Profile(
         name=name,
-        base_url=p["base_url"],
-        model=(model or p["model"]),
+        base_url=base_url,
+        model=model,
         api_key=api_key,
         # Floored, never capped: a too-small window starves the memory system
         # (an 8 GB GPU handles the floor locally), while 131k/200k/1M+ windows

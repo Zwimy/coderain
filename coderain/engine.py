@@ -269,6 +269,9 @@ class Engine:
         # first scene — no model call (FictionLab's greeting message).
         override = self.store.opening_override()
         if override:
+            # A card's first_mes can carry a ```rpg block; drop it so it never
+            # reaches the reader (the live-gen path already strips it).
+            override, _ = sidecar_mod.strip_sidecar(override)
             override = self._expand_authored(override)   # ST-20 macros in greeting
             if on_stage:
                 on_stage("Opening: authored greeting (no generation)")
@@ -436,16 +439,24 @@ class Engine:
         produced. An empty/sidecar-only turn stores nothing AND shows nothing, so the
         streamed text always equals the stored text. Returns True iff a turn stored."""
         prefix = self._reply_prefix()
-        sent = not prefix                # no prefix -> nothing to inject
         inner = self._produce(messages, prefix, on_stage)
+        if not prefix:
+            return (yield from inner)     # no prefix -> unchanged passthrough
+        sent = False
         while True:
             try:
                 piece = next(inner)
             except StopIteration as done:
                 return done.value
             if not sent:
-                sent = True
+                # Swallow leading whitespace-only chunks (the stored narration is
+                # stripped anyway) and emit the prefix only once REAL prose arrives,
+                # so a sidecar-only turn that streams a stray space/newline before
+                # the ```rpg fence never shows an orphan prefix.
+                if not piece.strip():
+                    continue
                 yield prefix
+                sent = True
             yield piece
 
     def _produce(self, messages, prefix, on_stage=None) -> "Iterator[str]":

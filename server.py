@@ -36,7 +36,7 @@ from coderain.generator import (PIECE_KINDS, ScenarioSpec,
                                    assist_field, complete_scenario,
                                    generate_scenario)
 from coderain.llm import LLM
-from coderain.memory import Entry, Library, MemoryStore
+from coderain.memory import Entry, Library, MemoryStore, _safe_zip_member
 from coderain.profiles import (STAT_NAMES, CharacterProfiles,
                                   PieceLibrary, apply_character,
                                   apply_playable_entry, character_from_entry,
@@ -189,6 +189,7 @@ def get_save(slug: str):
 
 @app.delete("/api/saves/{slug}")
 def delete_save(slug: str):
+    _guard_slug(slug)
     _engines.pop(slug, None)
     if not lib.saves.delete(slug):
         raise HTTPException(404, f"no such save: {slug}")
@@ -509,7 +510,16 @@ def scenario_section_export(slug: str, rel: str):
 # as the story evolves). These mirror the scenario builder endpoints but read
 # and write the loaded save, so the player can edit characters/locations/etc.
 # mid-play. The engine reads the Markdown fresh each turn, so edits go live.
+def _guard_slug(slug: str) -> str:
+    """Reject a slug that isn't a clean id (a real slug equals slugify(slug)) — a
+    boundary guard against path traversal in any endpoint that maps a slug to disk."""
+    if not slug or slug != templates.slugify(slug):
+        raise HTTPException(400, "invalid id")
+    return slug
+
+
 def _save_store(slug: str) -> MemoryStore:
+    _guard_slug(slug)
     try:
         return lib.saves.store(slug)
     except FileNotFoundError:
@@ -804,6 +814,7 @@ def scenario_complete(slug: str, body: dict):
 
 @app.delete("/api/scenarios/{slug}")
 def delete_scenario(slug: str):
+    _guard_slug(slug)
     if not lib.scenarios.delete(slug):
         raise HTTPException(404, f"no such scenario: {slug}")
     return {"ok": True}
@@ -986,7 +997,10 @@ def import_card(file: UploadFile = File(...)):
     (ST-01): scenario→premise, first_mes→introduction, the character→a piece (+
     the reusable Pieces library), embedded lorebook→lore pieces."""
     from coderain import cards as cards_mod
-    raw = file.file.read()
+    _MAX_UPLOAD = 32 * 1024 * 1024                        # 32 MB compressed ceiling
+    raw = file.file.read(_MAX_UPLOAD + 1)
+    if len(raw) > _MAX_UPLOAD:
+        raise HTTPException(413, "card file too large (max 32 MB)")
     try:
         card = cards_mod.parse_card(raw, file.filename or "")
     except ValueError as e:
@@ -1017,12 +1031,16 @@ def import_card(file: UploadFile = File(...)):
         _declare_type_in(lib.scenarios.dir(slug), "scenario.json", "lore")
         store = _scen_store(slug)
         for e in card["lore"]:
-            title = e["title"]
+            # Resolve {{char}}/{{user}} at import like every other card field, so
+            # only intentional ST-20 macros survive to assemble time (no raw
+            # {{char}} leak, and {{user}} matches the other fields).
+            title = sub(e["title"])
+            keys = [sub(k) for k in e["keys"]]
             store.upsert_entry("lore.md", Entry(
                 title=title, slug=templates.slugify(title),
-                aliases=e["keys"], importance=3,
-                attrs={"triggers": ", ".join(e["keys"])} if e["keys"] else {},
-                body=e["content"]))
+                aliases=keys, importance=3,
+                attrs={"triggers": ", ".join(keys)} if keys else {},
+                body=sub(e["content"])))
 
     # Also drop the character into the reusable Pieces library.
     try:
@@ -1055,7 +1073,7 @@ def import_defaults(file: UploadFile = File(...)):
     try:
         with zipfile.ZipFile(path) as z:
             for n in z.namelist():
-                if n.endswith("/") or ".." in n.split("/"):
+                if not _safe_zip_member(lib.instructions_dir, n):  # traversal+absolute
                     continue
                 target = lib.instructions_dir / n
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -1363,8 +1381,10 @@ def _profiles_saved() -> dict:
 
 @app.get("/api/profiles")
 def list_profiles():
-    return {"profiles": sorted(_profiles_saved().keys()),
-            "active": _cfg.raw.get("active_profile_name", "")}
+    saved = _profiles_saved()
+    active = _cfg.raw.get("active_profile_name", "")
+    return {"profiles": sorted(saved.keys()),
+            "active": active if active in saved else ""}   # never a dangling pointer
 
 
 @app.post("/api/profiles")
