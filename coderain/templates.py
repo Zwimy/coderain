@@ -582,6 +582,37 @@ def seed_instructions(inst_dir: Path) -> list[str]:
     return outdated
 
 
+def upgrade_rule_override(path: Path) -> str:
+    """Bring a scenario/save rule override forward to the current shipped text
+    when it is an unedited copy of some shipped default.
+
+    Global masters auto-upgrade, but a *forked* override never did: a save or
+    scenario holding a pristine copy of the v6 rules stayed on v6 forever while
+    the master moved on, and nothing surfaced it. A fork that is byte-identical
+    to a shipped default carries no user intent, so upgrading it is safe; a
+    genuinely edited one is left untouched.
+
+    Returns "upgraded", "edited", or "" (not a rule file / nothing to do).
+    """
+    name = path.name
+    if name not in _RULE_CONTENT or not path.exists():
+        return ""
+    try:
+        disk = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    current = _RULE_CONTENT[name]
+    if disk == current:
+        return ""
+    if _sha(disk) in _known_default_hashes(name):
+        try:
+            path.write_text(current, encoding="utf-8")
+        except OSError:
+            return ""
+        return "upgraded"
+    return "edited"
+
+
 # Skeletons a user may override as their own new-file defaults (Library "User
 # defaults" section). Overrides live in instructions/defaults/<name> and seed
 # every NEW scenario/save; rule masters have their own layered machinery.
@@ -726,7 +757,41 @@ def new_save(save_dir: Path, scen_dir: Path | None, title: str,
     _write(save_dir / "state.json", json.dumps(state, indent=2))
     if mode not in ("simple", "rpg"):
         mode = "rpg" if rpg_enabled else "simple"
-    (save_dir / "meta.json").write_text(
-        json.dumps({"title": title, "created": time.time(), "updated": time.time(),
-                    "scenario": scenario_slug, "mode": mode}, indent=2),
-        encoding="utf-8")
+    # Custom lore types the scenario declares become the SAVE's own, right now:
+    # both the declaration and the file are copied in. They used to be read live
+    # from scenario.json, so editing or deleting the world later silently
+    # orphaned the save's populated registry — entries still on disk, but
+    # invisible to recall, the writer, the indexer and the editor.
+    custom: list[str] = []
+    scen_id = ""
+    if scen_dir is not None:
+        try:
+            scen_meta = json.loads(
+                (scen_dir / "scenario.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            scen_meta = {}
+        if isinstance(scen_meta, dict):
+            scen_id = str(scen_meta.get("id", "") or "")
+            for raw in scen_meta.get("custom_files", []) or []:
+                base = str(raw).removesuffix(".md")
+                if not re.search(r"[A-Za-z0-9]", base):
+                    continue                       # slugify would invent a name
+                name = slugify(base) + ".md"
+                if name in custom or name in SCENARIO_FILES or name in PLAY_FILES:
+                    continue                       # never shadow a built-in file
+                custom.append(name)
+                src = scen_dir / name
+                label = name.removesuffix(".md").replace("-", " ").title()
+                _write(save_dir / name,
+                       src.read_text(encoding="utf-8") if src.exists()
+                       else f"# {label}\n\n{label} — custom lore registry.\n")
+    meta = {"title": title, "created": time.time(), "updated": time.time(),
+            "scenario": scenario_slug, "mode": mode}
+    if custom:
+        meta["custom_files"] = custom
+    if scen_id:
+        # Identity of the world this save came from, so an import onto another
+        # machine can tell a real match from a same-slug stranger.
+        meta["scenario_id"] = scen_id
+    (save_dir / "meta.json").write_text(json.dumps(meta, indent=2),
+                                        encoding="utf-8")
