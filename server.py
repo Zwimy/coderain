@@ -37,8 +37,7 @@ from coderain import templates
 from coderain.engine import Engine
 from coderain.generator import (PIECE_KINDS, ScenarioSpec,
                                    _split_premise_body, _write_premise_md,
-                                   assist_field, complete_scenario,
-                                   generate_scenario)
+                                   assist_field, complete_scenario)
 from coderain.llm import LLM
 from coderain.memory import (Entry, Library, MemoryStore, _safe_zip_member,
                              safe_output_regex)
@@ -317,6 +316,31 @@ def delete_save(slug: str):
         if not lib.saves.delete(slug):
             raise HTTPException(404, f"no such save: {slug}")
     return {"ok": True}
+
+
+@app.put("/api/saves/{slug}/mode")
+def set_save_mode(slug: str, body: dict):
+    """Switch a story between simple and rpg after creation. `mode` was fixed at
+    creation, so a story started in simple could never gain mechanics (or lose
+    them) without starting over or hand-editing meta.json."""
+    mode = str(body.get("mode", "")).strip().lower()
+    if mode not in ("simple", "rpg"):
+        raise HTTPException(400, "mode must be 'simple' or 'rpg'")
+    if mode == "rpg" and not features.enabled("rpg"):
+        raise HTTPException(402, "RPG mechanics need Coderain Pro")
+    _guard_slug(slug)
+    with _exclusive():
+        meta = lib.saves.meta(slug)
+        if not meta:
+            raise HTTPException(404, f"no such save: {slug}")
+        meta["mode"] = mode
+        lib.saves._write_meta(slug, meta)
+        store = _save_store(slug)
+        st = store.rpg_state()
+        st["enabled"] = (mode == "rpg")
+        store.set_rpg_state(st)
+        _engines.pop(slug, None)             # rebuild with the new mode
+    return {"ok": True, "mode": mode}
 
 
 @app.post("/api/saves/{slug}/branch")
@@ -1027,64 +1051,6 @@ def delete_scenario(slug: str):
     return {"ok": True}
 
 
-@app.post("/api/scenarios/generate")
-def generate_scenario_ep(body: dict):
-    """AI world generation (SSE). Streams every stage note; `improve: true`
-    runs the user's prompt through the detailer/improver first."""
-    def _n(key, default=5):
-        try:
-            return max(0, min(20, int(body.get(key, default))))
-        except (TypeError, ValueError):
-            return default
-    spec = ScenarioSpec(
-        type=str(body.get("type", "")).strip(),
-        tone=str(body.get("tone", "")).strip(),
-        premise=str(body.get("premise", "")).strip(),
-        n_npcs=_n("n_npcs"), n_locations=_n("n_locations"),
-        n_items=_n("n_items"),
-        detail="fast" if body.get("detail") == "fast" else "rich",
-        improve=bool(body.get("improve", False)))
-
-    def gen():
-        if not _gen_lock.acquire(blocking=False):
-            yield _sse({"t": "error", "text": "another generation is running"})
-            return
-        try:
-            q: queue.Queue = queue.Queue()
-            result: dict = {}
-
-            def worker():
-                try:
-                    llm = LLM(_cfg.profile, _cfg.generation)
-                    result["slug"] = generate_scenario(
-                        lib, llm, spec, on_stage=lambda s: q.put(s))
-                    result["warnings"] = list(generate_scenario.last_warnings)
-                except Exception as e:  # noqa: BLE001
-                    result["error"] = str(e)
-                q.put(None)
-
-            threading.Thread(target=worker, daemon=True).start()
-            while True:
-                msg = q.get()
-                if msg is None:
-                    break
-                yield _sse({"t": "stage", "text": msg})
-            if "error" in result:
-                yield _sse({"t": "error", "text": result["error"]})
-            else:
-                scen = next((s for s in lib.scenarios.list()
-                             if s["slug"] == result["slug"]), {})
-                yield _sse({"t": "done", "slug": result["slug"],
-                            "title": scen.get("title", result["slug"]),
-                            "events": result.get("warnings", [])})
-        finally:
-            _gen_lock.release()
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
-
-
-# ---------- library <-> scenario character exchange ----------
 @app.post("/api/scenarios/{slug}/from-library")
 def scenario_insert_character(slug: str, body: dict):
     """Drop a saved library character into a world as a characters.md piece
@@ -1451,6 +1417,85 @@ def delete_character(cid: str):
 
 
 # ---------- models + settings ----------
+# ---------- raw memory / rule files for a save (repair hatch) ----------
+@app.get("/api/saves/{slug}/files")
+def list_save_files(slug: str):
+    """Every file a player may need to inspect or repair, with the layer each one
+    currently resolves from. Without this a bad fold — a wrong scene summary, a
+    false "fact" — was permanent: the engine re-reads these every turn and the
+    builder only reaches the world pieces."""
+    store = _save_store(slug)
+    from coderain.memory import EDITABLE_FILES, RULE_FILES
+    out = []
+    for rel in EDITABLE_FILES:
+        out.append({
+            "rel": rel,
+            "is_rule": rel in RULE_FILES,
+            "layer": store.layer_of(rel),
+            "exists": store.path(rel).exists(),
+            "bytes": store.path(rel).stat().st_size
+            if store.path(rel).exists() else 0,
+        })
+    return {"files": out}
+
+
+@app.get("/api/saves/{slug}/files/{rel:path}")
+def read_save_file(slug: str, rel: str):
+    store = _save_store(slug)
+    from coderain.memory import EDITABLE_FILES, RULE_FILES
+    if rel not in EDITABLE_FILES:
+        raise HTTPException(404, "not an editable file")
+    return {"rel": rel, "text": store.read(rel), "layer": store.layer_of(rel),
+            "is_rule": rel in RULE_FILES}
+
+
+@app.put("/api/saves/{slug}/files/{rel:path}")
+def write_save_file(slug: str, rel: str, body: dict):
+    store = _save_store(slug)
+    from coderain.memory import EDITABLE_FILES
+    if rel not in EDITABLE_FILES:
+        raise HTTPException(404, "not an editable file")
+    text = str(body.get("text", ""))
+    if rel.endswith(".json"):            # never persist story-breaking JSON
+        try:
+            json.loads(text)
+        except json.JSONDecodeError as e:
+            raise HTTPException(400, f"not valid JSON: {e}")
+    with _exclusive():                   # the engine re-reads these every turn
+        store.write(rel, text)
+    return {"ok": True, "layer": store.layer_of(rel)}
+
+
+@app.post("/api/saves/{slug}/rules/{rel}/override")
+def make_rule_override(slug: str, rel: str):
+    """Fork a save-local copy of a rule so edits affect ONLY this story. Without
+    this, editing the rules in Settings changed them globally for every story at
+    once — tuning one story's prose silently rewrote them all."""
+    store = _save_store(slug)
+    from coderain.memory import RULE_FILES
+    if rel not in RULE_FILES:
+        raise HTTPException(404, "not a rule file")
+    with _exclusive():
+        made = store.make_override(rel)
+    if not made:
+        raise HTTPException(400, "this story already has its own copy")
+    return {"ok": True, "layer": store.layer_of(rel)}
+
+
+@app.delete("/api/saves/{slug}/rules/{rel}/override")
+def drop_rule_override(slug: str, rel: str):
+    """Revert to the inherited (scenario/global) rule."""
+    store = _save_store(slug)
+    from coderain.memory import RULE_FILES
+    if rel not in RULE_FILES:
+        raise HTTPException(404, "not a rule file")
+    with _exclusive():
+        dropped = store.remove_override(rel)
+    if not dropped:
+        raise HTTPException(400, "this story has no copy of its own")
+    return {"ok": True, "layer": store.layer_of(rel)}
+
+
 @app.get("/api/ready")
 def ready():
     """Is there a model this install can actually talk to?
@@ -1561,6 +1606,7 @@ def get_settings():
             "response_length":
                 _cfg.generation.get("response_length", "medium"),
             "trinity_brain": bool(_cfg.generation.get("trinity_brain", True)),
+            "use_memory_tool": bool(_cfg.generation.get("use_memory_tool", False)),
             "start_reply_with": _cfg.generation.get("start_reply_with", ""),
             "stop": _cfg.generation.get("stop", []),
             "temperature": _cfg.generation.get("temperature", 0.9),
@@ -1572,6 +1618,26 @@ def get_settings():
             "seed": _cfg.generation.get("seed"),
         },
         "quick_actions": _clean_quick_actions(_cfg.raw.get("quick_actions")),
+        # Previously web-invisible: these existed in config.yaml and the legacy
+        # Tk app but had no endpoint, so semantic recall was permanently OFF and
+        # the memory depth/budget could not be tuned from the main UI at all.
+        "memory": {
+            "short_term_turns": _cfg.memory.get("short_term_turns", 12),
+            "medium_fold_after": _cfg.memory.get("medium_fold_after", 12),
+            "medium_fold_size": _cfg.memory.get("medium_fold_size", 5),
+            "long_fold_after": _cfg.memory.get("long_fold_after", 8),
+            "long_fold_size": _cfg.memory.get("long_fold_size", 4),
+            "context_budget_tokens":
+                _cfg.memory.get("context_budget_tokens", "auto"),
+        },
+        "retrieval": {
+            "enabled": bool(_cfg.retrieval.get("enabled", False)),
+            "embed_model": _cfg.retrieval.get("embed_model", "nomic-embed-text"),
+            "top_k": _cfg.retrieval.get("top_k", 4),
+            "half_life_turns": _cfg.retrieval.get("half_life_turns", 40),
+            "min_similarity": _cfg.retrieval.get("min_similarity", 0.25),
+            "available": features.enabled("vector"),
+        },
     }
 
 
@@ -1592,6 +1658,51 @@ def put_settings(body: dict):
         raw["generation"]["response_length"] = gen["response_length"]
     if "trinity_brain" in gen:
         raw["generation"]["trinity_brain"] = bool(gen["trinity_brain"])
+    if "use_memory_tool" in gen:
+        raw["generation"]["use_memory_tool"] = bool(gen["use_memory_tool"])
+
+    # Memory depth / budget — was config-file-only, so a web user could not trade
+    # history depth against context budget.
+    mem = body.get("memory") or {}
+    if mem:
+        raw.setdefault("memory", {})
+        for key, lo, hi in (("short_term_turns", 2, 200),
+                            ("medium_fold_after", 2, 200),
+                            ("medium_fold_size", 1, 100),
+                            ("long_fold_after", 1, 200),
+                            ("long_fold_size", 1, 100)):
+            if key in mem and mem[key] not in (None, ""):
+                try:
+                    raw["memory"][key] = max(lo, min(hi, int(mem[key])))
+                except (TypeError, ValueError):
+                    pass
+        if "context_budget_tokens" in mem:
+            v = mem["context_budget_tokens"]
+            if isinstance(v, str) and v.strip().lower() == "auto":
+                raw["memory"]["context_budget_tokens"] = "auto"
+            else:
+                try:
+                    raw["memory"]["context_budget_tokens"] = max(1000, int(v))
+                except (TypeError, ValueError):
+                    pass
+
+    # Semantic recall (vector retrieval) — a headline memory feature that was
+    # permanently off for anyone who never hand-edited config.yaml.
+    ret = body.get("retrieval") or {}
+    if ret:
+        raw.setdefault("retrieval", {})
+        if "enabled" in ret:
+            raw["retrieval"]["enabled"] = bool(ret["enabled"])
+        if str(ret.get("embed_model", "")).strip():
+            raw["retrieval"]["embed_model"] = str(ret["embed_model"]).strip()
+        for key, lo, hi, cast in (("top_k", 1, 20, int),
+                                  ("half_life_turns", 1, 500, int),
+                                  ("min_similarity", 0.0, 1.0, float)):
+            if key in ret and ret[key] not in (None, ""):
+                try:
+                    raw["retrieval"][key] = max(lo, min(hi, cast(ret[key])))
+                except (TypeError, ValueError):
+                    pass
     # ST-22 persistent reply prefix (literal; every generated turn starts with it)
     if "start_reply_with" in gen:
         raw["generation"]["start_reply_with"] = str(gen["start_reply_with"] or "")[:300]
