@@ -375,3 +375,26 @@ details.adv > summary { cursor: pointer; color: var(--dim); font-size: 13px;
 details.adv[open] > summary { color: var(--accent); margin-bottom: 6px; }
 #mem-text { font-family: var(--mono); font-size: 12.5px; }
 #mem-layer { margin: 6px 0 2px; }
+
+/* skip link — first tab stop, visible only when focused */
+.skip-link {
+  position: absolute; left: -9999px; top: 8px; z-index: 100;
+  background: var(--panel2); color: var(--accent); padding: 8px 14px;
+  border: 1px solid var(--accent); border-radius: 7px; text-decoration: none;
+}
+.skip-link:focus { left: 12px; }
+#brand { cursor: pointer; }
+
+/* swipe bar reads as words, not bare glyphs */
+.swipebar .hint { font-size: 11px; }
+
+/* Mobile: the composer was pushed under the virtual keyboard because #play used
+   percentage height inside a scrolling main. dvh tracks the visible viewport. */
+@supports (height: 100dvh) {
+  html, body { height: 100dvh; }
+  #play { height: 100%; }
+}
+/* the Talk drawer hardcoded the desktop topbar height and misaligned on phones */
+:root { --topbar-h: 49px; }
+#talk-drawer { top: var(--topbar-h); }
+@media (max-width: 640px) { :root { --topbar-h: 41px; } }
