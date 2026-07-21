@@ -157,7 +157,17 @@ def load_config(path: str | Path | None = None) -> Config:
             data = fallback                      # nothing usable — start clean
         active = data.get("active_profile") or next(iter(data["profiles"]))
         data["active_profile"] = active
-    profile = build_profile(data, active)
+    try:
+        profile = build_profile(data, active)
+    except SystemExit:
+        # build_profile still exits hard on an incomplete/partial profile (a
+        # hand-edited config.yaml can produce one). Same reasoning as above: this
+        # runs at boot AND inside request handlers, so degrade to the shipped
+        # defaults rather than taking the process down.
+        fallback = yaml.safe_load(_DEFAULT_CONFIG)
+        data = fallback
+        active = data["active_profile"]
+        profile = build_profile(data, active)
     return Config(
         profile=profile,
         generation=data.get("generation", {}),

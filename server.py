@@ -1451,6 +1451,55 @@ def delete_character(cid: str):
 
 
 # ---------- models + settings ----------
+@app.get("/api/ready")
+def ready():
+    """Is there a model this install can actually talk to?
+
+    The app used to boot straight into the library with no check at all, so a
+    new user with no Ollama and no API key clicked New story -> Begin and got a
+    blank page with an unreadable error. Nothing told them a model was needed.
+    This is the gate the first-run chooser hangs off.
+
+    Cheap and honest: for local we ask Ollama what it has installed (a model
+    must actually be pulled, not just the daemon running); for hosted we check a
+    key and a model are configured. No tokens are spent.
+    """
+    mode = "hosted" if _cfg.raw.get("active_profile") == "hosted" else "local"
+    if mode == "hosted":
+        prof = (_cfg.raw.get("profiles") or {}).get("hosted") or {}
+        has_key = bool(read_env().get(HOSTED_KEY_ENV, "").strip())
+        model = str(prof.get("model", "")).strip()
+        base = str(prof.get("base_url", "")).strip()
+        if not has_key:
+            return {"ok": False, "mode": mode, "reason": "no_key",
+                    "detail": "No API key saved yet."}
+        if not model or not base:
+            return {"ok": False, "mode": mode, "reason": "no_model",
+                    "detail": "No hosted model chosen yet."}
+        return {"ok": True, "mode": mode, "model": model}
+
+    try:
+        r = httpx.get(OLLAMA_TAGS, timeout=3)
+        r.raise_for_status()
+        names = [m.get("name", "") for m in r.json().get("models", [])]
+    except Exception:                                   # noqa: BLE001
+        return {"ok": False, "mode": mode, "reason": "no_ollama",
+                "detail": "Ollama isn't running (or isn't installed)."}
+    if not names:
+        return {"ok": False, "mode": mode, "reason": "no_models",
+                "detail": "Ollama is running but has no models pulled yet."}
+    want = str((_cfg.raw.get("profiles") or {}).get("local", {})
+               .get("model", "")).strip()
+    # Ollama reports "qwen3:4b"; a config may say "qwen3" — match on the stem.
+    if want and not any(n == want or n.split(":")[0] == want.split(":")[0]
+                        for n in names):
+        return {"ok": False, "mode": mode, "reason": "model_missing",
+                "detail": f"The selected model ({want}) isn't installed.",
+                "installed": names}
+    return {"ok": True, "mode": mode, "model": want or names[0],
+            "installed": names}
+
+
 @app.get("/api/models/local")
 def local_models():
     """Installed Ollama models for the local dropdowns (live from the daemon;

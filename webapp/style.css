@@ -349,3 +349,20 @@ details.howto p { color: var(--text); line-height: 1.55; }
       transition-duration: .001ms !important; }
 }
 :root[data-motion="off"] #matrix-rain { display: none; }
+
+/* ---------- first-run chooser ---------- */
+.welcome h1 { margin-bottom: 6px; }
+.cards.two { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.card.static { cursor: default; }
+.card.static:hover { border-color: var(--line); }
+.card.static .title { font-size: 18px; }
+.card .status {
+  font-family: var(--mono); font-size: 12px; border-radius: 6px;
+  padding: 7px 10px; border: 1px solid var(--line); background: var(--bg);
+}
+.card .status.ok { color: var(--accent); border-color: var(--accent-dim); }
+.card .status.bad { color: var(--danger); border-color: var(--danger); }
+.card ol.steps { margin: 6px 0 10px 18px; padding: 0; color: var(--dim);
+                 font-size: 13px; line-height: 1.75; }
+.card ol.steps li { margin-bottom: 2px; }
+.welcome a { color: var(--accent); }
