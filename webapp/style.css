@@ -366,3 +366,12 @@ details.howto p { color: var(--text); line-height: 1.55; }
                  font-size: 13px; line-height: 1.75; }
 .card ol.steps li { margin-bottom: 2px; }
 .welcome a { color: var(--accent); }
+
+/* advanced/progressive-disclosure blocks */
+details.adv { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px;
+              padding: 8px 12px; background: var(--bg); }
+details.adv > summary { cursor: pointer; color: var(--dim); font-size: 13px;
+                        font-family: var(--mono); }
+details.adv[open] > summary { color: var(--accent); margin-bottom: 6px; }
+#mem-text { font-family: var(--mono); font-size: 12.5px; }
+#mem-layer { margin: 6px 0 2px; }

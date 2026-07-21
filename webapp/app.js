@@ -1051,6 +1051,46 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
       <input id="p-objectives" value="${esc(a.objectives || "")}">` : ""}
     <label>Content</label>
     <textarea id="p-body" rows="8">${esc(piece ? piece.body : "")}</textarea>
+    <details class="adv">
+      <summary>Activation (advanced)</summary>
+      <p class="muted">Fine control over when this entry enters context. Blank =
+        the normal keyword behaviour.</p>
+      <div class="row">
+        <div><label>Group</label>
+          <input id="p-group" value="${esc(a.group || "")}"
+                 placeholder="only one of a group fires"></div>
+        <div><label>Chance %</label>
+          <input id="p-chance" type="number" min="1" max="100"
+                 value="${esc(a.chance || "")}" placeholder="100"></div>
+      </div>
+      <div class="row">
+        <div><label>Delay (turns)</label>
+          <input id="p-delay" type="number" min="0"
+                 value="${esc(a.delay || "")}" placeholder="0"></div>
+        <div><label>Sticky (turns)</label>
+          <input id="p-sticky" type="number" min="0"
+                 value="${esc(a.sticky || "")}" placeholder="0"></div>
+        <div><label>Cooldown (turns)</label>
+          <input id="p-cooldown" type="number" min="0"
+                 value="${esc(a.cooldown || "")}" placeholder="0"></div>
+      </div>
+      <div class="row">
+        <div><label>Requires ALL of (comma)</label>
+          <input id="p-triggers-all" value="${esc(a.triggers_all || "")}"></div>
+        <div><label>Blocked by (comma)</label>
+          <input id="p-triggers-not" value="${esc(a.triggers_not || "")}"></div>
+      </div>
+      <div class="row">
+        <div><label>Links (slugs, comma)</label>
+          <input id="p-links" value="${esc(a.links || "")}"></div>
+      </div>
+      <div class="row">
+        ${check("p-semantic", "Semantic match (meaning, not just keywords)",
+                a.semantic === "true")}
+        ${check("p-recurse", "Recursive (may trigger other entries)",
+                a.recurse === "true")}
+      </div>
+    </details>
     <div class="modal-actions">
       ${lib ? "" : '<button id="p-tolib">Save to library</button>'}
       ${piece && (!lib || lib.id)
@@ -1061,11 +1101,24 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
     </div>`);
 
   const collect = () => {
+    const adv = id => ($("#" + id) ? $("#" + id).value.trim() : "");
     const attrs = {
       weight: $("#p-weight").value,
       triggers: $("#p-triggers").value.trim(),
       pinned: $("#p-pinned").checked ? "true" : "",
       hidden: $("#p-hidden").checked ? "true" : "",
+      // Tier-2 activation controls — the engine has supported these all along,
+      // but with no form fields they could only be written by hand in Markdown.
+      group: adv("p-group"),
+      chance: adv("p-chance"),
+      delay: adv("p-delay"),
+      sticky: adv("p-sticky"),
+      cooldown: adv("p-cooldown"),
+      triggers_all: adv("p-triggers-all"),
+      triggers_not: adv("p-triggers-not"),
+      links: adv("p-links"),
+      semantic: $("#p-semantic") && $("#p-semantic").checked ? "true" : "",
+      recurse: $("#p-recurse") && $("#p-recurse").checked ? "true" : "",
     };
     // preserve attrs the form doesn't manage
     for (const [k, v] of Object.entries(a)) {
@@ -1196,6 +1249,8 @@ async function renderPlay(slug) {
           >Edit</button>
         <button id="note-btn" title="author's note — steer tone &amp; pacing"
           >Note</button>
+        <button id="mem-btn" title="inspect &amp; repair what the story remembers"
+          >Memory</button>
         <button id="talk-btn" ${s.companions.length ? "" : "disabled"}
           title="${s.companions.length ? "private companion chat"
                  : "no companions yet"}">Talk</button>
@@ -1611,6 +1666,83 @@ async function renderPlay(slug) {
       location.hash = `#play/${out.slug}`;
     } catch (e) { toast(e.message); }
   });
+  /* Memory panel: inspect and repair what the story actually remembers.
+     Without this a bad fold — a wrong scene summary, a false "fact" — was
+     permanent, because the engine re-reads these files every single turn. */
+  $("#mem-btn").addEventListener("click", async () => {
+    const data = await guard(() => api(`/api/saves/${slug}/files`),
+                             "Couldn't read this story's memory");
+    if (!data) return;
+    const LABEL = {
+      "memory/scenes.md": "Scene summaries", "memory/arc.md": "Story so far",
+      "memory/timeline.md": "Timeline", "memory/facts.md": "Facts",
+      "memory/companion-chat.md": "Companion chats",
+      "transcript.md": "Transcript (raw)", "state.json": "World state + sheet",
+      "writer-rules.md": "Writer rules", "memory-rules.md": "Memory rules",
+      "rpg-rules.md": "RPG rules", "custom-instructions.md": "Custom instructions",
+    };
+    const pick = data.files.filter(f => f.exists || f.is_rule);
+    openModal(`<h2>Memory</h2>
+      <p class="muted">What this story remembers. Fix a wrong summary or a false
+        fact here and the next turn picks it up.</p>
+      <label>File</label>
+      <select id="mem-file">${pick.map(f =>
+        `<option value="${esc(f.rel)}">${esc(LABEL[f.rel] || f.rel)}</option>`
+      ).join("")}</select>
+      <div id="mem-layer" class="muted"></div>
+      <textarea id="mem-text" rows="14" spellcheck="false"></textarea>
+      <div class="modal-actions">
+        <button id="mem-override" class="hidden"></button>
+        <span style="flex:1"></span>
+        <button id="mem-cancel">Close</button>
+        <button class="primary" id="mem-save">Save</button>
+      </div>`);
+
+    const sel = $("#mem-file"), area = $("#mem-text"), layer = $("#mem-layer");
+    const ovr = $("#mem-override");
+    let current = null;
+    const load = async () => {
+      const rel = sel.value;
+      const got = await guard(() => api(
+        `/api/saves/${slug}/files/${rel}`), "Couldn't open that file");
+      if (!got) return;
+      current = got;
+      area.value = got.text;
+      if (got.is_rule) {
+        const own = got.layer === "save";
+        layer.textContent = own
+          ? "This story has its own copy — edits affect only this story."
+          : `Shared (${got.layer}) — editing this changes EVERY story that uses it.`;
+        ovr.classList.remove("hidden");
+        ovr.textContent = own ? "Revert to shared" : "Make a copy for this story";
+      } else {
+        layer.textContent = "";
+        ovr.classList.add("hidden");
+      }
+    };
+    sel.addEventListener("change", load);
+    ovr.addEventListener("click", async () => {
+      const rel = sel.value;
+      const own = current && current.layer === "save";
+      const ok = await guard(() => api(
+        `/api/saves/${slug}/rules/${rel}/override`,
+        {method: own ? "DELETE" : "POST"}), "Couldn't change the rule scope");
+      if (ok === undefined) return;
+      toast(own ? "Back to the shared rules." : "This story now has its own copy.",
+            "ok");
+      await load();
+    });
+    $("#mem-cancel").addEventListener("click", closeModal);
+    $("#mem-save").addEventListener("click", async () => {
+      const ok = await guard(() => api(`/api/saves/${slug}/files/${sel.value}`,
+        {method: "PUT", body: {text: area.value}}), "Couldn't save");
+      if (ok === undefined) return;      // keep the editor open with their text
+      toast("Saved — the next turn will use it.", "ok");
+      closeModal();
+    });
+    await load();
+  });
+
   $("#talk-btn").addEventListener("click", () => talkDrawer(slug, s.companions));
   $("#edit-btn").addEventListener("click", () => { location.hash = `#edit/${slug}`; });
   $("#note-btn").addEventListener("click", async () => {          // ST-21 author's note
@@ -2027,6 +2159,69 @@ async function renderSettings() {
           ${st.generation.response_length === v ? 'class="on"' : ""}>
           ${v}</button>`).join("")}
       </div>
+      <label style="margin-top:14px">
+        <input type="checkbox" id="gc-trinity"
+          ${st.generation.trinity_brain ? "checked" : ""}>
+        Multi-stage brain (a planner runs before the writer)
+      </label>
+      <p class="muted">Better continuity and mechanics, but roughly twice the
+        work per turn. Turn it off if turns feel slow on a local GPU.</p>
+      <label>
+        <input type="checkbox" id="gc-memtool"
+          ${st.generation.use_memory_tool ? "checked" : ""}>
+        Let the model look things up mid-turn
+      </label>
+      <p class="muted">Only worth it on a big hosted model — small local models
+        are unreliable at using tools.</p>
+    </div>
+
+    <div class="setting-panel">
+      <h2>Memory</h2>
+      <label>
+        <input type="checkbox" id="rt-enabled"
+          ${st.retrieval.enabled ? "checked" : ""}>
+        Semantic recall (find relevant past scenes by meaning, not just keywords)
+      </label>
+      <p class="muted">Needs an embedding model pulled in Ollama
+        (<code>ollama pull nomic-embed-text</code>).</p>
+      <div class="row">
+        <div><label>Embedding model</label>
+          <input id="rt-model" value="${esc(st.retrieval.embed_model)}"></div>
+        <div><label>Passages recalled</label>
+          <input id="rt-topk" type="number" min="1" max="20"
+            value="${esc(st.retrieval.top_k)}"></div>
+        <div><label>Min similarity</label>
+          <input id="rt-minsim" type="number" step="0.05" min="0" max="1"
+            value="${esc(st.retrieval.min_similarity)}"></div>
+      </div>
+      <details class="adv">
+        <summary>Memory depth (advanced)</summary>
+        <p class="muted">How much raw history stays verbatim before it is folded
+          into summaries. Bigger = more detail, more context used.</p>
+        <div class="row">
+          <div><label>Verbatim turns</label>
+            <input id="mm-short" type="number" min="2" max="200"
+              value="${esc(st.memory.short_term_turns)}"></div>
+          <div><label>Fold after</label>
+            <input id="mm-mafter" type="number" min="2" max="200"
+              value="${esc(st.memory.medium_fold_after)}"></div>
+          <div><label>Fold size</label>
+            <input id="mm-msize" type="number" min="1" max="100"
+              value="${esc(st.memory.medium_fold_size)}"></div>
+        </div>
+        <label>Context budget (tokens, or "auto" to fill the model's window)</label>
+        <input id="mm-budget" value="${esc(st.memory.context_budget_tokens)}">
+      </details>
+    </div>
+
+    <div class="setting-panel">
+      <h2>Appearance</h2>
+      <label>
+        <input type="checkbox" id="ap-rain">
+        Animated background rain
+      </label>
+      <p class="muted">Turn this off for a still background. It follows your
+        system "reduce motion" setting unless you choose here.</p>
     </div>
 
     <div class="setting-panel">
@@ -2104,6 +2299,15 @@ async function renderSettings() {
     $("#len-seg").querySelectorAll("button").forEach(b =>
       b.classList.toggle("on", b.dataset.v === length));
   });
+  // Motion is a local preference, not server config — applied instantly so the
+  // effect is obvious, and it satisfies WCAG 2.2.2's stop requirement.
+  const rainBox = $("#ap-rain");
+  if (rainBox) {
+    rainBox.checked = typeof window.rainOn === "function" ? window.rainOn() : true;
+    rainBox.addEventListener("change", () => {
+      if (window.setRain) window.setRain(rainBox.checked);
+    });
+  }
   $("#hm-preset").addEventListener("change", () => {
     const p = hosted.presets[Number($("#hm-preset").value)];
     if (!p) return;
@@ -2142,8 +2346,22 @@ async function renderSettings() {
   $("#save-settings").addEventListener("click", async () => {
     const body = {
       mode,
+      retrieval: {
+        enabled: $("#rt-enabled").checked,
+        embed_model: $("#rt-model").value,
+        top_k: $("#rt-topk").value,
+        min_similarity: $("#rt-minsim").value,
+      },
+      memory: {
+        short_term_turns: $("#mm-short").value,
+        medium_fold_after: $("#mm-mafter").value,
+        medium_fold_size: $("#mm-msize").value,
+        context_budget_tokens: $("#mm-budget").value.trim(),
+      },
       generation: {
         response_length: length,
+        trinity_brain: $("#gc-trinity").checked,
+        use_memory_tool: $("#gc-memtool").checked,
         start_reply_with: $("#gc-prefix").value,
         stop: $("#gc-stop").value,
         temperature: $("#gc-temp").value,
