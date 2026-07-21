@@ -32,11 +32,41 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
-/* POST + read an SSE body (fetch streaming — EventSource can't POST). */
-async function sse(path, body, on) {
+/* Non-blocking status/error line. Replaces alert() for anything that isn't a
+   decision: alert is modal, unstyled, and is suppressed outright in some
+   embedded webviews (which is what the desktop build runs in). role="status"
+   means screen readers announce it without stealing focus. */
+let _toastTimer = null;
+function toast(msg, kind = "error") {
+  let el = $("#toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.setAttribute("role", "status");
+    document.body.appendChild(el);
+  }
+  el.className = kind + " show";
+  el.textContent = msg;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove("show"), 6000);
+}
+
+/* Run an API action, surfacing failure instead of swallowing it. Unguarded
+   `await api(...)` calls became unhandled rejections: a 409 "a turn is
+   generating" left the modal open, wrote nothing and said nothing, so an
+   author's note typed mid-turn was simply lost. */
+async function guard(fn, what = "That didn't work") {
+  try { return await fn(); }
+  catch (e) { toast(`${what}: ${e.message}`); return undefined; }
+}
+
+/* POST + read an SSE body (fetch streaming — EventSource can't POST).
+   `signal` lets the caller abort a run (the Stop button). */
+async function sse(path, body, on, signal) {
   const r = await fetch(path, {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   });
   if (!r.ok || !r.body) {
     let msg = r.statusText;
@@ -63,14 +93,89 @@ async function sse(path, body, on) {
   }
 }
 
-/* ---------- modal ---------- */
+/* ---------- modal ----------
+   Now a real dialog: labelled for assistive tech, focus moves in and is trapped,
+   Escape closes, and focus returns to whatever opened it. */
 const modalRoot = $("#modal-root"), modalCard = $("#modal-card");
-function openModal(html) {
+let _modalOnClose = null, _modalReturnFocus = null;
+
+function openModal(html, onClose = null) {
+  _modalReturnFocus = document.activeElement;
+  _modalOnClose = onClose;
   modalCard.innerHTML = html;
+  modalCard.setAttribute("role", "dialog");
+  modalCard.setAttribute("aria-modal", "true");
   modalRoot.classList.remove("hidden");
+  const first = modalCard.querySelector(
+    "input, textarea, select, button:not([disabled])");
+  if (first) first.focus();
 }
-function closeModal() { modalRoot.classList.add("hidden"); }
+function closeModal() {
+  if (modalRoot.classList.contains("hidden")) return;
+  modalRoot.classList.add("hidden");
+  const cb = _modalOnClose; _modalOnClose = null;
+  const back = _modalReturnFocus; _modalReturnFocus = null;
+  if (back && document.body.contains(back)) back.focus();
+  if (cb) cb();                       // promise-based modals resolve here
+}
 $("#modal-back").addEventListener("click", closeModal);
+document.addEventListener("keydown", ev => {
+  if (modalRoot.classList.contains("hidden")) return;
+  if (ev.key === "Escape") { ev.preventDefault(); closeModal(); return; }
+  if (ev.key !== "Tab") return;
+  const f = [...modalCard.querySelectorAll(
+    'a[href],button:not([disabled]),input,textarea,select,[tabindex]:not([tabindex="-1"])')]
+    .filter(el => el.offsetParent !== null);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+  else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+});
+
+/* Promise-based confirm()/prompt(). Native dialogs are unstyled, single-line,
+   and suppressed outright in some embedded webviews — which is exactly what the
+   desktop build runs in, so the creative paths that used prompt() were at risk
+   of simply not working there. */
+function confirmModal(title, body = "", okLabel = "Delete") {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = v => { if (!done) { done = true; resolve(v); } };
+    openModal(`<h2>${esc(title)}</h2>
+      ${body ? `<p class="muted">${esc(body)}</p>` : ""}
+      <div class="row" style="margin-top:14px; justify-content:flex-end">
+        <button id="cm-no">Cancel</button>
+        <button class="primary" id="cm-yes">${esc(okLabel)}</button>
+      </div>`, () => finish(false));
+    $("#cm-no").addEventListener("click", closeModal);
+    $("#cm-yes").addEventListener("click", () => { finish(true); closeModal(); });
+    $("#cm-yes").focus();
+  });
+}
+
+function promptModal(title, opts = {}) {
+  const {value = "", placeholder = "", multiline = false,
+         okLabel = "OK", hint = ""} = opts;
+  return new Promise(resolve => {
+    let done = false;
+    const finish = v => { if (!done) { done = true; resolve(v); } };
+    const field = multiline
+      ? `<textarea id="pm-v" rows="4" placeholder="${esc(placeholder)}">${esc(value)}</textarea>`
+      : `<input id="pm-v" value="${esc(value)}" placeholder="${esc(placeholder)}">`;
+    openModal(`<h2>${esc(title)}</h2>${field}
+      ${hint ? `<p class="muted">${esc(hint)}</p>` : ""}
+      <div class="row" style="margin-top:14px; justify-content:flex-end">
+        <button id="pm-no">Cancel</button>
+        <button class="primary" id="pm-yes">${esc(okLabel)}</button>
+      </div>`, () => finish(null));
+    $("#pm-no").addEventListener("click", closeModal);
+    const submit = () => { finish($("#pm-v").value); closeModal(); };
+    $("#pm-yes").addEventListener("click", submit);
+    if (!multiline) $("#pm-v").addEventListener("keydown", ev => {
+      if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); submit(); }
+    });
+    const f = $("#pm-v"); f.focus(); if (f.select) f.select();
+  });
+}
 
 /* ---------- router ---------- */
 $("#brand").addEventListener("click", () => { location.hash = "#library"; });
@@ -87,7 +192,25 @@ function navMark() {
 // #play/undefined left over from a prior session) and must not 404 the app.
 const validSlug = seg => seg && seg !== "undefined" && seg !== "null";
 
+/* ---------- unsaved-work guard ----------
+   The builder only persisted on its own Back button, so a topbar click, browser
+   Back, or any hash change silently threw away everything typed. These are local
+   files — saving is free — so navigation autosaves rather than nagging. */
+let _dirtyCheck = null, _dirtySave = null;
+function registerDirty(isDirty, save) { _dirtyCheck = isDirty; _dirtySave = save; }
+function clearDirty() { _dirtyCheck = null; _dirtySave = null; }
+async function flushDirty() {
+  if (!_dirtyCheck || !_dirtySave || !_dirtyCheck()) return;
+  try { await _dirtySave(); toast("Saved your changes.", "ok"); }
+  catch (e) { toast("Couldn't save your changes: " + e.message); }
+}
+window.addEventListener("beforeunload", ev => {
+  if (_dirtyCheck && _dirtyCheck()) { ev.preventDefault(); ev.returnValue = ""; }
+});
+
 async function render() {
+  await flushDirty();          // persist the view we're leaving
+  clearDirty();
   navMark();
   // The Talk drawer lives on <body> (not #view), so drop it on any navigation —
   // otherwise it orphans, floating over the next page with a stale slug handler.
@@ -186,7 +309,7 @@ async function renderLibrary() {
   $("#import-card").addEventListener("click", () =>
     uploadFile("/api/cards-import", ".png,.json,.charx", out => {
       const c = out.counts || {};
-      alert(`Imported "${out.slug}" — ${c.lore || 0} lore entr`
+      toast(`Imported "${out.slug}" — ${c.lore || 0} lore entr`
             + `${(c.lore || 0) === 1 ? "y" : "ies"} + the character. `
             + "Opening the builder to review.");
       location.hash = `#world/${out.slug}`;
@@ -197,7 +320,7 @@ async function renderLibrary() {
       const act = ev.target.dataset && ev.target.dataset.act;
       if (act === "delete-scen") {
         ev.stopPropagation();
-        if (!confirm("Delete this world? Existing stories keep their copy."))
+        if (!await confirmModal("Delete this world? Existing stories keep their copy."))
           return;
         await api(`/api/scenarios/${scen}`, {method: "DELETE"});
         render();
@@ -222,17 +345,23 @@ async function renderLibrary() {
       const act = ev.target.dataset && ev.target.dataset.act;
       if (act === "delete") {
         ev.stopPropagation();
-        if (!confirm("Delete this save for good?")) return;
+        if (!await confirmModal("Delete this save for good?")) return;
         await api(`/api/saves/${slug}`, {method: "DELETE"});
         render();
       } else if (act === "branch") {
         ev.stopPropagation();
         const info = await api(`/api/saves/${slug}`);
-        const n = prompt(`Branch from turn (1..${info.turns.length}):`);
+        const n = await promptModal("Branch this story", {
+          placeholder: `1 – ${info.turns.length}`, okLabel: "Branch",
+          hint: `Copies the story and rewinds it to that turn. `
+                + `It currently has ${info.turns.length}.`});
         if (!n) return;
-        const out = await api(`/api/saves/${slug}/branch`,
-                              {method: "POST", body: {turn: Number(n)}});
-        if (out.warnings && out.warnings.length) alert(out.warnings.join("\n"));
+        const out = await guard(
+          () => api(`/api/saves/${slug}/branch`,
+                    {method: "POST", body: {turn: Number(n)}}),
+          "Couldn't branch");
+        if (!out) return;
+        if (out.warnings && out.warnings.length) toast(out.warnings.join("\n"));
         location.hash = `#play/${out.slug}`;
       } else if (act === "export") {
         ev.stopPropagation();
@@ -363,7 +492,7 @@ async function renderDefaults() {
   });
   $("#defaults-import").addEventListener("click", () =>
     uploadFile("/api/defaults-import", ".zip", () => {
-      alert("Defaults imported.");
+      toast("Defaults imported.");
       loadDefaultsSection();
     }));
   loadDefaultsSection();
@@ -385,7 +514,7 @@ function uploadFile(url, accept, done) {
         throw new Error(msg);
       }
       done(await r.json());
-    } catch (e) { alert("Import failed: " + e.message); }
+    } catch (e) { toast("Import failed: " + e.message); }
   });
   inp.click();
 }
@@ -414,7 +543,7 @@ async function loadDefaultsSection() {
       const act = ev.target.dataset && ev.target.dataset.act;
       if (act === "revert-def") {
         ev.stopPropagation();
-        if (!confirm(`Revert ${name} to the shipped default?`)) return;
+        if (!await confirmModal(`Revert ${name} to the shipped default?`)) return;
         await api(`/api/defaults/${name}/revert`, {method: "POST"});
         loadDefaultsSection();
       } else {
@@ -559,23 +688,39 @@ async function renderBuilder(slug, scope = "scenario") {
     </div>`}
   </div>`;
 
-  const saveMain = async () => api(`${base}/main`, {
-    method: "PUT", body: {
-      title: $("#b-title").value.trim(),
-      description: $("#b-desc") ? $("#b-desc").value.trim() : "",
-      premise: $("#b-premise").value.trim(),
-      ...($("#b-intro") ? {introduction: $("#b-intro").value.trim()} : {}),
-      world: $("#b-world").value.trim(),
-    }});
+  const mainFields = () => ({
+    title: $("#b-title").value.trim(),
+    description: $("#b-desc") ? $("#b-desc").value.trim() : "",
+    premise: $("#b-premise").value.trim(),
+    ...($("#b-intro") ? {introduction: $("#b-intro").value.trim()} : {}),
+    world: $("#b-world").value.trim(),
+  });
+  let cleanState = JSON.stringify(mainFields());
+  const saveMain = async () => {
+    const body = mainFields();
+    const out = await api(`${base}/main`, {method: "PUT", body});
+    cleanState = JSON.stringify(body);          // now matches what's on disk
+    return out;
+  };
+  // Navigating away (topbar, browser Back, tab close) no longer loses the text.
+  registerDirty(() => {
+    const el = $("#b-title");
+    return Boolean(el && document.body.contains(el)
+                   && JSON.stringify(mainFields()) !== cleanState);
+  }, saveMain);
+
   $("#back").addEventListener("click", async () => {
-    await saveMain();
+    await guard(saveMain, "Couldn't save this world");
+    clearDirty();
     location.hash = backHash;
   });
   $("#b-save").addEventListener("click", async () => {
-    await saveMain();
+    if (await guard(saveMain, "Couldn't save this world") === undefined) return;
     const label = isSave ? "Save changes" : "Save world";
     $("#b-save").textContent = "Saved ✓";
-    setTimeout(() => { $("#b-save").textContent = label; }, 1500);
+    setTimeout(() => {
+      if ($("#b-save")) $("#b-save").textContent = label;
+    }, 1500);
   });
 
   const FIELD_KIND = {"b-premise": "premise", "b-intro": "introduction",
@@ -584,11 +729,15 @@ async function renderBuilder(slug, scope = "scenario") {
     const ta = $("#" + id);
     let text = ta.value.trim();
     if (mode === "seed") {
-      text = prompt("Your idea in a line (blank = let the AI decide):",
-                    "") ?? null;
+      // Multiline: this is a creative prompt, and a single-line native dialog
+      // was the worst possible widget for "describe your idea".
+      text = await promptModal("Seed this from an idea", {
+        multiline: true, okLabel: "Generate",
+        placeholder: "A rain-soaked frontier town on the edge of a haunted forest…",
+        hint: "Leave it blank to let the AI decide."});
       if (text === null) return;
     } else if (!text) {
-      alert("Nothing to improve yet — write something or seed it first.");
+      toast("Nothing to improve yet — write something or seed it first.");
       return;
     }
     ta.disabled = true;
@@ -602,7 +751,7 @@ async function renderBuilder(slug, scope = "scenario") {
       ta.value = out.text;
     } catch (e) {
       ta.value = old;
-      alert(e.message);
+      toast(e.message);
     }
     ta.disabled = false;
   };
@@ -637,7 +786,7 @@ async function renderBuilder(slug, scope = "scenario") {
           blurb: p.entry.body || ""}));
       }
       if (!items.length) {
-        alert("Nothing of this type in your library yet — save a piece to "
+        toast("Nothing of this type in your library yet — save a piece to "
               + "it first (piece editor → 'Save to library').");
         return;
       }
@@ -673,7 +822,7 @@ async function renderBuilder(slug, scope = "scenario") {
   view.querySelectorAll("[data-deltype]").forEach(b => b.addEventListener(
     "click", async () => {
       const rel = b.dataset.deltype;
-      if (!confirm(`Remove the '${rel.replace(".md", "")}' lore type? Its `
+      if (!await confirmModal(`Remove the '${rel.replace(".md", "")}' lore type? Its `
                    + "pieces are deleted with it.")) return;
       await saveMain();
       await api(`${base}/types/${rel}`, {method: "DELETE"});
@@ -681,13 +830,16 @@ async function renderBuilder(slug, scope = "scenario") {
     }));
 
   $("#b-addtype").addEventListener("click", async () => {
-    const name = prompt("Name for the new lore type (e.g. Races, Rules):");
+    const name = await promptModal("New lore type", {
+      placeholder: "Races", okLabel: "Create",
+      hint: "A new registry alongside Characters and Locations — e.g. Races, "
+            + "Factions, Technology."});
     if (!name) return;
     try {
       await api(`${base}/types`, {method: "POST", body: {name}});
       await saveMain();
       render();
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
   });
 
   const completeBtn = $("#b-complete");
@@ -838,43 +990,45 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
   $("#p-cancel").addEventListener("click", closeModal);
   $("#p-save").addEventListener("click", async () => {
     const entry = collect();
-    if (!entry.title) { alert("A piece needs a title."); return; }
-    if (lib) {
-      await api("/api/library", {method: "POST", body: {
-        type: lib.type, entry, id: lib.id || ""}});
-    } else {
-      await api(`${base}/pieces/${rel}`, {method: "PUT", body: {
-        entry, old_slug: piece ? piece.slug : ""}});
-    }
+    if (!entry.title) { toast("A piece needs a title."); return; }
+    // Guarded: a 409 (turn generating) used to close nothing, save nothing and
+    // say nothing, losing everything typed into the form.
+    const ok = await guard(() => lib
+      ? api("/api/library", {method: "POST", body: {
+          type: lib.type, entry, id: lib.id || ""}})
+      : api(`${base}/pieces/${rel}`, {method: "PUT", body: {
+          entry, old_slug: piece ? piece.slug : ""}}),
+      "Couldn't save this piece");
+    if (ok === undefined) return;            // keep the form open
     closeModal();
     render();
   });
   const del = $("#p-delete");
   if (del) del.addEventListener("click", async () => {
-    if (!confirm(`Delete '${piece.title}'?`)) return;
-    if (lib) {
-      await api(`/api/library/${lib.id}`, {method: "DELETE"});
-    } else {
-      await api(`${base}/pieces/${rel}/${piece.slug}`,
-                {method: "DELETE"});
-    }
+    if (!await confirmModal(`Delete “${piece.title}”?`,
+                            "This removes it from this world.")) return;
+    const ok = await guard(() => lib
+      ? api(`/api/library/${lib.id}`, {method: "DELETE"})
+      : api(`${base}/pieces/${rel}/${piece.slug}`, {method: "DELETE"}),
+      "Couldn't delete this piece");
+    if (ok === undefined) return;
     closeModal();
     render();
   });
   const tolib = $("#p-tolib");
   if (tolib) tolib.addEventListener("click", async () => {
-    if (isChar) {
-      await api("/api/characters/from-entry",
-                {method: "POST", body: {entry: collect()}});
-    } else {
-      await api("/api/library",
-                {method: "POST", body: {type: kind, entry: collect()}});
-    }
-    tolib.textContent = "Saved to library ✓";
+    const ok = await guard(() => isChar
+      ? api("/api/characters/from-entry", {method: "POST", body: {entry: collect()}})
+      : api("/api/library", {method: "POST", body: {type: kind, entry: collect()}}),
+      "Couldn't save to the library");
+    if (ok !== undefined) tolib.textContent = "Saved to library ✓";
   });
 
   $("#p-seed").addEventListener("click", async () => {
-    const idea = prompt("Your idea in a line (blank = let the AI decide):", "");
+    const idea = await promptModal("Seed this piece from an idea", {
+      multiline: true, okLabel: "Generate",
+      placeholder: "A grim knight bound by a blood-oath…",
+      hint: "Leave it blank to let the AI decide."});
     if (idea === null) return;
     $("#p-seed").disabled = true;
     $("#p-seed").textContent = "✨ generating…";
@@ -884,7 +1038,7 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
         improve: Boolean($("#b-improve") && $("#b-improve").checked),
       }});
       fill(out.entry);
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
     $("#p-seed").disabled = false;
     $("#p-seed").textContent = "✨ Seed from idea";
   });
@@ -897,7 +1051,7 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
         scenario: slug,
       }});
       fill(out.entry);
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
     $("#p-improve").disabled = false;
     $("#p-improve").textContent = "Improve with AI";
   });
@@ -933,7 +1087,8 @@ async function renderPlay(slug) {
           <button id="retry">Retry</button>
           <button id="branch">Branch…</button>
           <button id="aids-btn" title="quick actions &amp; output cleanup rules"
-            >Aids</button>
+            >Quick actions</button>
+          <button id="stop" class="hidden" title="stop generating">■ Stop</button>
         </div>
         <div id="quick-bar"></div>
         <div id="composer-inner">
@@ -997,7 +1152,7 @@ async function renderPlay(slug) {
       try {
         await api(`/api/saves/${slug}/turns/${idx}`,
                   {method: "PUT", body: {text}});
-      } catch (e) { alert(e.message); return; }
+      } catch (e) { toast(e.message); return; }
       paint(d, text); close();
     };
   };
@@ -1073,6 +1228,9 @@ async function renderPlay(slug) {
   };
 
   const setBusy = on => {
+    // If the user navigated away mid-stream this view's nodes are detached, and
+    // the still-pending run must not toggle the NEW page's controls.
+    if (!document.body.contains(transcript)) return;
     busy = on;
     ["send", "continue", "undo", "retry", "branch", "suggest"].forEach(id => {
       const b = $("#" + id); if (b) b.disabled = on;
@@ -1080,42 +1238,124 @@ async function renderPlay(slug) {
     transcript.querySelectorAll(".swipebar button, .turn-edit")
       .forEach(b => b.disabled = on);
   };
+  /* Repaint the transcript from the server's truth. After a failed turn the DOM
+     and the store can disagree, and turn indices are derived from DOM position —
+     so an edit would PUT to the wrong index and rewrite a different turn. */
+  const resync = async () => {
+    try {
+      const fresh = await api(`/api/saves/${slug}`);
+      transcript.innerHTML = "";
+      (fresh.turns || []).forEach(t => addTurn(t.role, t.text));
+      swipe = {count: 1, idx: 0};
+      renderSwipeBar();
+    } catch (_e) { /* offline: leave what's on screen rather than blanking it */ }
+  };
+
+  /* An error the user can actually see and act on, in the transcript where the
+     turn failed — the old 11.5px stageline was below the fold and had no retry. */
+  const showTurnError = (msg, retryFn) => {
+    const box = document.createElement("div");
+    box.className = "turn-error";
+    box.setAttribute("role", "alert");
+    const title = msg.code === "busy" ? "Already generating"
+      : msg.code === "auth" ? "The API key was rejected"
+      : msg.code === "connection" ? "Can't reach the model"
+      : msg.code === "context" ? "This story is too long for the model"
+      : msg.code === "aborted" ? "Stopped" : "That turn didn't go through";
+    box.innerHTML = `<b>${esc(title)}</b><p>${esc(msg.text || "")}</p>`;
+    const row = document.createElement("div");
+    row.className = "row";
+    if (retryFn && msg.code !== "aborted") {
+      const again = document.createElement("button");
+      again.className = "primary"; again.textContent = "Try again";
+      again.addEventListener("click", () => { box.remove(); retryFn(); });
+      row.appendChild(again);
+    }
+    const settings = document.createElement("button");
+    settings.textContent = "Check settings";
+    settings.addEventListener("click", () => { location.hash = "#settings"; });
+    row.appendChild(settings);
+    box.appendChild(row);
+    transcript.appendChild(box);
+    transcript.scrollTop = transcript.scrollHeight;
+  };
+
+  let aborter = null;
   const run = async (path, body, playerText) => {
     if (busy) return;
     setBusy(true);
-    stage.textContent = "Thinking…";
     evbar.innerHTML = "";
+    transcript.querySelectorAll(".turn-error").forEach(b => b.remove());
     transcript.querySelectorAll(".swipebar").forEach(b => b.remove());
-    if (playerText !== undefined) addTurn("player", playerText);
+    // Elapsed time + a hint once the wait passes Nielsen's 10s attention limit:
+    // a 30s+ planner stage under a static "Thinking…" reads as a hang.
+    const t0 = Date.now();
+    let label = "Thinking…";
+    stage.textContent = label;
+    const ticker = setInterval(() => {
+      const s = Math.round((Date.now() - t0) / 1000);
+      const hint = s >= 10 ? " — the planning stage can take a while on local models" : "";
+      stage.textContent = `${label} ${s}s${hint}`;
+    }, 1000);
+    aborter = new AbortController();
+    $("#stop").classList.remove("hidden");
+
+    const optimistic = playerText !== undefined ? addTurn("player", playerText) : null;
     const live = addTurn("narrator", "");
     const liveBody = bodyOf(live);
     live.classList.add("pending");   // blinking caret until prose streams in
+    live.setAttribute("aria-busy", "true");
     let settled = null;              // ST-31: the regex-cleaned stored text
+    let failed = null;
     try {
       await sse(path, body, {
-        stage: m => { stage.textContent = m.text; },
+        stage: m => { label = m.text; },
         chunk: m => { live.classList.remove("pending");
                       liveBody.textContent += m.text;
                       transcript.scrollTop = transcript.scrollHeight; },
         done: m => { setEvents(m.events); setSheet(m.sheet || []);
                      $(".clock").textContent = m.clock || "";
-                     if (m.text != null) settled = m.text;
-                     stage.textContent = ""; },
-        error: m => { stage.textContent = "error: " + m.text; },
-      });
+                     if (m.text != null) settled = m.text; },
+        error: m => { failed = m; },
+      }, aborter.signal);
     } catch (e) {
-      stage.textContent = "error: " + e.message;
+      failed = e.name === "AbortError"
+        ? {code: "aborted", text: "You stopped this turn."}
+        : {code: "network", text: e.message};
     }
+    clearInterval(ticker);
+    stage.textContent = "";
+    $("#stop").classList.add("hidden");
+    aborter = null;
     live.classList.remove("pending");
+    live.removeAttribute("aria-busy");
     // ST-31: settle the raw streamed turn onto the cleaned, stored version. Only a
     // NON-EMPTY settle applies — an empty done.text must never wipe a good turn.
     if (settled && liveBody.textContent) liveBody.textContent = settled;
     if (!liveBody.textContent) live.remove();
     else paint(live, liveBody.textContent);   // ST-06: apply markdown
+
+    if (failed) {
+      // The server stored nothing, so the optimistic player bubble would leave
+      // the DOM one turn AHEAD of the transcript.
+      if (optimistic) optimistic.remove();
+      // Repaint from server truth BEFORE showing the card — resync() rebuilds
+      // the transcript, so a card appended first would be wiped out again.
+      await resync();
+      showTurnError(failed, playerText !== undefined
+        ? () => run(path, body, playerText) : () => run(path, body));
+      if (playerText !== undefined && !$("#action").value) {
+        $("#action").value = playerText;      // never lose what they typed
+      }
+    }
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
     renderSwipeBar();
     setBusy(false);
   };
+
+  $("#stop").addEventListener("click", () => {
+    if (aborter) { aborter.abort(); toast("Stopping…", "info"); }
+  });
 
   s.turns.forEach(t => addTurn(t.role, t.text));
   setSheet(s.sheet || []);
@@ -1128,7 +1368,7 @@ async function renderPlay(slug) {
     try {
       const out = await api(`/api/saves/${slug}/impersonate`, {method: "POST"});
       $("#action").value = out.text; $("#action").focus();
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
     b.disabled = false; b.textContent = was;
   });
 
@@ -1140,7 +1380,11 @@ async function renderPlay(slug) {
   };
   $("#send").addEventListener("click", send);
   $("#action").addEventListener("keydown", ev => {
-    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); send(); }
+    // isComposing: without it, Japanese/Chinese/Korean users fire a turn while
+    // still composing a word with the IME.
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault(); send();
+    }
   });
 
   // ST-30: quick-action buttons — a canned action fills the composer and sends.
@@ -1195,10 +1439,14 @@ async function renderPlay(slug) {
         replace: r.querySelector(".rx-repl").value,
         flags: r.querySelector(".rx-flags").value,
       })).filter(r => r.find.trim());
-      await api(`/api/saves/${slug}/aids`,
-                {method: "PUT", body: {quick_actions: quick, regex_rules: rules}});
+      const ok = await guard(
+        () => api(`/api/saves/${slug}/aids`,
+                  {method: "PUT", body: {quick_actions: quick, regex_rules: rules}}),
+        "Couldn't save your quick actions");
+      if (ok === undefined) return;          // keep the modal + their edits
       closeModal();
-      renderQuickBar((await api(`/api/saves/${slug}`)).quick_actions);
+      const fresh = await guard(() => api(`/api/saves/${slug}`), "Couldn't reload");
+      if (fresh) renderQuickBar(fresh.quick_actions);
     });
   });
 
@@ -1208,8 +1456,9 @@ async function renderPlay(slug) {
   });
   $("#undo").addEventListener("click", async () => {
     if (busy) return;
-    const out = await api(`/api/saves/${slug}/undo`, {method: "POST"});
-    if (out.ok) {
+    const out = await guard(() => api(`/api/saves/${slug}/undo`, {method: "POST"}),
+                            "Couldn't undo");
+    if (out && out.ok) {
       while (transcript.children.length > out.turns)
         transcript.lastChild.remove();
       setSheet(out.sheet || []);
@@ -1218,24 +1467,26 @@ async function renderPlay(slug) {
   });
   $("#retry").addEventListener("click", async () => {
     if (busy) return;
-    const turns = transcript.children;
-    if (!turns.length) return;
-    if (turns[turns.length - 1].classList.contains("narrator"))
-      turns[turns.length - 1].remove();
-    if (turns.length && turns[turns.length - 1].classList.contains("player"))
-      turns[turns.length - 1].remove();
+    if (!transcript.children.length) return;
+    // Do NOT prune the DOM up front: if the server's rollback never happens
+    // (409, model down) the transcript would be two turns shorter than the
+    // store, and turn indices come from DOM position — a later edit would
+    // rewrite the wrong turn. run() repaints from server truth instead.
     await run(`/api/saves/${slug}/retry`);
+    await resync();
   });
   $("#branch").addEventListener("click", async () => {
     const total = transcript.children.length;
-    const n = prompt(`Branch from turn (1..${total}):`);
+    const n = await promptModal("Branch this story", {
+      placeholder: `1 – ${total}`, okLabel: "Branch",
+      hint: `Copies the story and rewinds it to that turn. It has ${total} so far.`});
     if (!n) return;
     try {
       const out = await api(`/api/saves/${slug}/branch`,
                             {method: "POST", body: {turn: Number(n)}});
-      if (out.warnings.length) alert(out.warnings.join("\n"));
+      if (out.warnings.length) toast(out.warnings.join("\n"));
       location.hash = `#play/${out.slug}`;
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
   });
   $("#talk-btn").addEventListener("click", () => talkDrawer(slug, s.companions));
   $("#edit-btn").addEventListener("click", () => { location.hash = `#edit/${slug}`; });
@@ -1270,9 +1521,15 @@ async function renderPlay(slug) {
     });
     $("#an-cancel").addEventListener("click", closeModal);
     $("#an-save").addEventListener("click", async () => {
-      await api(`/api/saves/${slug}/authors-note`, {method: "PUT", body: {
-        content: $("#an-content").value, depth,
-        every: Number($("#an-every").value) || 1}});
+      // Guarded: this 409s while a turn is generating. Unguarded it threw, the
+      // modal froze open, nothing was written and nothing was said — the note
+      // the user just typed was gone.
+      const ok = await guard(
+        () => api(`/api/saves/${slug}/authors-note`, {method: "PUT", body: {
+          content: $("#an-content").value, depth,
+          every: Number($("#an-every").value) || 1}}),
+        "Couldn't save the author's note");
+      if (ok === undefined) return;          // keep the modal + their text
       closeModal();
     });
   });
@@ -1320,7 +1577,11 @@ the story transcript.)\n</div>
   };
   $("#talk-send").addEventListener("click", send);
   $("#talk-input").addEventListener("keydown", ev => {
-    if (ev.key === "Enter") send();
+    // Shift+Enter for a newline (there was no way to write a multi-line message
+    // to a companion), and never send mid-IME-composition.
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault(); send();
+    }
   });
   $("#talk-close").addEventListener("click", () => d.remove());
 }
@@ -1418,7 +1679,7 @@ async function renderCharacters() {
       const act = ev.target.dataset && ev.target.dataset.act;
       const c = data.characters.find(x => x.id === card.dataset.id);
       if (act === "delete") {
-        if (!confirm(`Delete ${c.name}? Worlds already using them keep their copy.`))
+        if (!await confirmModal(`Delete ${c.name}? Worlds already using them keep their copy.`))
           return;
         await api(`/api/characters/${c.id}`, {method: "DELETE"});
         render();
@@ -1432,7 +1693,7 @@ async function renderCharacters() {
       const act = ev.target.dataset && ev.target.dataset.act;
       const p = libd.pieces.find(x => x.id === card.dataset.pid);
       if (act === "delete") {
-        if (!confirm(`Delete '${p.entry.title}' from the library? Worlds `
+        if (!await confirmModal(`Delete '${p.entry.title}' from the library? Worlds `
                      + "already using it keep their copy.")) return;
         await api(`/api/library/${p.id}`, {method: "DELETE"});
         render();
@@ -1749,7 +2010,7 @@ async function renderSettings() {
   $("#pf-del").addEventListener("click", async () => {
     const name = $("#pf-list").value;
     if (!name) return pfStatus("pick a profile");
-    if (!confirm(`Delete profile "${name}"?`)) return;
+    if (!await confirmModal(`Delete profile "${name}"?`)) return;
     try {
       await api(`/api/profiles/${encodeURIComponent(name)}`, {method: "DELETE"});
       render();
