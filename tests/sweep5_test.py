@@ -78,16 +78,19 @@ assert bws.get("regex_rules") == [{"find": "foo", "replace": "bar", "flags": "i"
 assert bws.get("authors_note") == {"depth": "tail", "every": 2}, "branch dropped authors_note"
 print("6) branch preserves quick_actions + regex_rules + authors_note")
 
-# ---- load_config degrades readably on a malformed config.yaml ----
+# ---- load_config degrades to the shipped defaults on a malformed config ----
+# Contract CHANGED in the 2026-07-21 sweep (D8): this used to raise SystemExit,
+# but load_config also runs inside web request handlers, where SystemExit takes
+# the whole server down instead of returning an error. A broken config must now
+# fall back to a usable profile so the app still boots and can be fixed from
+# Settings. See tests/sweep7_server_test.py.
 bad = os.path.join(root, "bad.yaml")
-for content in ("just: a mapping\nwith: no active_profile\n", "", "- a\n- b\n"):
+for content in ("just: a mapping\nwith: no active_profile\n", "", "- a\n- b\n",
+                "]]] not : valid : yaml [[["):
     with open(bad, "w", encoding="utf-8") as f:
         f.write(content)
-    try:
-        load_config(bad)
-        assert False, f"expected SystemExit for config: {content!r}"
-    except SystemExit:
-        pass
-print("7) load_config: malformed/empty config -> readable SystemExit (no bare crash)")
+    cfg_bad = load_config(bad)
+    assert cfg_bad.profile.model, f"no usable fallback for config: {content!r}"
+print("7) load_config: malformed/empty config -> usable fallback (never fatal)")
 
 print("\nALL SWEEP5 CHECKS PASSED")
