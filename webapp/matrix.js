@@ -56,9 +56,55 @@
 
   let last = 0;
   const FRAME_MS = 55;                    // ~18 fps — calm, not seizure-y
+  let running = false;
+  let rafId = 0;
   function loop(ts) {
+    if (!running) return;
     if (ts - last >= FRAME_MS) { draw(); last = ts; }
-    requestAnimationFrame(loop);
+    rafId = requestAnimationFrame(loop);
   }
-  requestAnimationFrame(loop);
+
+  /* WCAG 2.2.2 (Level A) applies to auto-updating content and allows NO grace
+     period, so a full-screen animation needs a real stop — the OS preference
+     alone is not enough. `prefers-reduced-motion` is honoured automatically and
+     Settings can override either way; the choice persists. */
+  const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const stored = () => {
+    try { return localStorage.getItem("coderain_motion"); } catch (_e) { return null; }
+  };
+  const wanted = () => {
+    const s = stored();
+    if (s === "off") return false;
+    if (s === "on") return true;
+    return !mq.matches;                   // no explicit choice: follow the OS
+  };
+
+  function apply() {
+    const on = wanted();
+    document.documentElement.dataset.motion = on ? "on" : "off";
+    if (on && !running) {
+      running = true;
+      last = 0;
+      rafId = requestAnimationFrame(loop);
+    } else if (!on && running) {
+      running = false;
+      cancelAnimationFrame(rafId);
+      paintBase();                        // leave a clean static backdrop
+    } else if (!on) {
+      paintBase();
+    }
+  }
+
+  /* Settings toggle calls this; `null` clears the override back to the OS. */
+  window.setRain = function (on) {
+    try {
+      if (on === null) localStorage.removeItem("coderain_motion");
+      else localStorage.setItem("coderain_motion", on ? "on" : "off");
+    } catch (_e) { /* private mode: session-only */ }
+    apply();
+  };
+  window.rainOn = wanted;
+
+  mq.addEventListener("change", () => { if (!stored()) apply(); });
+  apply();
 })();
