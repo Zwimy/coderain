@@ -73,15 +73,19 @@ python start.py                                    # or: python server.py
 2. `ollama pull qwen3:4b` (planner) and `ollama pull gemma3:4b` (writer).
 3. Set `OLLAMA_CONTEXT_LENGTH=16384` and restart Ollama (its default 4k starves
    long stories).
-4. In Coderain → **Settings → Local**, pick your models. That's it — 100% offline.
+4. In Coderain, pick your models. That's it — 100% offline.
 
-Prefer a cloud model? **Settings → Hosted**: paste a key (DeepSeek/GLM are cheap
-and strong), done.
+Prefer a cloud model? Paste a key instead (DeepSeek/GLM are cheap and strong).
+
+**You don't have to read any of this first.** On first run Coderain checks
+whether it can reach a model and, if not, opens a setup screen with both options
+— it detects Ollama for you, or takes a key. You can change it later in
+**Settings**.
 
 ## Tech
 
 Python + FastAPI backend, a vanilla-JS single-page app, SSE streaming. The engine
-is provider-agnostic (one OpenAI-compatible client). ~30 test suites, all offline
+is provider-agnostic (one OpenAI-compatible client). 44 test suites, all offline
 (`python run_tests.py`). A retro Win2000 Tkinter UI (`gui.py`) survives as an
 easter egg.
 
