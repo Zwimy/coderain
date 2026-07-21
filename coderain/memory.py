@@ -571,10 +571,21 @@ class MemoryStore:
 
     def make_override(self, rel: str) -> bool:
         """Fork a save-local copy of an inherited rule file so edits affect only this
-        save. Returns False if not a rule file or an override already exists."""
+        save. Returns False if not a rule file or an override already exists.
+
+        Never forks emptiness: if nothing resolves (a partial install, a synced
+        tree, a deleted master) `read` returns "", and writing that would create a
+        0-byte file that permanently shadows the master — the rules would be
+        silently gone for this save even after the master came back. Fall back to
+        the shipped default instead."""
         if rel not in RULE_FILES or (self.dir / rel).exists():
             return False
-        (self.dir / rel).write_text(self.read(rel), encoding="utf-8")
+        body = self.read(rel)
+        if not body.strip():
+            body = templates.default_rule(rel)
+        if not body.strip():
+            return False
+        (self.dir / rel).write_text(body, encoding="utf-8")
         return True
 
     def remove_override(self, rel: str) -> bool:
@@ -1614,7 +1625,28 @@ class ScenarioLibrary:
         templates.seed_scenario(self.root / slug, title, premise, world,
                                 description, introduction=introduction,
                                 instructions_dir=self.instructions_dir)
+        self.identity(slug)          # stamp a stable id for cross-machine imports
         return slug
+
+    def identity(self, slug: str) -> str:
+        """Stable id for a world, so an imported save can prove which world it
+        actually came from. Slugs are title-derived and therefore collide (any
+        two worlds called "Fantasy Adventure"), which let an imported save bind
+        to a stranger's world and inherit its rule overrides. Assigned lazily so
+        worlds authored before this existed get one on first look."""
+        path = self.root / slug / "scenario.json"
+        if not path.exists():
+            return ""
+        data = _read_json(path)
+        ident = str(data.get("id", "") or "")
+        if not ident:
+            ident = uuid.uuid4().hex
+            data["id"] = ident
+            try:
+                path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except OSError:
+                return ""
+        return ident
 
     def update_meta(self, slug: str, title: str = "",
                     description: str | None = None) -> bool:
@@ -1751,6 +1783,9 @@ class SaveLibrary:
         slug = _unique_slug(self.root, templates.slugify(title))
         scen_dir = (self.scenarios.dir(scenario_slug)
                     if self.scenarios.exists(scenario_slug) else None)
+        if scen_dir is not None:
+            # Ensure the world has an id before new_save records it in the save.
+            self.scenarios.identity(scenario_slug)
         templates.new_save(self.root / slug, scen_dir, title,
                            scenario_slug if scen_dir else "", rpg_enabled,
                            premise=premise, mode=mode, rpg_cfg=rpg_cfg,
@@ -1773,14 +1808,19 @@ class SaveLibrary:
         scen = self.meta(slug).get("scenario", "")
         scen_dir = self.scenarios.dir(scen) if self.scenarios.exists(scen) else None
         store = MemoryStore(self.root / slug, self.instructions_dir, scen_dir)
-        # Migration: seed any play-state file this save predates (e.g. timeline.md on
-        # a save created before that feature). Idempotent; only writes what's missing.
-        for rel in templates.PLAY_FILES:
-            if not store.path(rel).exists():
-                store.write(rel, templates.user_default(
-                    rel, self.instructions_dir)
-                    if rel in templates.USER_DEFAULTABLE
-                    else templates.FILE_SKELETONS[rel])
+        # Migration: seed any file this save predates (e.g. timeline.md, or
+        # events.md/threads.md on saves older than those features). Covers world
+        # files too — reseeding only PLAY_FILES left older saves with a missing
+        # events.md forever, so event_rules() silently yielded nothing and the
+        # editor showed a blank pane with no skeleton. Idempotent: existence-
+        # guarded, so it only writes what is actually absent.
+        for rel in list(templates.PLAY_FILES) + list(templates.SCENARIO_FILES):
+            if store.path(rel).exists():
+                continue
+            if rel in templates.USER_DEFAULTABLE:
+                store.write(rel, templates.user_default(rel, self.instructions_dir))
+            elif rel in templates.FILE_SKELETONS:
+                store.write(rel, templates.FILE_SKELETONS[rel])
         # Wave 2: custom lore files declared by the scenario materialize in the
         # save on first open (copied from the scenario when authored there).
         for name in store.custom_files():
@@ -1791,6 +1831,12 @@ class SaveLibrary:
                 else:
                     label = name.removesuffix(".md").replace("-", " ").title()
                     store.write(name, f"# {label}\n\n{label} — custom lore registry.\n")
+        # Rule overrides forked from a shipped default follow the app forward;
+        # a genuinely edited override is preserved untouched.
+        for rel in RULE_FILES:
+            templates.upgrade_rule_override(self.root / slug / rel)
+            if scen_dir is not None:
+                templates.upgrade_rule_override(scen_dir / rel)
         _sync_player_stats(store)
         return store
 
@@ -1989,6 +2035,17 @@ class SaveLibrary:
         meta.setdefault("created", time.time())
         meta["title"] = title or meta.get("title", base_title)
         meta["updated"] = time.time()
+        # Only keep the link to a local world when it is provably the SAME world.
+        # Slugs are title-derived, so an imported save could otherwise bind to an
+        # unrelated local world with a colliding slug and silently inherit its
+        # rule overrides and lore-type declarations. Unlinking is safe: a save
+        # carries its own copy of the world, so it stays fully playable.
+        scen = str(meta.get("scenario", "") or "")
+        if scen and self.scenarios.exists(scen):
+            local_id = self.scenarios.identity(scen)
+            if str(meta.get("scenario_id", "") or "") != local_id:
+                meta["scenario"] = ""
+                meta["scenario_unlinked"] = scen
         self._write_meta(slug, meta)
         return slug
 
