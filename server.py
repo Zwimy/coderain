@@ -11,6 +11,7 @@ and GUI use — no engine logic lives in this file.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import queue
 import shutil
@@ -19,11 +20,12 @@ import threading
 import uuid
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from coderain import models as models_mod
@@ -64,6 +66,35 @@ _engines: dict[str, Engine] = {}
 # The local GPU (and most single-key plans) can't run turns in parallel —
 # one generation at a time, app-wide.
 _gen_lock = threading.Lock()
+
+
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+@app.middleware("http")
+async def _same_origin_only(request, call_next):
+    """Refuse mutating requests that came from another site's page.
+
+    We bind to localhost, but that is NOT a security boundary: a browser tab on
+    any website can POST here. CORS does not help, because a *simple* request is
+    sent without a preflight — and both `multipart/form-data` uploads and POSTs
+    with no body are simple. Without this guard, any page you visit while
+    Coderain runs could rewrite instructions/writer-rules.md (the system prompt
+    every story inherits), wipe turns via /undo, or loop /opening to burn hosted
+    API credits. Requests with no Origin/Referer (curl, the desktop shell, the
+    test client) are allowed — only a *foreign* origin is rejected.
+    """
+    if request.method not in _SAFE_METHODS:
+        source = request.headers.get("origin") or request.headers.get("referer") or ""
+        if source:
+            try:
+                origin_host = urlsplit(source).netloc.lower()
+            except ValueError:
+                origin_host = "invalid"
+            if origin_host != (request.headers.get("host") or "").lower():
+                return JSONResponse(
+                    {"detail": "cross-origin request refused"}, status_code=403)
+    return await call_next(request)
 
 
 def _guard_slug(slug: str) -> str:
@@ -1070,11 +1101,28 @@ def export_save(slug: str):
                         media_type="application/zip")
 
 
+# Upload ceilings. Without these a tiny archive can write gigabytes: a 204 KB
+# zip expanding to 200 MB was reproducible before this guard.
+_MAX_UPLOAD_BYTES = 64 * 1024 * 1024        # compressed, per upload
+_MAX_UNPACKED_BYTES = 256 * 1024 * 1024     # total decompressed, per archive
+_MAX_COMPRESS_RATIO = 200                   # decompressed / compressed
+
+
+def _guard_zip_bomb(packed_size: int, infos) -> None:
+    """Reject an archive whose declared contents dwarf its compressed size."""
+    unpacked = sum(max(0, getattr(i, "file_size", 0)) for i in infos)
+    if unpacked > _MAX_UNPACKED_BYTES or unpacked > packed_size * _MAX_COMPRESS_RATIO:
+        raise HTTPException(413, "archive expands too much (possible zip bomb)")
+
+
 def _stash_upload(file: UploadFile) -> Path:
     """Persist a multipart upload to a temp .zip so the library import_ helpers
     (which take a path) can read it. The file keeps its original name inside a
     unique dir so the import's derived slug reads well (the 'save-'/'world-'
-    export prefix is stripped). Caller removes the dir's parent."""
+    export prefix is stripped). Caller removes the dir's parent.
+
+    Streams in chunks with a hard ceiling, then refuses zip bombs, so an import
+    can never fill the disk."""
     name = (file.filename or "").strip()
     if not name.lower().endswith(".zip"):
         raise HTTPException(400, "expected a .zip export")
@@ -1086,8 +1134,25 @@ def _stash_upload(file: UploadFile) -> Path:
     holder = _EXPORT_DIR / f"in-{uuid.uuid4().hex}"
     holder.mkdir(parents=True, exist_ok=True)
     dest = holder / f"{stem}.zip"
-    with dest.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
+    try:
+        total = 0
+        with dest.open("wb") as out:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "upload too large (max 64 MB)")
+                out.write(chunk)
+        try:
+            with zipfile.ZipFile(dest) as zf:
+                _guard_zip_bomb(total, zf.infolist())
+        except zipfile.BadZipFile:
+            raise HTTPException(400, "not a valid .zip export")
+    except BaseException:
+        shutil.rmtree(holder, ignore_errors=True)   # caller never sees the path
+        raise
     return dest
 
 
@@ -1113,6 +1178,11 @@ def import_card(file: UploadFile = File(...)):
     raw = file.file.read(_MAX_UPLOAD + 1)
     if len(raw) > _MAX_UPLOAD:
         raise HTTPException(413, "card file too large (max 32 MB)")
+    # .charx is a zip — the size cap above is compressed only, so a small file
+    # could still expand to hundreds of MB. Check the declared unpacked size too.
+    if zipfile.is_zipfile(io.BytesIO(raw)):
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            _guard_zip_bomb(len(raw), zf.infolist())
     try:
         card = cards_mod.parse_card(raw, file.filename or "")
     except ValueError as e:
