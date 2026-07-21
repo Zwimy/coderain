@@ -179,6 +179,11 @@ function promptModal(title, opts = {}) {
 
 /* ---------- router ---------- */
 $("#brand").addEventListener("click", () => { location.hash = "#library"; });
+$("#brand").addEventListener("keydown", ev => {
+  if (ev.key === "Enter" || ev.key === " ") {   // it is a link, so act like one
+    ev.preventDefault(); location.hash = "#library";
+  }
+});
 window.addEventListener("hashchange", render);
 
 function navMark() {
@@ -1235,6 +1240,7 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
 
 /* ---------- play ---------- */
 let busy = false;
+let _playKeys = null;          // the play view's keydown handler, so it can be swapped
 
 async function renderPlay(slug) {
   const s = await api(`/api/saves/${slug}`);
@@ -1255,8 +1261,12 @@ async function renderPlay(slug) {
           title="${s.companions.length ? "private companion chat"
                  : "no companions yet"}">Talk</button>
       </div>
-      <div id="transcript"></div>
-      <div id="stageline"></div>
+      <div id="transcript" aria-label="Story"></div>
+      <!-- role=status announces progress WITHOUT stealing focus. Deliberately
+           NOT on #transcript: role=status implies aria-atomic, so a live region
+           around streaming prose would re-announce the whole passage on every
+           chunk. The turn itself carries aria-busy while it streams. -->
+      <div id="stageline" role="status" aria-live="polite"></div>
       <div id="eventbar"></div>
       <div id="composer">
         <div id="play-actions">
@@ -1342,10 +1352,16 @@ async function renderPlay(slug) {
     if (!d) return;
     const bar = document.createElement("div");
     bar.className = "swipebar";
+    // Labelled: "◄ 1/1 ►" gave no clue that ► GENERATES a new alternative.
     bar.innerHTML =
-      `<button class="mini swl" ${swipe.idx ? "" : "disabled"}>◄</button>`
-      + `<span>${swipe.idx + 1}/${swipe.count}</span>`
-      + `<button class="mini swr">►</button>`;
+      `<button class="mini swl" title="previous version (left arrow)"
+         aria-label="Previous version" ${swipe.idx ? "" : "disabled"}>◄</button>`
+      + `<span>Version ${swipe.idx + 1} of ${swipe.count}</span>`
+      + `<button class="mini swr" aria-label="Next or new version"
+           title="next version — at the end, writes a new one (right arrow)"
+           >►</button>`
+      + `<span class="hint muted">${swipe.idx + 1 === swipe.count
+          ? "› writes a new one" : ""}</span>`;
     d.appendChild(bar);
     bar.querySelector(".swl").onclick = () => swipeMove(-1);
     bar.querySelector(".swr").onclick = () => swipeMove(1);
@@ -1564,6 +1580,28 @@ async function renderPlay(slug) {
       ev.preventDefault(); send();
     }
   });
+
+  /* Keyboard shortcuts. There were none beyond Enter-to-send; SillyTavern users
+     in particular expect arrow-key swiping. Ignored while typing or in a modal. */
+  const playKeys = ev => {
+    if (!document.body.contains(transcript)) return;      // view changed
+    if (!$("#modal-root").classList.contains("hidden")) return;
+    const t = ev.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
+              || t.isContentEditable)) return;
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (ev.key === "ArrowLeft") { ev.preventDefault(); swipeMove(-1); }
+    else if (ev.key === "ArrowRight") { ev.preventDefault(); swipeMove(1); }
+    else if (ev.key === "r" && !busy) { ev.preventDefault(); $("#retry").click(); }
+    else if (ev.key === "u" && !busy) { ev.preventDefault(); $("#undo").click(); }
+    else if (ev.key === "Escape" && busy && aborter) {
+      ev.preventDefault(); $("#stop").click();
+    }
+  };
+  // Replace, never stack: renderPlay runs again on every story switch.
+  if (_playKeys) document.removeEventListener("keydown", _playKeys);
+  _playKeys = playKeys;
+  document.addEventListener("keydown", playKeys);
 
   // ST-30: quick-action buttons — a canned action fills the composer and sends.
   const renderQuickBar = actions => {

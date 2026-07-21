@@ -7,9 +7,11 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a href="#view" class="skip-link">Skip to content</a>
 <header id="topbar">
-  <div id="brand" data-nav="#library">Code<span>rain</span></div>
-  <nav>
+  <div id="brand" data-nav="#library" role="link" tabindex="0"
+       >Code<span>rain</span></div>
+  <nav aria-label="Main">
     <a href="#library">Library</a>
     <a href="#characters">Pieces</a>
     <a href="#defaults">Defaults</a>
@@ -18,7 +20,7 @@
   <div id="brainline" title="active pipeline"></div>
 </header>
 
-<main id="view"></main>
+<main id="view" tabindex="-1"></main>
 
 <div id="modal-root" class="hidden">
   <div id="modal-back"></div>
