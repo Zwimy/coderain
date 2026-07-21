@@ -139,16 +139,24 @@ def load_config(path: str | Path | None = None) -> Config:
     cfg_path = Path(path) if path else ROOT / "config.yaml"
     if not cfg_path.exists():                    # first run of a fresh install
         cfg_path.write_text(_DEFAULT_CONFIG, encoding="utf-8")
-    data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    # A malformed config must never be fatal: load_config runs inside request
+    # handlers, and SystemExit there would take the whole server down rather
+    # than return an error. Fall back to the shipped defaults instead, so the
+    # app still boots and the user can fix it from Settings.
+    try:
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, OSError):
+        data = None
     if not isinstance(data, dict):
-        raise SystemExit("config.yaml is empty or malformed (expected a mapping)")
+        data = yaml.safe_load(_DEFAULT_CONFIG)
 
     active = data.get("active_profile")
-    if active is None or active not in data.get("profiles", {}):
-        raise SystemExit(
-            f"active_profile '{active}' not found. "
-            f"Options: {', '.join(data.get('profiles', {}))}"
-        )
+    if active is None or active not in (data.get("profiles") or {}):
+        fallback = yaml.safe_load(_DEFAULT_CONFIG)
+        if not (data.get("profiles") or {}):
+            data = fallback                      # nothing usable — start clean
+        active = data.get("active_profile") or next(iter(data["profiles"]))
+        data["active_profile"] = active
     profile = build_profile(data, active)
     return Config(
         profile=profile,
@@ -178,14 +186,29 @@ def context_budget(config: Config) -> int:
         return 8000
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file + os.replace so a crash or a full disk can never
+    leave a half-written config behind (MemoryStore.write does the same). A torn
+    config.yaml or .env used to brick startup."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 def save_yaml(data: dict, path: str | Path | None = None) -> None:
     """Persist the whole config dict back to config.yaml (comments are not kept)."""
     cfg_path = Path(path) if path else ROOT / "config.yaml"
-    cfg_path.write_text(
-        yaml.safe_dump(data, sort_keys=False, default_flow_style=False,
-                       allow_unicode=True),
-        encoding="utf-8",
-    )
+    _atomic_write(cfg_path, yaml.safe_dump(data, sort_keys=False,
+                                           default_flow_style=False,
+                                           allow_unicode=True))
 
 
 def read_env() -> dict[str, str]:
@@ -208,4 +231,4 @@ def write_env(updates: dict[str, str]) -> None:
     env = read_env()
     env.update({k: v for k, v in updates.items() if k})
     lines = [f"{k}={v}" for k, v in env.items()]
-    (ROOT / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write(ROOT / ".env", "\n".join(lines) + "\n")

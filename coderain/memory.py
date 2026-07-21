@@ -1799,6 +1799,10 @@ class SaveLibrary:
         store.append_event_log({"turn": 0, "env": {}})
         return slug
 
+    def exists(self, slug: str) -> bool:
+        """Mirror of ScenarioLibrary.exists — a save is real if it has meta.json."""
+        return bool(slug) and (self.root / slug / "meta.json").exists()
+
     def store(self, slug: str) -> MemoryStore:
         # A missing save must RAISE, not materialize: the migration below
         # seeds play files, so opening a bad slug used to conjure a phantom

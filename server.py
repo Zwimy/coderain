@@ -11,6 +11,7 @@ and GUI use — no engine logic lives in this file.
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 import queue
@@ -105,6 +106,48 @@ def _guard_slug(slug: str) -> str:
     return slug
 
 
+_MODEL_ERROR_TEXT = {
+    "connection": "Can't reach the model. If you're running it locally, start "
+                  "Ollama first; if you're using an API, check the base URL in "
+                  "Settings.",
+    "auth": "The API key was rejected. Re-enter it in Settings.",
+    "timeout": "The model took too long to answer. Try again, or choose a "
+               "smaller/faster model.",
+    "context": "This story is longer than the model's context window. Lower the "
+               "context budget in Settings, or branch to a shorter history.",
+    "rate_limit": "The provider is rate-limiting this key. Wait a moment, then "
+                  "retry.",
+    "busy": "A turn is already generating — wait for it to finish.",
+    "unknown": "The model call failed.",
+}
+
+
+def _model_error_kind(exc: BaseException) -> str:
+    """Classify a generation failure so the UI can say something actionable
+    instead of showing a raw SDK string like 'Connection error.'"""
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    if "connect" in name or "connect" in text or "refused" in text:
+        return "connection"
+    if "auth" in name or "401" in text or "unauthorized" in text \
+            or "api key" in text or "invalid_api_key" in text:
+        return "auth"
+    if "timeout" in name or "timed out" in text:
+        return "timeout"
+    if "429" in text or "rate limit" in text or "ratelimit" in name:
+        return "rate_limit"
+    if "context" in text and ("length" in text or "window" in text
+                              or "token" in text):
+        return "context"
+    return "unknown"
+
+
+def _model_error_text(exc: BaseException) -> str:
+    """A plain-language message. Never the raw exception: it can carry absolute
+    filesystem paths, and 'Connection error.' tells a new user nothing."""
+    return _MODEL_ERROR_TEXT[_model_error_kind(exc)]
+
+
 @contextlib.contextmanager
 def _exclusive():
     """Run a save-mutating (non-streaming) op under the single generation lock,
@@ -191,7 +234,8 @@ def _stream_generation(slug: str, run):
 
     def gen():
         if not _gen_lock.acquire(blocking=False):
-            yield _sse({"t": "error", "text": "another turn is running"})
+            yield _sse({"t": "error", "code": "busy",
+                        "text": _MODEL_ERROR_TEXT["busy"]})
             return
         try:
             notes: list[str] = []
@@ -214,7 +258,10 @@ def _stream_generation(slug: str, run):
                         "turns": len(eng.store.turns()),
                         "text": final})
         except Exception as e:  # noqa: BLE001 — surface, never hang the stream
-            yield _sse({"t": "error", "text": str(e)})
+            # Classified + plain-language: the raw exception can leak absolute
+            # paths, and 'Connection error.' is meaningless to a new user.
+            yield _sse({"t": "error", "code": _model_error_kind(e),
+                        "text": _model_error_text(e)})
         finally:
             _gen_lock.release()
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -326,7 +373,14 @@ def impersonate(slug: str):
     """Draft the player's next action (ST-04). Returns text; stores nothing."""
     eng = _engine(slug)
     with _exclusive():
-        return {"text": eng.impersonate()}
+        try:
+            return {"text": eng.impersonate()}
+        except HTTPException:
+            raise
+        except Exception as e:                      # noqa: BLE001
+            # The SSE routes already turn this into a friendly frame; this one
+            # used to hand the browser a bare 500 + a server traceback.
+            raise HTTPException(502, _model_error_text(e))
 
 
 @app.post("/api/saves/{slug}/swipe")
@@ -885,12 +939,18 @@ def assist(body: dict):
     scen = str(body.get("scenario", "")).strip()
     if scen and lib.scenarios.exists(scen):
         context = _scenario_context(_scen_store(scen))
+    elif scen and templates.slugify(scen) == scen and lib.saves.exists(scen):
+        # The story editor (#edit/<save>) sends a SAVE slug here. That used to
+        # miss every branch above and run the assist context-blind.
+        context = _scenario_context(_save_store(scen))
     if not _gen_lock.acquire(blocking=False):
         raise HTTPException(409, "another generation is running")
     try:
         llm = LLM(_cfg.profile, _cfg.generation)
         result, err = assist_field(llm, kind, mode, text, context=context,
                                    improve=improve)
+    except Exception as e:                          # noqa: BLE001
+        raise HTTPException(502, _model_error_text(e))   # not a bare 500
     finally:
         _gen_lock.release()
     if err:
@@ -957,8 +1017,13 @@ def scenario_complete(slug: str, body: dict):
 @app.delete("/api/scenarios/{slug}")
 def delete_scenario(slug: str):
     _guard_slug(slug)
-    if not lib.scenarios.delete(slug):
-        raise HTTPException(404, f"no such scenario: {slug}")
+    # Under the turn lock: this rmtree's a directory that live MemoryStores hold
+    # as scenario_dir (rule inheritance + lore types resolve through it), so
+    # deleting mid-turn pulled the floor out from under a running generation.
+    with _exclusive():
+        if not lib.scenarios.delete(slug):
+            raise HTTPException(404, f"no such scenario: {slug}")
+        _engines.clear()          # drop cached engines bound to the dead world
     return {"ok": True}
 
 
@@ -1253,7 +1318,10 @@ def import_defaults(file: UploadFile = File(...)):
     files it contains; leaves others alone). Path-traversal guarded."""
     path = _stash_upload(file)
     try:
-        with zipfile.ZipFile(path) as z:
+        # Under the turn lock: this rewrites instructions/*.md, which the engine
+        # re-reads every turn — an import landing mid-generation would hand it a
+        # torn rule file.
+        with _exclusive(), zipfile.ZipFile(path) as z:
             for n in z.namelist():
                 if not _safe_zip_member(lib.instructions_dir, n):  # traversal+absolute
                     continue
@@ -1322,28 +1390,32 @@ def get_default(name: str):
 def put_default(name: str, body: dict):
     _defaultable(name)
     text = str(body.get("text", ""))
-    if _default_kind(name) == "rule":
-        (lib.instructions_dir / name).write_text(text, encoding="utf-8")
-        lib.outdated_rules = templates.seed_instructions(lib.instructions_dir)
-    else:
-        d = lib.instructions_dir / "defaults"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / name).write_text(text, encoding="utf-8")
+    # Under the turn lock: the engine re-reads the rule files EVERY turn, so a
+    # save landing mid-generation could hand it a half-written rule file.
+    with _exclusive():
+        if _default_kind(name) == "rule":
+            (lib.instructions_dir / name).write_text(text, encoding="utf-8")
+            lib.outdated_rules = templates.seed_instructions(lib.instructions_dir)
+        else:
+            d = lib.instructions_dir / "defaults"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / name).write_text(text, encoding="utf-8")
     return {"ok": True}
 
 
 @app.post("/api/defaults/{name}/revert")
 def revert_default(name: str):
     _defaultable(name)
-    if _default_kind(name) == "rule":
-        (lib.instructions_dir / name).write_text(
-            templates.default_rule(name), encoding="utf-8")
-        lib.outdated_rules = templates.seed_instructions(lib.instructions_dir)
-    else:
-        try:
-            (lib.instructions_dir / "defaults" / name).unlink()
-        except FileNotFoundError:
-            pass
+    with _exclusive():                      # same live-rule race as put_default
+        if _default_kind(name) == "rule":
+            (lib.instructions_dir / name).write_text(
+                templates.default_rule(name), encoding="utf-8")
+            lib.outdated_rules = templates.seed_instructions(lib.instructions_dir)
+        else:
+            try:
+                (lib.instructions_dir / "defaults" / name).unlink()
+            except FileNotFoundError:
+                pass
     return get_default(name)
 
 
@@ -1456,7 +1528,11 @@ def get_settings():
 
 @app.put("/api/settings")
 def put_settings(body: dict):
-    raw = _cfg.raw
+    # Build against a COPY: a later validation failure (e.g. hosted mode with no
+    # model) used to abort with 400 after already mutating the live config, so
+    # the running process reported a temperature/sampler that was never written
+    # to disk and silently reverted on restart.
+    raw = copy.deepcopy(_cfg.raw)
     mode = body.get("mode") if body.get("mode") in ("local", "hosted") \
         else "local"
     if "quick_actions" in body:                 # ST-30 global quick actions
