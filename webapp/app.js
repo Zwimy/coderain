@@ -18,6 +18,60 @@ function renderProse(text) {
   return h;
 }
 
+/* Chip / bubble input. Tags and card links used to be raw comma text; this shows
+   them as removable bubbles with an autocomplete of values already used elsewhere
+   (a trait made on one card is offered on every other card). `suggestions` may be
+   plain strings (traits) or {label, value} pairs (links: show the title, store
+   the slug). Returns { get } -> the current values. */
+function chipInput(host, opts = {}) {
+  const values = (opts.value || []).slice();
+  const sugg = (opts.suggestions || []).map(
+    s => (typeof s === "string" ? {label: s, value: s} : s));
+  const listId = "dl-" + Math.random().toString(36).slice(2, 8);
+  const labelOf = v => (sugg.find(s => s.value === v) || {}).label || v;
+  const add = raw => {
+    const t = raw.trim();
+    if (!t) return;
+    const m = sugg.find(s => s.label.toLowerCase() === t.toLowerCase()
+                             || s.value.toLowerCase() === t.toLowerCase());
+    const val = m ? m.value : t;
+    if (!values.includes(val)) values.push(val);
+    render();
+  };
+  const render = () => {
+    host.className = "chips";
+    host.innerHTML = values.map((v, i) =>
+      `<span class="chip-tag">${esc(labelOf(v))}` +
+      `<button type="button" data-i="${i}" aria-label="remove">×</button></span>`
+    ).join("") +
+      `<input class="chip-in" list="${listId}" ` +
+      `placeholder="${esc(opts.placeholder || "add…")}">` +
+      `<datalist id="${listId}">` +
+      sugg.map(s => `<option value="${esc(s.label)}">`).join("") + "</datalist>";
+    host.querySelectorAll(".chip-tag button").forEach(b =>
+      b.addEventListener("click", () => {
+        values.splice(Number(b.dataset.i), 1); render();
+        host.querySelector(".chip-in").focus();
+      }));
+    const inp = host.querySelector(".chip-in");
+    inp.addEventListener("keydown", ev => {
+      if ((ev.key === "Enter" || ev.key === ",") && inp.value.trim()) {
+        ev.preventDefault(); add(inp.value); inp.value = "";
+        host.querySelector(".chip-in").focus();
+      } else if (ev.key === "Backspace" && !inp.value && values.length) {
+        values.pop(); render(); host.querySelector(".chip-in").focus();
+      }
+    });
+    // datalist pick fires 'change'
+    inp.addEventListener("change", () => {
+      if (inp.value.trim()) { add(inp.value); inp.value = "";
+        host.querySelector(".chip-in").focus(); }
+    });
+  };
+  render();
+  return {get: () => values.slice()};
+}
+
 async function api(path, opts = {}) {
   const r = await fetch(path, {
     headers: {"Content-Type": "application/json"},
@@ -918,13 +972,22 @@ async function renderBuilder(slug, scope = "scenario") {
   view.querySelectorAll("[data-improve]").forEach(b => b.addEventListener(
     "click", () => assist(b.dataset.improve, "improve")));
 
+  // World vocabulary for the chip autocompletes: every card (title+slug) and
+  // every trait already used anywhere in this world.
+  const allPieces = Object.values(w.pieces).flat();
+  const vocab = {
+    entities: allPieces.map(p => ({title: p.title, slug: p.slug})),
+    traits: [...new Set(allPieces.flatMap(p =>
+      String((p.attrs && p.attrs.traits) || "").split(",")
+        .map(s => s.trim()).filter(Boolean)))].sort(),
+  };
   view.querySelectorAll("[data-newpiece]").forEach(b => b.addEventListener(
-    "click", () => pieceModal(slug, b.dataset.newpiece, null, null, base)));
+    "click", () => pieceModal(slug, b.dataset.newpiece, null, null, base, vocab)));
   view.querySelectorAll("[data-piece]").forEach(b => b.addEventListener(
     "click", () => {
       const [rel, pslug] = b.dataset.piece.split("|");
       const p = w.pieces[rel].find(x => x.slug === pslug);
-      pieceModal(slug, rel, p, null, base);
+      pieceModal(slug, rel, p, null, base, vocab);
     }));
 
   view.querySelectorAll("[data-fromlib]").forEach(b => b.addEventListener(
@@ -1032,8 +1095,9 @@ async function renderBuilder(slug, scope = "scenario") {
 
 /* piece editor modal — shared by the builder (writes to the world) and the
    Library page (lib = {id, type}: writes to /api/library instead) */
-function pieceModal(slug, rel, piece, lib = null, base = null) {
+function pieceModal(slug, rel, piece, lib = null, base = null, vocab = null) {
   base = base || `/api/scenarios/${slug}`;
+  vocab = vocab || {traits: [], entities: []};
   const kind = PIECE_KIND(rel);
   const a = (piece && piece.attrs) || {};
   const isChar = rel === "characters.md";
@@ -1064,6 +1128,8 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
       <div><label>Aliases (comma)</label>
         <input id="p-aliases" value="${esc((piece && piece.aliases || []).join(", "))}"></div>
     </div>
+    <label>Traits / tags</label>
+    <div id="p-traits-chips"></div>
     <label>Triggers (extra activation keywords, comma)</label>
     <input id="p-triggers" value="${esc(a.triggers || "")}">
     <div class="row">
@@ -1115,9 +1181,9 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
         <div><label>Blocked by (comma)</label>
           <input id="p-triggers-not" value="${esc(a.triggers_not || "")}"></div>
       </div>
-      <div class="row">
-        <div><label>Links (slugs, comma)</label>
-          <input id="p-links" value="${esc(a.links || "")}"></div>
+      <div>
+        <label>Linked cards (connect to other characters, places, factions…)</label>
+        <div id="p-links-chips"></div>
       </div>
       <div class="row">
         ${check("p-semantic", "Semantic match (meaning, not just keywords)",
@@ -1135,6 +1201,20 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
       <button class="primary" id="p-save">Save piece</button>
     </div>`);
 
+  const csv = s => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
+  // Traits autocomplete from every trait already used in this world; links
+  // autocomplete from every card in the world (show title, store slug), and this
+  // card is excluded so it can't link to itself.
+  const selfSlug = piece ? piece.slug : "";
+  const traitChips = chipInput($("#p-traits-chips"), {
+    value: csv(a.traits), suggestions: vocab.traits,
+    placeholder: "brave, merchant, undead…"});
+  const linkChips = chipInput($("#p-links-chips"), {
+    value: csv(a.links),
+    suggestions: (vocab.entities || []).filter(e => e.slug !== selfSlug)
+      .map(e => ({label: e.title, value: e.slug})),
+    placeholder: "link a character, place, faction…"});
+
   const collect = () => {
     const adv = id => ($("#" + id) ? $("#" + id).value.trim() : "");
     const attrs = {
@@ -1151,7 +1231,8 @@ function pieceModal(slug, rel, piece, lib = null, base = null) {
       cooldown: adv("p-cooldown"),
       triggers_all: adv("p-triggers-all"),
       triggers_not: adv("p-triggers-not"),
-      links: adv("p-links"),
+      traits: traitChips.get().join(", "),
+      links: linkChips.get().join(", "),
       semantic: $("#p-semantic") && $("#p-semantic").checked ? "true" : "",
       recurse: $("#p-recurse") && $("#p-recurse").checked ? "true" : "",
     };
