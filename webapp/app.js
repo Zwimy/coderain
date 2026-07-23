@@ -784,6 +784,9 @@ async function renderBuilder(slug, scope = "scenario") {
       </label>
       <button class="primary" id="b-save">${isSave ? "Save changes"
         : "Save world"}</button>
+      ${isSave ? "" : '<button id="b-tolib" title="copy every character, '
+        + 'location, item &amp; faction here into your reusable Pieces library"'
+        + '>Add all to library</button>'}
     </div>
     ${isSave ? `<p class="muted">These are THIS story's own live files — edits
       apply from your next turn. They started as copies of the world and have
@@ -865,6 +868,17 @@ async function renderBuilder(slug, scope = "scenario") {
     setTimeout(() => {
       if ($("#b-save")) $("#b-save").textContent = label;
     }, 1500);
+  });
+  const tolib = $("#b-tolib");
+  if (tolib) tolib.addEventListener("click", async () => {
+    await guard(saveMain, "Couldn't save first");   // mirror the saved state
+    const out = await guard(
+      () => api(`/api/scenarios/${slug}/to-library`, {method: "POST"}),
+      "Couldn't add to the library");
+    if (!out) return;
+    const a = out.added || {};
+    toast(`Added ${a.characters || 0} characters + ${a.pieces || 0} pieces to your `
+          + "library.", "ok");
   });
 
   const FIELD_KIND = {"b-premise": "premise", "b-intro": "introduction",

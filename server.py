@@ -1066,8 +1066,14 @@ def scenario_complete(slug: str, body: dict):
             if "error" in result:
                 yield _sse({"t": "error", "text": result["error"]})
             else:
-                yield _sse({"t": "done", "slug": slug,
-                            "events": result.get("warnings", [])})
+                # Everything the AI just made also becomes a reusable library
+                # piece (the play-test ask: "add everything to pieces as well").
+                added = _mirror_scenario_to_library(slug)
+                warns = list(result.get("warnings", []))
+                if added["characters"] or added["pieces"]:
+                    warns.append(f"added {added['characters']} characters + "
+                                 f"{added['pieces']} pieces to your library")
+                yield _sse({"t": "done", "slug": slug, "events": warns})
         finally:
             _gen_lock.release()
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -1112,6 +1118,53 @@ def character_save_entry(body: dict):
 def _kind_to_rel(kind: str) -> str:
     info = PIECE_KINDS.get(kind)
     return info[3] if info else templates.slugify(kind) + ".md"
+
+
+_REL_TO_KIND = {info[3]: kind for kind, info in PIECE_KINDS.items()}
+
+
+def _rel_to_kind(rel: str) -> str:
+    return _REL_TO_KIND.get(rel, rel.removesuffix(".md"))
+
+
+def _mirror_scenario_to_library(slug: str) -> dict:
+    """Copy a world's pieces into the reusable Pieces library so a whole world's
+    cast/lore becomes reusable in one step. Idempotent: dedupes generic pieces by
+    (type, slug) and characters by name, so re-running (or auto-mirror on each
+    generation) never duplicates."""
+    store = _scen_store(slug)
+    added = {"characters": 0, "pieces": 0}
+    have_pieces = {(p.get("type"), (p.get("entry") or {}).get("slug"))
+                   for p in pieces_lib.list()}
+    have_chars = {str(c.get("name", "")).strip().lower()
+                  for c in characters.list()}
+    for rel in _piece_files(store):
+        kind = _rel_to_kind(rel)
+        for e in store.entries(rel):
+            if rel == "characters.md":
+                nm = e.title.strip().lower()
+                if not nm or nm in have_chars:
+                    continue
+                characters.save(character_from_entry(e))
+                have_chars.add(nm)
+                added["characters"] += 1
+            else:
+                key = (kind, e.slug)
+                if key in have_pieces:
+                    continue
+                pieces_lib.save(kind, {
+                    "title": e.title, "slug": e.slug, "aliases": e.aliases,
+                    "importance": e.importance, "attrs": e.attrs, "body": e.body})
+                have_pieces.add(key)
+                added["pieces"] += 1
+    return added
+
+
+@app.post("/api/scenarios/{slug}/to-library")
+def scenario_to_library(slug: str):
+    """Add every piece in this world to the reusable Pieces library."""
+    _guard_slug(slug)
+    return {"ok": True, "added": _mirror_scenario_to_library(slug)}
 
 
 @app.get("/api/library")
