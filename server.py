@@ -66,6 +66,11 @@ _engines: dict[str, Engine] = {}
 # The local GPU (and most single-key plans) can't run turns in parallel —
 # one generation at a time, app-wide.
 _gen_lock = threading.Lock()
+# Cooperative cancel for the Stop button. Only one generation runs at a time
+# (the lock), so a single flag is enough. The stream pump checks it between
+# chunks/stages and bails; closing the inner generator then runs turn()'s
+# cleanup, so a stopped turn leaves no orphan behind.
+_cancel = threading.Event()
 
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -236,10 +241,18 @@ def _stream_generation(slug: str, run):
             yield _sse({"t": "error", "code": "busy",
                         "text": _MODEL_ERROR_TEXT["busy"]})
             return
+        _cancel.clear()
+        it = None
         try:
             notes: list[str] = []
             it = run(eng, notes)
             for piece in it:
+                if _cancel.is_set():
+                    # Stop pressed: bail before folding. The finally closes `it`,
+                    # which runs turn()'s cleanup so no orphan turn is left.
+                    yield _sse({"t": "error", "code": "aborted",
+                                "text": "Stopped."})
+                    return
                 while notes:
                     yield _sse({"t": "stage", "text": notes.pop(0)})
                 if piece:
@@ -262,6 +275,10 @@ def _stream_generation(slug: str, run):
             yield _sse({"t": "error", "code": _model_error_kind(e),
                         "text": _model_error_text(e)})
         finally:
+            # Deterministically run the inner generator's cleanup (drop an orphan
+            # player turn) rather than waiting for GC, then always free the lock.
+            if it is not None:
+                it.close()
             _gen_lock.release()
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
@@ -424,6 +441,16 @@ def swipe_gen(slug: str):
     """Generate a NEW narrator alternate and select it (ST-02)."""
     return _stream_generation(
         slug, lambda eng, notes: eng.swipe_generate(on_stage=notes.append))
+
+
+@app.post("/api/saves/{slug}/cancel")
+def cancel_generation(slug: str):
+    """Stop the in-flight turn. Sets the cooperative flag the stream pump checks
+    between chunks; the turn then unwinds and its player action is cleaned up.
+    (A non-streaming planner stage finishes first — cancel lands at the next
+    chunk boundary.)"""
+    _cancel.set()
+    return {"ok": True}
 
 
 @app.post("/api/saves/{slug}/undo")

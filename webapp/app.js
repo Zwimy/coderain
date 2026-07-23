@@ -1493,6 +1493,7 @@ async function renderPlay(slug) {
     }, 1000);
     aborter = new AbortController();
     $("#stop").classList.remove("hidden");
+    $("#stop").disabled = false;      // was disabled after a prior Stop click
 
     const optimistic = playerText !== undefined ? addTurn("player", playerText) : null;
     const live = addTurn("narrator", "");
@@ -1548,7 +1549,13 @@ async function renderPlay(slug) {
   };
 
   $("#stop").addEventListener("click", () => {
-    if (aborter) { aborter.abort(); toast("Stopping…", "info"); }
+    toast("Stopping…", "info");
+    $("#stop").disabled = true;
+    // Cooperative cancel: the server sends a clean 'aborted' frame and drops the
+    // half-written turn itself. Aborting the fetch instead would race that
+    // cleanup and could leave the DOM out of step with the file. The stream
+    // closes on its own once the server bails, and run()'s error path resyncs.
+    api(`/api/saves/${slug}/cancel`, {method: "POST"}).catch(() => {});
   });
 
   s.turns.forEach(t => addTurn(t.role, t.text));
@@ -1675,15 +1682,19 @@ async function renderPlay(slug) {
     const out = await guard(() => api(`/api/saves/${slug}/undo`, {method: "POST"}),
                             "Couldn't undo");
     if (out && out.ok) {
-      while (transcript.children.length > out.turns)
-        transcript.lastChild.remove();
+      // Repaint from the server, not by counting DOM children — an error card is
+      // also a child, so the old count-based removal could drop a real turn or
+      // leave a stale one.
+      await resync();
       setSheet(out.sheet || []);
       setEvents(["undone — try a different action"]);
+    } else if (out) {
+      toast("Nothing to undo yet.");
     }
   });
   $("#retry").addEventListener("click", async () => {
     if (busy) return;
-    if (!transcript.children.length) return;
+    if (!store_turn_count()) return;
     // Do NOT prune the DOM up front: if the server's rollback never happens
     // (409, model down) the transcript would be two turns shorter than the
     // store, and turn indices come from DOM position — a later edit would
@@ -1691,8 +1702,14 @@ async function renderPlay(slug) {
     await run(`/api/saves/${slug}/retry`);
     await resync();
   });
+  // The true turn count lives on the server; .turn divs in the DOM can be out of
+  // step with it (error cards, mid-stream nodes), so ask rather than count.
+  const store_turn_count = () =>
+    transcript.querySelectorAll(".turn").length;
   $("#branch").addEventListener("click", async () => {
-    const total = transcript.children.length;
+    const info = await guard(() => api(`/api/saves/${slug}`), "Couldn't read the story");
+    if (!info) return;
+    const total = (info.turns || []).length;
     const n = await promptModal("Branch this story", {
       placeholder: `1 – ${total}`, okLabel: "Branch",
       hint: `Copies the story and rewinds it to that turn. It has ${total} so far.`});
