@@ -317,6 +317,16 @@ def create_save(body: dict):
                       if e.slug == pslug), None)
         if entry is not None:
             apply_playable_entry(store, entry)
+    # Create-your-own player character: an inline name/description writes the
+    # save's player.md, so a brand-new world (whose generated cast is all NPCs)
+    # still lets you BE someone specific.
+    pname = str(body.get("player_name", "")).strip()
+    pdesc = str(body.get("player_desc", "")).strip()
+    if pname or pdesc:
+        store = lib.saves.store(slug)
+        store.upsert_entry("player.md", Entry(
+            title=pname or "You", slug="player", importance=5,
+            body=pdesc or ""))
     return {"slug": slug}
 
 

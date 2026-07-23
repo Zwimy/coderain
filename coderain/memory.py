@@ -1234,6 +1234,13 @@ class MemoryStore:
         player = self.entries("player.md")
         if player:
             sections.append((0, "You", "\n\n".join(e.render() for e in player)))
+        else:
+            # Robustness: if the user wrote player.md as freeform prose without a
+            # "## You {#player}" entry heading, it still MUST reach the model —
+            # otherwise it silently vanishes ("the AI ignored my player.md").
+            raw_player = _strip_h1(self.read("player.md"))
+            if raw_player:
+                sections.append((0, "You", raw_player))
         clock = self.clock_str()
         loc = self.world_state().get("player", {}).get("location", "")
         if clock or loc:

@@ -524,6 +524,13 @@ function newSaveModal(data, preselect) {
     </div>
     <label>Play as</label>
     <select id="ns-char"></select>
+    <div id="ns-newchar" class="hidden" style="margin-top:8px">
+      <label>Your character's name</label>
+      <input id="ns-pname" placeholder="e.g. Mara Vane">
+      <label>Who you are (a short description)</label>
+      <textarea id="ns-pdesc" rows="3"
+        placeholder="A wandering hedge-witch with a debt to a dangerous patron…"></textarea>
+    </div>
     <details class="howto" style="margin-top:14px">
       <summary>Starting day &amp; time (optional)</summary>
       <p class="muted">Not every story begins on Day 1 at dawn. Set where the
@@ -566,7 +573,13 @@ function newSaveModal(data, preselect) {
         .map(c => `<option value="c:${esc(c.id)}">${esc(c.name)}</option>`)
         .join("");
     }
-    sel.innerHTML = '<option value="">(let the story decide)</option>' + opts;
+    sel.innerHTML = '<option value="">(let the story decide)</option>' + opts
+      + '<option value="new">＋ Create my own character…</option>';
+    toggleNewChar();
+  };
+  const toggleNewChar = () => {
+    const box = $("#ns-newchar");
+    if (box) box.classList.toggle("hidden", $("#ns-char").value !== "new");
   };
   $("#ns-mode").addEventListener("click", ev => {
     if (!ev.target.dataset.v) return;
@@ -581,6 +594,7 @@ function newSaveModal(data, preselect) {
     fillPlayAs();
   });
   fillPlayAs();
+  $("#ns-char").addEventListener("change", toggleNewChar);
   $("#ns-cancel").addEventListener("click", closeModal);
   $("#ns-go").addEventListener("click", async () => {
     const pick = $("#ns-char").value;
@@ -591,6 +605,8 @@ function newSaveModal(data, preselect) {
       mode,
       character: pick.startsWith("c:") ? pick.slice(2) : "",
       playable: pick.startsWith("p:") ? pick.slice(2) : "",
+      player_name: pick === "new" ? $("#ns-pname").value.trim() : "",
+      player_desc: pick === "new" ? $("#ns-pdesc").value.trim() : "",
       start_time: {
         day: Number($("#ns-day").value) || 1,
         phase: $("#ns-phase").value.trim(),
