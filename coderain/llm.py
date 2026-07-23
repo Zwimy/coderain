@@ -77,11 +77,11 @@ class LLM:
         return "".join(self.stream(messages, **overrides))
 
     def complete_with_tools(self, messages: list[dict], tools: list[dict],
-                            dispatch, max_rounds: int = 4) -> str:
+                            dispatch, max_rounds: int = 4, **overrides) -> str:
         """Run a tool-calling loop: let the model call tools (via `dispatch`) until
         it produces a final answer. Used for the optional memory-lookup tool on
         capable/hosted models. Not streamed."""
-        params = self._params()
+        params = self._params(**overrides)
         convo = list(messages)
         for _ in range(max_rounds):
             resp = self.client.chat.completions.create(

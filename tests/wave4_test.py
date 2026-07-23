@@ -105,7 +105,7 @@ cfg3.generation["response_length"] = "short"
 eng3 = Engine(cfg3, store2)
 msgs = eng3._messages([], "hello")
 assert "STYLE DIRECTIVES" in msgs[0]["content"]
-assert "TIGHT" in msgs[0]["content"]
+assert "keep it short" in msgs[0]["content"]     # response_length: short directive
 store2.write("custom-instructions.md",
              store2.read("custom-instructions.md") + "\nAlways address the "
              "player as 'Detective'.\n")

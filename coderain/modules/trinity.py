@@ -279,9 +279,11 @@ class TrinityBrain:
         # yield ZERO prose (caught live on qwen3:4b at max_tokens 2500).
         overrides = {}
         if hasattr(self.writer_llm, "gen"):
-            overrides["max_tokens"] = max(
-                PROSE_MIN_TOKENS,
-                int(self.writer_llm.gen.get("max_tokens", 0) or 0))
+            # response_length caps the writer's output ("short" must actually be
+            # short). A minimum floor still keeps a reasoning writer from spending
+            # its whole budget on thinking and yielding zero prose.
+            from ..config import reply_tokens
+            overrides["max_tokens"] = max(1024, reply_tokens(self.writer_llm.gen))
         # The writer is told not to emit a sidecar; strip one defensively anyway so a
         # stray block never leaks into the prose. Mechanics come from the Director.
         raw = self.writer_llm.stream(writer_msgs, **overrides)

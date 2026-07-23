@@ -2167,10 +2167,14 @@ async function renderSettings() {
           <select id="lm-keeper">
             <option value="" ${!st.local.lorekeeper ? "selected" : ""}>(none — skip it)</option>
             ${localOpts(st.local.lorekeeper)}</select></div>
-        <div><label>Context tokens</label>
+        <div><label title="How much the model can READ at once (its window)."
+          >Context window</label>
           <input id="lm-ctx" type="number" step="1024"
             value="${esc(st.local.context_tokens)}"></div>
       </div>
+      <p class="muted">Context window = how much the model can read at once (set
+        it to the model's real window). Reply length is set under Storytelling,
+        not here.</p>
       <p class="muted">Installed via Ollama: ${local.installed.map(m =>
         `${esc(m.name)} (${esc(m.size)})`).join(", ") || "none detected"}.
       Suggested pulls: ${local.suggestions.map(s =>
@@ -2189,7 +2193,8 @@ async function renderSettings() {
       <div class="row">
         <div><label>Model id</label>
           <input id="hm-model" value="${esc(st.hosted.model)}"></div>
-        <div><label>Context tokens</label>
+        <div><label title="The model's context window — how much it can read.">
+          Context window</label>
           <input id="hm-ctx" type="number" step="1024"
             value="${esc(st.hosted.context_tokens)}"></div>
       </div>
@@ -2264,8 +2269,14 @@ async function renderSettings() {
             <input id="mm-msize" type="number" min="1" max="100"
               value="${esc(st.memory.medium_fold_size)}"></div>
         </div>
-        <label>Context budget (tokens, or "auto" to fill the model's window)</label>
+        <label>Memory budget — how many tokens of story + memory to send each
+          turn</label>
         <input id="mm-budget" value="${esc(st.memory.context_budget_tokens)}">
+        <p class="muted">This is the main cost lever. A smaller number = cheaper,
+          faster turns that lean more on summaries; larger = more raw detail in
+          context. <b>"auto" fills the model's whole window every turn</b> — on a
+          big-context model that gets very expensive, so a fixed number
+          (8000–16000) is usually better.</p>
       </details>
     </div>
 
@@ -2297,10 +2308,13 @@ async function renderSettings() {
         <div><label>Top-p</label>
           <input id="gc-topp" type="number" step="0.05" min="0" max="1"
             value="${st.generation.top_p ?? 0.95}"></div>
-        <div><label>Max tokens</label>
+        <div><label title="Only used on 'medium' length; short/long set their own.">
+          Max reply tokens (medium)</label>
           <input id="gc-max" type="number" step="50" min="1"
             value="${st.generation.max_tokens ?? 2500}"></div>
       </div>
+      <p class="muted">Reply length is normally set by the Response length buttons
+        above; this caps the "medium" setting only.</p>
       <details><summary class="muted">Advanced samplers (blank = model default)</summary>
         <div class="row">
           <div><label>Frequency penalty</label>
