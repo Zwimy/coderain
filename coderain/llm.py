@@ -77,7 +77,7 @@ class LLM:
         return "".join(self.stream(messages, **overrides))
 
     def complete_with_tools(self, messages: list[dict], tools: list[dict],
-                            dispatch, max_rounds: int = 4, **overrides) -> str:
+                            dispatch, max_rounds: int = 3, **overrides) -> str:
         """Run a tool-calling loop: let the model call tools (via `dispatch`) until
         it produces a final answer. Used for the optional memory-lookup tool on
         capable/hosted models. Not streamed."""

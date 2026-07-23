@@ -2213,6 +2213,16 @@ async function renderSettings() {
 
     <div class="setting-panel">
       <h2>Storytelling</h2>
+      <label>Cost vs quality</label>
+      <div class="seg" id="cost-seg">
+        <button data-v="economy" type="button">Economy</button>
+        <button data-v="balanced" type="button">Balanced</button>
+        <button data-v="quality" type="button">Quality</button>
+      </div>
+      <p class="muted">The biggest lever on token cost. <b>Economy</b> = one model
+        call per turn. <b>Quality</b> = a planner and continuity check run before
+        the writer — better consistency, but roughly 2–3× the tokens per turn.
+        (Sets the toggles below; press Save &amp; apply.)</p>
       <label>Response length</label>
       <div class="seg" id="len-seg">
         ${["short", "medium", "long"].map(v => `<button data-v="${v}"
@@ -2367,6 +2377,35 @@ async function renderSettings() {
     length = ev.target.dataset.v;
     $("#len-seg").querySelectorAll("button").forEach(b =>
       b.classList.toggle("on", b.dataset.v === length));
+  });
+  // Cost preset: sets the underlying toggles (quad / memory tool / budget). It
+  // doesn't save on its own — the user still presses Save & apply.
+  const COST = {
+    economy:  {trinity: false, memtool: false, budget: 6000},
+    balanced: {trinity: false, memtool: false, budget: 8000},
+    quality:  {trinity: true,  memtool: false, budget: 12000},
+  };
+  const markCost = v => $("#cost-seg").querySelectorAll("button")
+    .forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  // Reflect the current settings as the active preset (or none if custom).
+  (() => {
+    const cur = {trinity: $("#gc-trinity").checked,
+                 memtool: $("#gc-memtool").checked,
+                 budget: Number($("#mm-budget").value) || 0};
+    const hit = Object.keys(COST).find(k =>
+      COST[k].trinity === cur.trinity && COST[k].memtool === cur.memtool
+      && COST[k].budget === cur.budget);
+    if (hit) markCost(hit);
+  })();
+  $("#cost-seg").addEventListener("click", ev => {
+    const v = ev.target.dataset.v;
+    if (!v || !COST[v]) return;
+    $("#gc-trinity").checked = COST[v].trinity;
+    $("#gc-memtool").checked = COST[v].memtool;
+    $("#mm-budget").value = COST[v].budget;
+    markCost(v);
+    toast(`${v[0].toUpperCase() + v.slice(1)} preset set — press Save & apply.`,
+          "info");
   });
   // Motion is a local preference, not server config — applied instantly so the
   // effect is obvious, and it satisfies WCAG 2.2.2's stop requirement.
