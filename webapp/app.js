@@ -2451,6 +2451,12 @@ async function renderSettings() {
         and writes a new one as each completes, steering the arc. It's not a
         per-turn brain — it only plans at the memory-fold cadence. See the
         <b>Plan</b> button while playing. Off = no outline.</p>
+      <label>Chapters planned ahead</label>
+      <input type="number" id="gc-horizon" min="2" max="8" step="1"
+        value="${st.generation.chapter_horizon || 4}" style="width:80px">
+      <p class="muted">How many chapters the plan keeps ahead of you (default 4,
+        range 2–8). Higher = a longer plotted arc, but a little more planning work
+        when a chapter completes.</p>
       <label>Response length</label>
       <div class="seg" id="len-seg">
         ${["short", "medium", "long"].map(v => `<button data-v="${v}"
@@ -2700,6 +2706,7 @@ async function renderSettings() {
         use_memory_tool: $("#gc-memtool").checked,
         ai_acts_as_player: $("#gc-agency").checked,
         chapter_outline: $("#gc-outline").checked,
+        chapter_horizon: $("#gc-horizon").value,
         start_reply_with: $("#gc-prefix").value,
         stop: $("#gc-stop").value,
         temperature: $("#gc-temp").value,

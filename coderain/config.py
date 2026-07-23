@@ -56,6 +56,7 @@ generation:
   response_length: medium
   ai_acts_as_player: false
   chapter_outline: true
+  chapter_horizon: 4
 memory:
   short_term_turns: 12
   medium_fold_after: 12
