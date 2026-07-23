@@ -1808,6 +1808,7 @@ def get_settings():
                 bool(_cfg.generation.get("ai_acts_as_player", False)),
             "chapter_outline":
                 bool(_cfg.generation.get("chapter_outline", True)),
+            "chapter_horizon": int(_cfg.generation.get("chapter_horizon", 4)),
             "start_reply_with": _cfg.generation.get("start_reply_with", ""),
             "stop": _cfg.generation.get("stop", []),
             "temperature": _cfg.generation.get("temperature", 0.9),
@@ -1865,6 +1866,11 @@ def put_settings(body: dict):
         raw["generation"]["ai_acts_as_player"] = bool(gen["ai_acts_as_player"])
     if "chapter_outline" in gen:
         raw["generation"]["chapter_outline"] = bool(gen["chapter_outline"])
+    if "chapter_horizon" in gen and gen["chapter_horizon"] not in (None, ""):
+        try:
+            raw["generation"]["chapter_horizon"] = max(2, min(8, int(gen["chapter_horizon"])))
+        except (TypeError, ValueError):
+            pass
 
     # Memory depth / budget — was config-file-only, so a web user could not trade
     # history depth against context budget.
