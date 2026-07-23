@@ -58,7 +58,7 @@ class QuadStub:
                                                      "weather": "cold mist"}}},
         })
 
-    def complete_with_tools(self, messages, tools, dispatch, max_rounds=4):  # Lore-keeper
+    def complete_with_tools(self, messages, tools, dispatch, max_rounds=4, **k):  # Lore-keeper
         assert "LORE-KEEPER" in messages[0]["content"]
         assert any(t["function"]["name"] == "recall_turns" for t in tools)
         self.stages.append("lore")

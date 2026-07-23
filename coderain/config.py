@@ -196,6 +196,25 @@ def context_budget(config: Config) -> int:
         return 8000
 
 
+# response_length is the primary length control. It used to only add a soft
+# prompt hint (which strong hosted models happily ignore) while max_tokens stayed
+# at 2500 for every setting, so "short" had no teeth. It now also caps the OUTPUT
+# tokens. The caps stay generous enough that a thinking model isn't starved of
+# prose (reasoning + reply share this budget); "medium" honors the user's own
+# max_tokens so the advanced sampler still means something.
+def reply_tokens(generation: dict | None) -> int:
+    g = generation or {}
+    length = str(g.get("response_length", "medium")).lower()
+    if length == "short":
+        return 1200
+    if length == "long":
+        return 4096
+    try:
+        return max(256, int(g.get("max_tokens", 2500) or 2500))
+    except (TypeError, ValueError):
+        return 2500
+
+
 def _atomic_write(path: Path, text: str) -> None:
     """Write via a temp file + os.replace so a crash or a full disk can never
     leave a half-written config behind (MemoryStore.write does the same). A torn

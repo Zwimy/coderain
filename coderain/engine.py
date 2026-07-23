@@ -14,6 +14,7 @@ from typing import Iterator
 from . import features
 from . import sidecar as sidecar_mod
 from . import validator as validator_mod
+from . import config as config
 from .config import Config, context_budget
 from .llm import LLM
 from .memory import Entry, MemoryStore, safe_output_regex
@@ -183,10 +184,11 @@ class Engine:
         parts = []
         length = str(self.cfg.generation.get("response_length", "medium")).lower()
         if length == "short":
-            parts.append("Keep narration TIGHT: 1-2 short paragraphs per turn.")
+            parts.append("LENGTH: keep it short — 1-2 short paragraphs, then stop "
+                         "and hand control back. Do not pad or over-describe.")
         elif length == "long":
-            parts.append("Write fuller scenes: 4-6 paragraphs; linger on detail, "
-                         "dialogue, and atmosphere.")
+            parts.append("LENGTH: write a fuller scene — 4-6 paragraphs; linger on "
+                         "detail, dialogue, and atmosphere.")
         custom = self.store.custom_instructions()
         if custom:
             custom = self._expand_authored(custom)   # ST-20 macros in the note too
@@ -545,7 +547,9 @@ class Engine:
                             *messages[1:]]
             chunks: list[str] = []
             hidden: list[str] = []
-            stream = self.llm.stream(messages)
+            # response_length is a HARD output cap here, not just a prompt hint.
+            stream = self.llm.stream(
+                messages, max_tokens=config.reply_tokens(self.cfg.generation))
             # Filter in EVERY mode (see the tool path above): never leak a
             # ```rpg block, and keep the world/lore delta channel open.
             stream = sidecar_mod.filter_sidecar(stream, hidden)
@@ -720,7 +724,8 @@ class Engine:
 
     def _generate_with_tool(self, messages) -> str:
         return self.llm.complete_with_tools(
-            messages, LOOKUP_TOOL, self._dispatch_tool).strip()
+            messages, LOOKUP_TOOL, self._dispatch_tool,
+            max_tokens=config.reply_tokens(self.cfg.generation)).strip()
 
     def _dispatch_tool(self, name, args):
         """Resolve a memory tool call (shared by the lookup path and Trinity's

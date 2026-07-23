@@ -107,7 +107,7 @@ cfg.generation["trinity_brain"] = False
 eng = Engine(cfg, store)
 eng.use_tool = True
 class ToolLLM:
-    def complete_with_tools(self, messages, tools, dispatch, max_rounds=4):
+    def complete_with_tools(self, messages, tools, dispatch, max_rounds=4, **k):
         assert tools[0]["function"]["name"] == "lookup_memory"
         res = dispatch("lookup_memory", {"query": "kaelen"})
         return f"FINAL[knew_kaelen={'Kaelen' in res}]"
