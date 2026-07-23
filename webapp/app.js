@@ -2223,6 +2223,14 @@ async function renderSettings() {
         call per turn. <b>Quality</b> = a planner and continuity check run before
         the writer — better consistency, but roughly 2–3× the tokens per turn.
         (Sets the toggles below; press Save &amp; apply.)</p>
+      <label style="margin-top:14px">
+        <input type="checkbox" id="gc-agency"
+          ${st.generation.ai_acts_as_player ? "checked" : ""}>
+        Let the AI speak &amp; act as my character
+      </label>
+      <p class="muted">Off (default) = the AI only plays the world and other
+        characters and hands control back to you; it won't decide or speak for
+        you. Turn it on if you want it to move your character along.</p>
       <label>Response length</label>
       <div class="seg" id="len-seg">
         ${["short", "medium", "long"].map(v => `<button data-v="${v}"
@@ -2470,6 +2478,7 @@ async function renderSettings() {
         response_length: length,
         trinity_brain: $("#gc-trinity").checked,
         use_memory_tool: $("#gc-memtool").checked,
+        ai_acts_as_player: $("#gc-agency").checked,
         start_reply_with: $("#gc-prefix").value,
         stop: $("#gc-stop").value,
         temperature: $("#gc-temp").value,

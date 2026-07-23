@@ -1634,6 +1634,8 @@ def get_settings():
                 _cfg.generation.get("response_length", "medium"),
             "trinity_brain": bool(_cfg.generation.get("trinity_brain", True)),
             "use_memory_tool": bool(_cfg.generation.get("use_memory_tool", False)),
+            "ai_acts_as_player":
+                bool(_cfg.generation.get("ai_acts_as_player", False)),
             "start_reply_with": _cfg.generation.get("start_reply_with", ""),
             "stop": _cfg.generation.get("stop", []),
             "temperature": _cfg.generation.get("temperature", 0.9),
@@ -1687,6 +1689,8 @@ def put_settings(body: dict):
         raw["generation"]["trinity_brain"] = bool(gen["trinity_brain"])
     if "use_memory_tool" in gen:
         raw["generation"]["use_memory_tool"] = bool(gen["use_memory_tool"])
+    if "ai_acts_as_player" in gen:
+        raw["generation"]["ai_acts_as_player"] = bool(gen["ai_acts_as_player"])
 
     # Memory depth / budget — was config-file-only, so a web user could not trade
     # history depth against context budget.
