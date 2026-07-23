@@ -536,12 +536,19 @@ def apply_world(store, env: dict) -> list[str]:
 
     loc = d.get("location")
     if loc:
+        # Normalize to a known location's canonical title when it matches one, so
+        # "the tavern" / "blackwood tavern" both resolve to "Blackwood Tavern" —
+        # a stable value that assemble() can force-activate into next turn's
+        # context (the place you're in stays in play). Unknown names pass through.
+        matched = store.resolve_location(str(loc))
+        loc = matched.title if matched is not None else loc
         player = state.setdefault("player", {})
         if not isinstance(player, dict):
             player = state["player"] = {}
         if player.get("location") != loc:
             player["location"] = loc
-            events.append(f"location → {loc}")
+            events.append(f"location → {loc}"
+                          + (f" [[location:{matched.slug}]]" if matched else ""))
 
     gold = d.get("gold_delta")
     if gold:

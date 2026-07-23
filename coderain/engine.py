@@ -13,6 +13,7 @@ from typing import Iterator
 
 from . import features
 from . import sidecar as sidecar_mod
+from . import templates
 from . import validator as validator_mod
 from . import config as config
 from .config import Config, context_budget
@@ -517,13 +518,21 @@ class Engine:
         trinity_events = None
         if self.trinity is None:
             # Single-brain: the one model IS the logic agent, so it gets the
-            # event rules (in quad mode only the Director sees them).
+            # event rules (in quad mode only the Director sees them). It also gets
+            # the WORLD SIDECAR when RPG is off — the full envelope (rpg-rules.md)
+            # is only injected with mechanics on, so without this a narrative story
+            # would never learn it can move the clock/location or reveal a secret,
+            # even though the engine applies those deltas in every mode. RPG-on
+            # stories already have the full envelope, so don't double up.
+            add = "" if rpg_on else templates.WORLD_SIDECAR
             ev_block = self.store.event_rules_block()
-            if ev_block and messages:
+            if ev_block:
+                add = ((add + "\n\n") if add else "") + ev_block \
+                    + "\n\n(Enforce these silently; NEVER reveal an unfired rule " \
+                      "in prose.)"
+            if add and messages:
                 messages = [{**messages[0],
-                             "content": messages[0]["content"] + "\n\n" + ev_block
-                             + "\n\n(Enforce these silently; NEVER reveal an "
-                               "unfired rule in prose.)"},
+                             "content": messages[0]["content"] + "\n\n" + add},
                             *messages[1:]]
         if self.trinity is not None:
             # Quad pipeline: the Logic Agent's envelope is validated and RESOLVED

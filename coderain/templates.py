@@ -288,6 +288,37 @@ is pending — never hand them out otherwise.
   them and clamps them. Describe fiction, not arithmetic.
 """
 
+# Injected for SINGLE-BRAIN narrative stories (RPG off). The full envelope lives in
+# rpg-rules.md, which is only shown when mechanics are on — so without this a
+# narrative story would never learn it can move the clock/location or reveal a
+# secret, even though the engine applies those deltas in every mode. Kept small on
+# purpose: fewer keys means fewer output tokens and better compliance on small
+# local models. Quad mode doesn't need it — the Director proposes world deltas from
+# its own schema (_ENV_WORLD).
+WORLD_SIDECAR = """\
+## Keeping the world consistent (optional)
+
+When your narration changes the shared world, append ONE fenced block AFTER the
+prose so the engine can record it — the reader never sees it. Include only the keys
+that changed; no block at all is fine.
+
+```rpg
+{"deltas": {"time_advance": {"days": 0, "phase": "evening"},
+            "location": "Blackwood Tavern",
+            "flag_set": {"bridge_burned": true},
+            "reveal": ["thornes-secret"]}}
+```
+
+- `time_advance` — move the in-world clock when the story does; set `phase`, and
+  `days` only across a real sleep or time skip. It never runs backward.
+- `location` — where the player now is. Use the exact name of an established place
+  when it fits, so that place's details stay in play.
+- `flag_set` — a durable fact worth remembering (true/false, a number, or text).
+- `reveal` — hidden lore slug(s) the player has genuinely discovered on the page —
+  never before they actually learn it.
+Never mention this block or its braces in the prose.
+"""
+
 PREMISE_HEADER = "# Premise\n\n"
 
 FILE_SKELETONS = {

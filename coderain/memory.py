@@ -1093,6 +1093,23 @@ class MemoryStore:
     def rpg_enabled(self) -> bool:
         return bool(self.rpg_state().get("enabled"))
 
+    def resolve_location(self, name: str) -> "Entry | None":
+        """Match a free-text location name to a known locations.md entry by slug,
+        title, or alias (case-insensitive). Returns None when nothing matches — the
+        name is then kept as free text. Lets an emitted `location` delta normalize
+        to its canonical name AND light up that place's lorebook entry (assemble
+        force-activates the current location so its details stay in play)."""
+        name = (name or "").strip()
+        if not name:
+            return None
+        want = templates.slugify(name)
+        low = name.lower()
+        for e in self.entries("locations.md"):
+            if e.slug == want or e.title.strip().lower() == low \
+                    or any(str(a).strip().lower() == low for a in e.aliases):
+                return e
+        return None
+
     def index(self) -> "MemoryIndex":
         return MemoryIndex(self)
 
@@ -1243,6 +1260,11 @@ class MemoryStore:
                 sections.append((0, "You", raw_player))
         clock = self.clock_str()
         loc = self.world_state().get("player", {}).get("location", "")
+        # The place the player is IN should always be in context so its details
+        # stay in play — resolve it to a known location entry and force-activate
+        # that entry in the lorebook pass below (dedupe + budget handled there).
+        loc_entry = self.resolve_location(loc) if loc else None
+        current_loc_slug = loc_entry.slug if loc_entry else None
         if clock or loc:
             now = ("Current in-world time: " + clock) if clock else ""
             if loc:
@@ -1323,7 +1345,8 @@ class MemoryStore:
         for rel in self.gated_registries():
             for e in self.entries(rel):
                 by_slug.setdefault(e.slug, (rel, e))
-                always = e.pinned() or e.weight() == "critical"
+                always = (e.pinned() or e.weight() == "critical"
+                          or e.slug == current_loc_slug)
                 hit = always or self._entry_activates(
                     e, haystack, seed, turn_index, recent_texts, player_now)
                 if not hit:
