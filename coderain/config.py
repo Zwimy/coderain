@@ -55,6 +55,7 @@ generation:
   trinity_brain: true
   response_length: medium
   ai_acts_as_player: false
+  chapter_outline: true
 memory:
   short_term_turns: 12
   medium_fold_after: 12

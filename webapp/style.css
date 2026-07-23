@@ -413,3 +413,29 @@ details.adv[open] > summary { color: var(--accent); margin-bottom: 6px; }
 .chip-in { flex: 1 1 120px; border: 0; background: none; padding: 4px;
            min-width: 100px; color: var(--text); }
 .chip-in:focus { outline: none; }
+
+/* chapter plan (book-plan panel) */
+#ch-list { display: flex; flex-direction: column; gap: 10px;
+           max-height: 56vh; overflow-y: auto; margin: 8px 0 4px; }
+.ch-row { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+          background: var(--panel2); }
+.ch-row.active { border-color: var(--accent); box-shadow: var(--glow); }
+.ch-row.done { opacity: .6; }
+.ch-head { display: flex; align-items: center; gap: 8px; }
+.ch-badge { font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+            letter-spacing: .5px; padding: 2px 7px; border-radius: 10px;
+            border: 1px solid var(--line); color: var(--dim); flex: 0 0 auto; }
+.ch-badge.active { background: var(--accent); color: var(--on-accent);
+                   border-color: var(--accent); }
+.ch-badge.done { color: var(--dim); }
+.ch-title { flex: 1 1 auto; background: transparent; border: 0;
+            border-bottom: 1px solid transparent; color: var(--text);
+            font-size: 15px; font-weight: 600; padding: 2px 0; }
+.ch-title:focus { outline: none; border-bottom-color: var(--accent); }
+.ch-ops { display: flex; gap: 4px; flex: 0 0 auto; }
+.ch-ops button { padding: 3px 8px; font-size: 13px; }
+.ch-goal { width: 100%; margin-top: 6px; background: var(--bg);
+           border: 1px solid var(--line); border-radius: 4px; color: var(--text);
+           font-family: var(--sans); font-size: 13px; padding: 6px; resize: vertical; }
+.ch-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
+.ch-foot .ch-save { padding: 3px 12px; font-size: 12px; }

@@ -719,6 +719,34 @@ class MemoryStore:
                 out.append(ln.strip()[2:].strip())
         return out
 
+    def outline_block(self) -> str:
+        """Compact steering line for the current chapter (the rolling book plan in
+        memory/outline.md). Injected into context like beats — the ONLY per-turn
+        cost of the chapter planner. Empty when there's no outline. Kept here (not
+        in planner) so assemble can read it without the LLM-bearing planner."""
+        chapters = self.entries("memory/outline.md")
+        if not chapters:
+            return ""
+
+        def status(c):
+            return (c.attrs.get("status", "planned") or "planned").strip().lower()
+
+        active = next((c for c in chapters if status(c) == "active"), None) \
+            or next((c for c in chapters if status(c) != "done"), None)
+        if active is None:
+            return ""
+        idx = chapters.index(active)
+        done = sum(1 for c in chapters if status(c) == "done")
+        upcoming = [c.title for c in chapters[idx + 1:idx + 3]]
+        lines = [f"You are in Chapter {done + 1}: {active.title}."]
+        if active.body.strip():
+            lines.append("Chapter goal — steer the story toward this; do not rush "
+                         f"or skip past it: {active.body.strip()}")
+        if upcoming:
+            lines.append("Later chapters (do NOT jump ahead to these): "
+                         + "; ".join(upcoming))
+        return "\n".join(lines)
+
     # --- companion side-chat log (Wave 3; NOT the transcript) ---------------
     def append_companion_chat(self, slug: str, user_text: str,
                               reply: str) -> None:
@@ -1296,6 +1324,9 @@ class MemoryStore:
                              f"Beat {cur + 1}/{len(beats)}: {beats[cur]}\n"
                              "(advance with the beat_advance delta once its "
                              "goal lands — never skip ahead in prose)"))
+        outline = self.outline_block()
+        if outline:
+            sections.append((1, "Story structure (chapter plan)", outline))
         chat_tail = self.companion_chat_tail()
         if chat_tail:
             sections.append((3, "Companion side-chat (recent, private)",

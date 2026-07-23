@@ -35,6 +35,11 @@ keep it going — but everything is here, forever, for everyone.
   prose so the narration can't contradict them. The Settings **Cost vs quality**
   dial (Economy / Balanced / Quality) sets this; the Planner runs on a slim
   planning context so even quad stays lean.
+- **A story that plans ahead.** An optional rolling chapter outline plots a few
+  chapters in advance and writes a fresh one each time a chapter's goal lands, so
+  the arc keeps a shape instead of wandering. It's not another per-turn brain — it
+  plans only at the memory-fold cadence, and you can view, edit, reorder, or
+  regenerate the plan from the **Plan** panel.
 - **Optional RPG campaign layer.** Stats, skill checks with fair engine-rolled
   dice, HP/mana/XP, inventory, a quest state machine, companions with mood +
   private side-chat — all toggleable; the core stays a clean narrative engine.
