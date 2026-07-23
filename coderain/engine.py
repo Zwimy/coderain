@@ -182,6 +182,16 @@ class Engine:
         if not messages:
             return messages
         parts = []
+        # Player agency: by default the AI must not act or speak for the player —
+        # the reported "it takes a lot of action on my behalf". Firm, and first so
+        # it leads the style block.
+        if not self.cfg.generation.get("ai_acts_as_player", False):
+            parts.append("PLAYER AGENCY: never speak, act, decide, or narrate the "
+                         "inner thoughts of the player character. Write only the "
+                         "world, other characters, and the consequences of what the "
+                         "player actually said they do — then stop at the player's "
+                         "next decision and hand control back. Never put words in "
+                         "the player's mouth or take actions for them.")
         length = str(self.cfg.generation.get("response_length", "medium")).lower()
         if length == "short":
             parts.append("LENGTH: keep it short — 1-2 short paragraphs, then stop "

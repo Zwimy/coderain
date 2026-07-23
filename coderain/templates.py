@@ -45,6 +45,13 @@ narrator's system prompt every turn. Edit freely.
 - Stay consistent with everything in the story context: premise, world bible,
   characters, locations, canon events, and open threads. Never contradict them.
 
+## What characters know
+- A character only knows what they have witnessed first-hand, were plausibly
+  told in the story, or would reasonably know from their background. They do NOT
+  know events they were absent for, private conversations they didn't hear, or
+  anything the player has only thought — unless the story establishes how they
+  found out. When in doubt, have them not know.
+
 ## Content boundaries
 - (Set any tone or content limits here.)
 """
@@ -472,7 +479,7 @@ def initial_state(rpg_cfg: dict | None = None) -> dict:
 # Bump whenever any master's default text changes, and append the OUTGOING hash of
 # each changed file to `_SHIPPED_RULE_HASHES` below. The version is informational
 # (stored in the ledger for diagnostics); correctness is driven by the hashes.
-RULES_VERSION = 7
+RULES_VERSION = 8
 
 # Every default rule text we have ever SHIPPED, per file (current defaults are added
 # automatically). On an app update, an on-disk master whose content hashes to one of
@@ -480,7 +487,9 @@ RULES_VERSION = 7
 # anything else is treated as a user edit and preserved. When you change a master,
 # add its previous hash here so installs still on that version auto-update cleanly.
 _SHIPPED_RULE_HASHES: dict[str, set[str]] = {
-    "writer-rules.md": set(),
+    # v7 superseded in v8 (the "What characters know" rule).
+    "writer-rules.md": {
+        "53a5d2bf8355cef2cc5d219b853814e7cbb079e9ab766377fd6d1a60799c8e3f"},
     # v1 superseded in v2 (character facets + skill-check `skill` field);
     # v2 superseded in v3 (stats: baselines in Markdown + NPC `actor` checks).
     # memory-rules: v5 added lorebook attrs + facts + episode metadata; v6 added
