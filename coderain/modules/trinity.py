@@ -119,6 +119,17 @@ class TrinityBrain:
         lk = tcfg.get("lorekeeper")
         self.lore_llm_pass = bool(lk.get("llm_pass", False)) \
             if isinstance(lk, dict) else False
+        # Director diet (token optimization): it plans LOGIC, so it doesn't need
+        # the prose-writing rules or the full short-term window — just the story
+        # state and the recent exchanges. `history_turns` caps how many tail
+        # messages it sees (older turns already live in the memory context);
+        # `think` defaults OFF because a JSON planner rarely needs chain-of-thought.
+        dcfg = tcfg.get("director") if isinstance(tcfg.get("director"), dict) else {}
+        try:
+            self.director_history = max(2, int(dcfg.get("history_turns", 6)))
+        except (TypeError, ValueError):
+            self.director_history = 6
+        self.director_think = bool(dcfg.get("think", False))
 
     # Stage clients resolve to the pinned client or the engine's current base.
     # Setters keep the "swap in a stub" test/debug idiom working.
@@ -156,6 +167,26 @@ class TrinityBrain:
                 f"validator=code writer={name(self.writer_llm)}")
 
     # --- Logic Agent ---
+    def _director_context(self, messages) -> tuple[str, list[dict]]:
+        """Slim the Director's payload. The system blob assemble() builds is
+        `writer-rules  +  # STORY & MEMORY CONTEXT …  (+ RPG module + style)`.
+        The Director plans logic, not prose, so drop the leading writer-rules
+        prose (keep everything from the memory-context marker on — that carries
+        the story state, the RPG rules, and the character sheet it DOES need) and
+        keep only the recent tail of the history (older turns are already folded
+        into the memory context). Falls back to the full blob if the marker is
+        absent (a stub/hand-built message set)."""
+        content = messages[0]["content"] if messages else ""
+        i = content.find("\n# STORY & MEMORY CONTEXT")
+        if i != -1:
+            content = content[i:].lstrip("\n")
+        history = messages[1:]
+        if len(history) > self.director_history:
+            # Keep the recent tail — the last element is always the player's
+            # current action, so slicing the tail never drops it.
+            history = history[-self.director_history:]
+        return content, history
+
     def _direct(self, messages, rpg_on: bool,
                 event_rules: str = "") -> tuple[dict, str | None]:
         schema_tail = _ENV_RPG if rpg_on else _ENV_WORLD
@@ -164,11 +195,18 @@ class TrinityBrain:
         # them, so an unfired trap or twist can't leak into prose.
         if event_rules:
             sys += "\n\n" + event_rules
-        # Full assembled context INCLUDING the conversation history — the Director
-        # plans the beat, so it must see how the story actually got here.
-        director_msgs = [{"role": "system",
-                          "content": sys + "\n\n" + messages[0]["content"]},
-                         *messages[1:]]
+        # A JSON planner rarely needs chain-of-thought: when the profile runs
+        # think-on for prose, tell the Director to skip it so its reasoning
+        # tokens don't balloon the cheapest stage. The Writer's think is
+        # untouched. (/no_think is a Qwen soft-switch; other models ignore it.)
+        if self.gen.get("think", False) and not self.director_think:
+            sys += "\n\n/no_think"
+        # Slim planning context: story state + recent exchanges, not the full
+        # novel-writing payload. The biggest quad token cut, no planning signal
+        # lost — the Director still sees how the story got here.
+        ctx, history = self._director_context(messages)
+        director_msgs = [{"role": "system", "content": sys + "\n\n" + ctx},
+                         *history]
         obj, err = emit_json_ex(self.director_llm, "", messages=director_msgs)
         return obj or {}, err
 

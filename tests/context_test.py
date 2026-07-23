@@ -7,7 +7,8 @@ models hint table used by Settings (and later the PWA).
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from coderain import models as M
-from coderain.config import Config, Profile, build_profile, context_budget
+from coderain.config import (AUTO_BUDGET_CAP_TOKENS, Config, Profile,
+                             build_profile, context_budget)
 
 
 def _cfg(ctx_tokens, budget, max_tokens=700):
@@ -33,13 +34,20 @@ assert context_budget(_cfg(32768, 8000)) == 8000
 assert context_budget(_cfg(32768, 500)) == M.MIN_CONTEXT_BUDGET_TOKENS
 print("2) explicit budget respected; floored at", M.MIN_CONTEXT_BUDGET_TOKENS)
 
-# ---- 3) auto budget fills the window minus reply + overhead ----
-assert context_budget(_cfg(131072, "auto", max_tokens=2500)) == 131072 - 2500 - 2048
-assert context_budget(_cfg(131072, 0, max_tokens=2500)) == 131072 - 2500 - 2048
-assert context_budget(_cfg(1_000_000, "auto")) == 1_000_000 - 700 - 2048
+# ---- 3) auto budget fills the window minus reply + overhead, then CAPS ----
+# The compressed scene/arc memory exists so we don't re-send the whole novel; auto
+# on a big-context model was the biggest per-turn token sink, so it's capped.
+# A window whose derived budget lands below the cap derives normally...
+mid = 24576
+assert mid - 2500 - 2048 < AUTO_BUDGET_CAP_TOKENS      # guard the fixture itself
+assert context_budget(_cfg(mid, "auto", max_tokens=2500)) == mid - 2500 - 2048
+assert context_budget(_cfg(mid, 0, max_tokens=2500)) == mid - 2500 - 2048
+# ...a large window hits the cap rather than dumping ~126k/998k every pass.
+assert context_budget(_cfg(131072, "auto", max_tokens=2500)) == AUTO_BUDGET_CAP_TOKENS
+assert context_budget(_cfg(1_000_000, "auto")) == AUTO_BUDGET_CAP_TOKENS
 # tiny window: auto still meets the floor
 assert context_budget(_cfg(8192, "auto", max_tokens=7000)) == M.MIN_CONTEXT_BUDGET_TOKENS
-print("3) auto budget: 131k and 1M windows fully used; floor holds on tiny ones")
+print("3) auto budget: derives below the cap, capped above it; floor holds on tiny")
 
 # ---- 4) garbage budget value falls back safely ----
 assert context_budget(_cfg(32768, "lots")) == 8000
