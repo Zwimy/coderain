@@ -43,6 +43,8 @@ Return ONLY a JSON object, no prose, with this shape:
      "aliases": ["alt name"], "importance": 1-5,
      "status": "one-line current state (optional)",
      "when": "in-world time this became true (optional)",
+     "cause": "canon-event importance>=4 ONLY: what caused it (the WHY)",
+     "consequence": "canon-event importance>=4 ONLY: what it changed (the SO-WHAT)",
      "relationships": [{"with": "other-slug", "note": "ally / rival / owes debt"}],
      "detail": "FULL rewritten detail for this entity's home file"}
   ],
@@ -129,6 +131,23 @@ class Summarizer:
                                      f"{str(r.get('note', '')).strip()}")
             if rel_pairs:
                 attrs["relationships"] = "; ".join(rel_pairs)
+            # Causal chain for IMPORTANT events only (memory-rules v9): a
+            # story-critical canon-event records why it happened and what it
+            # changed, so the story stays coherent long after the raw turns fold
+            # away. Ordinary beats skip this — verbose memory is re-sent every
+            # future turn. Folded into the body (not the header) so it renders as
+            # readable prose the writer sees, without inventing new lorebook attrs.
+            importance = _clamp_int(p.get("importance", 3))
+            if kind == "canon-event" and importance >= 4:
+                cause = str(p.get("cause", "")).strip()
+                conseq = str(p.get("consequence", "")).strip()
+                tail = []
+                if cause and cause.lower() not in detail.lower():
+                    tail.append(f"Why: {cause}")
+                if conseq and conseq.lower() not in detail.lower():
+                    tail.append(f"So what: {conseq}")
+                if tail:
+                    detail = detail + "\n\n" + "\n".join(tail)
             aliases = p.get("aliases", [])
             if isinstance(aliases, str):
                 # A bare string would iterate CHARACTER by character — every
@@ -137,7 +156,7 @@ class Summarizer:
             entry = Entry(title=title, slug=slug,
                           aliases=[str(a).strip() for a in aliases
                                    if a and str(a).strip()],
-                          importance=_clamp_int(p.get("importance", 3)),
+                          importance=importance,
                           attrs=attrs, body=detail)
             # rewrite=True: the model was shown the current entry and returns the
             # full rewritten body, so replace (not append) it.

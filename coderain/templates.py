@@ -96,6 +96,20 @@ home file:
 Rate each entry's `importance` 1-5. Then compress the rest; ephemeral color may
 fade.
 
+## Recording events — the causal chain (important events only)
+Not every beat becomes an entry. Ordinary action stays a terse one-line scene/
+timeline note — DO NOT expand it, verbose memory is re-sent every future turn and
+wastes the model's budget. But a *story-critical* event (importance >= 4) earns a
+`canon-events.md` entry that records the causal chain so the story still makes
+sense 40 turns later. Write its detail as four compact parts:
+- **What:** the event, in one sentence.
+- **When:** the in-world time (also stamped in the `when:` header).
+- **Why:** what caused it — the decision, pressure, or prior event behind it.
+- **So what:** its consequence — what it changed, opened, or closed.
+Report these in the promotion's `cause` and `consequence` fields (What/When go in
+`detail` and `when`); the engine folds them into the entry. Reference other
+entities by [[slug]] here too — never restate their details.
+
 ## Rewrite, don't append
 When you update an existing entity you will be shown its CURRENT entry. Return the
 entity's FULL rewritten detail — the stable identity plus every still-true fact
@@ -479,7 +493,7 @@ def initial_state(rpg_cfg: dict | None = None) -> dict:
 # Bump whenever any master's default text changes, and append the OUTGOING hash of
 # each changed file to `_SHIPPED_RULE_HASHES` below. The version is informational
 # (stored in the ledger for diagnostics); correctness is driven by the hashes.
-RULES_VERSION = 8
+RULES_VERSION = 9
 
 # Every default rule text we have ever SHIPPED, per file (current defaults are added
 # automatically). On an app update, an on-disk master whose content hashes to one of
@@ -493,12 +507,14 @@ _SHIPPED_RULE_HASHES: dict[str, set[str]] = {
     # v1 superseded in v2 (character facets + skill-check `skill` field);
     # v2 superseded in v3 (stats: baselines in Markdown + NPC `actor` checks).
     # memory-rules: v5 added lorebook attrs + facts + episode metadata; v6 added
-    # quests/companions guidance.
+    # quests/companions guidance; v8 superseded in v9 (causal-chain capture for
+    # important events).
     "memory-rules.md": {
         "545e368ef7dd6a649e582528cb99390c480e8dd23c7b3a21211c4db618282c95",
         "920ea7d51cf1935daff23527dbcdcb8fa1569c7987e1e37771c63dba6e0b7459",
         "e355aa8ec948bced66849cf944ca4fbf25b0fdefeb0822281aa95816d84e9336",
-        "9d7da2fafce2b686fb13577070fc4690e949dc1dbbe75969355f3f671aefb819"},
+        "9d7da2fafce2b686fb13577070fc4690e949dc1dbbe75969355f3f671aefb819",
+        "031f7bcb2cb8ad514dc76c75ed747c4c8dc62bd5d30c52e7d12b3a5cfff14791"},
     # rpg-rules: v4 = envelope v1 (world deltas + validator); v5 = reveal +
     # stat-list validation; v6 = gold/inventory-mirror/quests/grants/beats.
     "rpg-rules.md": {

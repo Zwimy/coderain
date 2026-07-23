@@ -28,6 +28,13 @@ keep it going — but everything is here, forever, for everyone.
   "quad" pipeline (Planner → **deterministic code Validator** → Writer) means
   mechanics are checked by code, not hallucinated: engine-rolled dice, real
   inventory/gold/quests, an in-world clock that only moves forward.
+- **Pay for the brains you need.** A pure-narrative story runs **single-brain**
+  (one pass per turn) — consistency comes from the memory system, and the same
+  pass still plans reveals, time, and quest state. Turn the **quad** pipeline on
+  for RPG/tactical play, where a second pass resolves the mechanics *before* the
+  prose so the narration can't contradict them. The Settings **Cost vs quality**
+  dial (Economy / Balanced / Quality) sets this; the Planner runs on a slim
+  planning context so even quad stays lean.
 - **Optional RPG campaign layer.** Stats, skill checks with fair engine-rolled
   dice, HP/mana/XP, inventory, a quest state machine, companions with mood +
   private side-chat — all toggleable; the core stays a clean narrative engine.

@@ -180,17 +180,26 @@ def load_config(path: str | Path | None = None) -> Config:
     )
 
 
+# `auto` fills the profile's window, but past a point that just re-sends the
+# whole novel every pass — the compressed scene/arc memory exists precisely so we
+# DON'T have to. On a 200k/1M model that was the biggest per-turn token sink. Cap
+# the auto-derived budget at a generous ceiling; a user who genuinely wants more
+# sets an explicit number (those stay uncapped — the deliberate escape hatch).
+AUTO_BUDGET_CAP_TOKENS = 24000
+
+
 def context_budget(config: Config) -> int:
     """The assembled-memory budget in tokens. An explicit number is used as-is
-    (floored); `auto`/0 derives it from the active profile's window — reply
-    tokens + overhead reserved, everything else available to memory — so a 131k+
-    long-context model gets its whole window without hand-tuning."""
+    (floored, uncapped); `auto`/0 derives it from the active profile's window —
+    reply tokens + overhead reserved — then caps it at AUTO_BUDGET_CAP_TOKENS so
+    a long-context model doesn't dump its whole window into every pass."""
     raw = config.memory.get("context_budget_tokens", 8000)
     auto = raw in (0, None) or (isinstance(raw, str)
                                 and raw.strip().lower() == "auto")
     if auto:
         reply = int(config.generation.get("max_tokens", 700) or 700)
         derived = config.profile.context_tokens - reply - 2048
+        derived = min(derived, AUTO_BUDGET_CAP_TOKENS)
         return max(MIN_CONTEXT_BUDGET_TOKENS, derived)
     try:
         return max(MIN_CONTEXT_BUDGET_TOKENS, int(raw))

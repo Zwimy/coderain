@@ -2330,9 +2330,12 @@ async function renderSettings() {
         <button data-v="balanced" type="button">Balanced</button>
         <button data-v="quality" type="button">Quality</button>
       </div>
-      <p class="muted">The biggest lever on token cost. <b>Economy</b> = one model
-        call per turn. <b>Quality</b> = a planner and continuity check run before
-        the writer — better consistency, but roughly 2–3× the tokens per turn.
+      <p class="muted">The biggest lever on token cost. <b>Economy</b> /
+        <b>Balanced</b> = one model call per turn (single-brain) — best for pure
+        narrative; consistency comes from the memory system, and that one pass
+        still tracks reveals, time, and quests. <b>Quality</b> = a planner runs
+        before the writer to resolve mechanics first — worth it for RPG/tactical
+        play, roughly 2× the tokens per turn.
         (Sets the toggles below; press Save &amp; apply.)</p>
       <label style="margin-top:14px">
         <input type="checkbox" id="gc-agency"
