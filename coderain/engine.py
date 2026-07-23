@@ -19,6 +19,7 @@ from . import config as config
 from .config import Config, context_budget
 from .llm import LLM
 from .memory import Entry, MemoryStore, safe_output_regex
+from .planner import ChapterPlanner
 from .summarizer import Summarizer
 
 LOOKUP_TOOL = [{
@@ -100,7 +101,12 @@ class Engine:
         self.cfg = config
         self.store = store
         self.llm = LLM(config.profile, config.generation)
-        self.summarizer = Summarizer(config, store, self.llm)
+        # The rolling chapter outline (book plan). NOT a per-turn brain — it rides
+        # the summarizer's occasional LLM (seed once, extend once per completed
+        # chapter). Passed into the summarizer so a scene fold can detect a chapter
+        # landing for free and roll the plan forward.
+        self.planner = ChapterPlanner(config, store, self.llm)
+        self.summarizer = Summarizer(config, store, self.llm, planner=self.planner)
         self.short_term = int(config.memory.get("short_term_turns", 12))
         # Explicit number, or `auto`/0 = fill the profile's window (long-context
         # cloud models get everything above the reply reserve).

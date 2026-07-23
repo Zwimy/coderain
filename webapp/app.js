@@ -1353,6 +1353,100 @@ function pieceModal(slug, rel, piece, lib = null, base = null, vocab = null) {
 let busy = false;
 let _playKeys = null;          // the play view's keydown handler, so it can be swapped
 
+// The book-plan panel: the rolling chapter outline. View the arc, edit an upcoming
+// chapter's goal to steer the story, reorder/insert/delete planned chapters, mark
+// the current chapter done, or regenerate the whole plan from the premise.
+async function outlineModal(slug) {
+  const call = (path, opts) => api(`/api/saves/${slug}/outline${path}`, opts);
+
+  const render = (data) => {
+    const chs = data.chapters || [];
+    const rows = chs.map((ch, i) => {
+      const ro = ch.status === "done" ? "disabled" : "";
+      const label = ch.status === "done" ? "done"
+        : ch.status === "active" ? "now" : "planned";
+      const ops = ch.status === "planned"
+        ? `<button data-op="up" title="move earlier">↑</button>
+           <button data-op="down" title="move later">↓</button>
+           <button data-op="del" title="delete this chapter">🗑</button>`
+        : ch.status === "active"
+        ? `<button data-op="advance" class="primary"
+             title="mark this chapter complete and plan the next">Chapter done →</button>`
+        : "";
+      return `<div class="ch-row ${ch.status}" data-i="${i}">
+        <div class="ch-head">
+          <span class="ch-badge ${ch.status}">${label}</span>
+          <input class="ch-title" value="${esc(ch.title)}" ${ro}/>
+          <span class="ch-ops">${ops}</span>
+        </div>
+        <textarea class="ch-goal" rows="2" ${ro}
+          placeholder="what this chapter should accomplish">${esc(ch.goal)}</textarea>
+        ${ch.status === "done" ? ""
+          : `<div class="ch-foot"><button class="ch-save" data-op="save">Save</button></div>`}
+      </div>`;
+    }).join("");
+
+    const empty = data.enabled
+      ? "No plan yet. Generate one from your premise now, or it appears on its own after the first few turns."
+      : "The chapter outline is turned off in Settings.";
+    openModal(`<h2>Chapter plan</h2>
+      <p class="muted">The story's rolling outline — a few chapters planned ahead, a
+        fresh one written each time a chapter completes. Edit an upcoming chapter's
+        goal to steer where things go; the turns aim toward the <b>now</b> chapter.</p>
+      ${chs.length ? `<div id="ch-list">${rows}</div>`
+                   : `<p class="muted">${empty}</p>`}
+      <div class="modal-actions">
+        ${data.enabled ? `<button id="ch-add">+ Add chapter</button>
+          <button id="ch-gen">${chs.length ? "Regenerate…" : "Generate outline"}</button>`
+          : ""}
+        <span style="flex:1"></span>
+        <button id="ch-close">Close</button>
+      </div>`);
+
+    const refetch = async (fn, busyBtn) => {
+      // Generating chapters calls the model (seconds), so show the triggering
+      // button as working rather than leaving the panel frozen and silent.
+      if (busyBtn) { busyBtn.disabled = true; busyBtn.dataset.busy = busyBtn.textContent;
+                     busyBtn.textContent = "Planning…"; }
+      const d = await guard(fn, "Couldn't update the plan");
+      if (d) render(d);                 // re-render from the server's truth
+      else if (busyBtn) { busyBtn.disabled = false;
+                          busyBtn.textContent = busyBtn.dataset.busy; }
+    };
+    $("#ch-close").addEventListener("click", closeModal);
+    const gen = $("#ch-gen");
+    if (gen) gen.addEventListener("click", async () => {
+      if (chs.length && !(await confirmModal("Regenerate the whole plan?",
+        "This replaces every chapter — including any already completed — with a "
+        + "fresh outline from your premise.", "Regenerate"))) return;
+      await refetch(() => call("/generate", {method: "POST"}), gen);
+    });
+    const add = $("#ch-add");
+    if (add) add.addEventListener("click", () =>
+      refetch(() => call("", {method: "POST", body: {title: "New chapter", goal: ""}})));
+
+    (chs.length ? modalCard.querySelectorAll("#ch-list .ch-row") : []).forEach(row => {
+      const i = Number(row.dataset.i);
+      row.querySelectorAll("[data-op]").forEach(btn =>
+        btn.addEventListener("click", () => {
+          const op = btn.dataset.op;
+          if (op === "save") {
+            const title = $(".ch-title", row).value.trim();
+            const goal = $(".ch-goal", row).value.trim();
+            return refetch(() => call(`/${i}`, {method: "PUT", body: {title, goal}}));
+          }
+          if (op === "up") return refetch(() => call(`/${i}/move`, {method: "POST", body: {dir: -1}}));
+          if (op === "down") return refetch(() => call(`/${i}/move`, {method: "POST", body: {dir: 1}}));
+          if (op === "del") return refetch(() => call(`/${i}`, {method: "DELETE"}));
+          if (op === "advance") return refetch(() => call("/advance", {method: "POST"}), btn);
+        }));
+    });
+  };
+
+  const data = await guard(() => call(""), "Couldn't read the plan");
+  if (data) render(data);
+}
+
 async function renderPlay(slug) {
   const s = await api(`/api/saves/${slug}`);
   s.companions = s.companions || [];        // never deref undefined (play head + Talk)
@@ -1368,6 +1462,8 @@ async function renderPlay(slug) {
           >Note</button>
         <button id="mem-btn" title="inspect &amp; repair what the story remembers"
           >Memory</button>
+        <button id="plan-btn" title="the rolling chapter plan — steer the story ahead"
+          >Plan</button>
         <button id="talk-btn" ${s.companions.length ? "" : "disabled"}
           title="${s.companions.length ? "private companion chat"
                  : "no companions yet"}">Talk</button>
@@ -1909,6 +2005,7 @@ async function renderPlay(slug) {
     await load();
   });
 
+  $("#plan-btn").addEventListener("click", () => outlineModal(slug));
   $("#talk-btn").addEventListener("click", () => talkDrawer(slug, s.companions));
   $("#edit-btn").addEventListener("click", () => { location.hash = `#edit/${slug}`; });
   $("#note-btn").addEventListener("click", async () => {          // ST-21 author's note
@@ -2345,6 +2442,15 @@ async function renderSettings() {
       <p class="muted">Off (default) = the AI only plays the world and other
         characters and hands control back to you; it won't decide or speak for
         you. Turn it on if you want it to move your character along.</p>
+      <label style="margin-top:14px">
+        <input type="checkbox" id="gc-outline"
+          ${st.generation.chapter_outline !== false ? "checked" : ""}>
+        Plan the story in chapters (book plan)
+      </label>
+      <p class="muted">On (default) = a rolling outline plans a few chapters ahead
+        and writes a new one as each completes, steering the arc. It's not a
+        per-turn brain — it only plans at the memory-fold cadence. See the
+        <b>Plan</b> button while playing. Off = no outline.</p>
       <label>Response length</label>
       <div class="seg" id="len-seg">
         ${["short", "medium", "long"].map(v => `<button data-v="${v}"
@@ -2593,6 +2699,7 @@ async function renderSettings() {
         trinity_brain: $("#gc-trinity").checked,
         use_memory_tool: $("#gc-memtool").checked,
         ai_acts_as_player: $("#gc-agency").checked,
+        chapter_outline: $("#gc-outline").checked,
         start_reply_with: $("#gc-prefix").value,
         stop: $("#gc-stop").value,
         temperature: $("#gc-temp").value,

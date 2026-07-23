@@ -52,8 +52,12 @@ Return ONLY a JSON object, no prose, with this shape:
     {"slug": "kebab-id", "title": "Thread name", "importance": 1-5,
      "detail": "what is unresolved"}
   ],
-  "resolved_threads": ["slug-of-resolved-thread"]
+  "resolved_threads": ["slug-of-resolved-thread"],
+  "chapter_goal_met": false
 }
+Set "chapter_goal_met" to true ONLY when an ACTIVE CHAPTER is given below AND these
+turns show its goal has genuinely, fully landed — otherwise false. Do not advance a
+chapter early.
 "time" is optional — include it only if in-world time moved forward. "relationships"
 only applies to characters. Only promote genuinely durable, story-relevant facts.
 """
@@ -83,10 +87,14 @@ def _turns_text(turns: list[dict]) -> str:
 
 
 class Summarizer:
-    def __init__(self, config, store: MemoryStore, llm):
+    def __init__(self, config, store: MemoryStore, llm, planner=None):
         self.cfg = config
         self.store = store
         self.llm = llm
+        # The chapter planner (optional): seeded on the first fold and rolled
+        # forward when a scene fold reports the active chapter's goal has landed —
+        # so chapter planning never costs a per-turn call.
+        self.planner = planner
         m = config.memory
         # Clamp >=2: retry/undo drop up to the last 2 turns, and the fold invariant
         # "folded turns are never in the droppable tail" only holds while at least
@@ -234,7 +242,12 @@ class Summarizer:
     def _fold_scene(self, turns: list[dict], scene_no: int,
                     start_turn: int) -> list[str]:
         events = [f"memory: folded scene {scene_no}"]
-        payload = self._existing_context(turns) + "\n\nTURNS:\n" + _turns_text(turns)
+        # Hand the active chapter to the fold so it can report chapter_goal_met for
+        # free (no extra call). Empty string when there's no outline.
+        chapter_hint = self.planner.active_fold_hint() if self.planner else ""
+        payload = self._existing_context(turns) \
+            + (("\n\n" + chapter_hint) if chapter_hint else "") \
+            + "\n\nTURNS:\n" + _turns_text(turns)
         obj = self._emit_json(SCENE_INSTRUCTION, payload)
         summary = ""
         shorthand = ""
@@ -278,6 +291,12 @@ class Summarizer:
                       attrs=attrs, body=summary)
         self.store.upsert_entry("memory/scenes.md", entry)
         self._append_timeline(start_turn, end_turn, when, shorthand or summary)
+        # Roll the chapter plan forward when THIS fold reports the active chapter's
+        # goal landed (only when a chapter was actually handed to the fold, so a
+        # stray flag on an outline-less story can't advance anything).
+        if self.planner and chapter_hint and obj \
+                and obj.get("chapter_goal_met") is True:
+            events += self.planner.complete_active()
         return events
 
     def _append_timeline(self, start: int, end: int, when: str, text: str) -> None:
@@ -315,6 +334,11 @@ class Summarizer:
             if not snapped:
                 self.store.snapshot(keep=self.snapshot_keep)
                 snapped = True
+            # Seed the chapter plan on the first real fold — bundled with a call the
+            # fold is making anyway, so it's rate-limited to fold cadence rather than
+            # attempted every turn. Idempotent after the first success.
+            if self.planner is not None:
+                events += self.planner.ensure_seeded()
             chunk = turns[folded:folded + self.medium_size]
             scene_no = len(self.store.entries("memory/scenes.md")) + 1
             events += self._fold_scene(chunk, scene_no, folded + 1)  # 1-based start
