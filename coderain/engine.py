@@ -292,11 +292,21 @@ class Engine:
         self.store.append_turn("player", player_input)
         history = self.store.recent_turns(self.short_term)[:-1]
         messages = self._messages(history, player_input)
-        stored = yield from self._generate_and_store(messages, on_stage)
-        if not stored:
-            # Model produced nothing visible (e.g. only <think>). Don't leave an
-            # orphan player turn dangling in the transcript.
-            self.store.drop_last_turns(1)
+        stored = False
+        try:
+            stored = yield from self._generate_and_store(messages, on_stage)
+        finally:
+            # If we didn't store a narrator turn, the player's action must not stay
+            # in the transcript with no response. This runs on EVERY exit including
+            # GeneratorExit — the client Stop / a disconnect closes this generator
+            # mid-stream, which used to skip the cleanup and leave an orphan player
+            # turn on disk (the reported "kept a turn I removed" corruption). We
+            # check the file rather than trust `stored`, which is lost on an
+            # abnormal exit; the tail is our just-appended player turn.
+            if not stored:
+                tail = self.store.turns()
+                if tail and tail[-1]["role"] == "player":
+                    self.store.drop_last_turns(1)
 
     def continue_story(self, on_stage=None) -> Iterator[str]:
         """Carry the prose forward with NO player action — the 'Continue' button.

@@ -178,6 +178,12 @@ print("7) legacy 'rpg' plan key accepted as the envelope")
 # ---- 8) per-stage model/API overrides build distinct clients ----
 cfg2 = load_config()
 cfg2.generation["trinity_brain"] = True
+# Self-contained: define the profile this case references rather than assuming
+# the machine's config.yaml has one (the suite runs against the default config).
+cfg2.raw["profiles"]["openrouter"] = {
+    "base_url": "https://openrouter.example/v1", "model": "some/writer-model",
+    "api_key_env": "OPENROUTER_API_KEY", "context_tokens": 131072,
+}
 cfg2.raw["trinity"] = {
     "writer": {"profile": "openrouter", "model": "some/writer-model"},
     "director": {"model": "director-only-model"},   # model-only -> keep active profile
