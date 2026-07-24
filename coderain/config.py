@@ -274,3 +274,12 @@ def write_env(updates: dict[str, str]) -> None:
     env.update({k: v for k, v in updates.items() if k})
     lines = [f"{k}={v}" for k, v in env.items()]
     _atomic_write(ROOT / ".env", "\n".join(lines) + "\n")
+    # Also update the LIVE process environment for the keys we just wrote.
+    # load_dotenv() runs with override=False (its default), so once a key is in
+    # os.environ from process start it is NEVER refreshed by a later reload — which
+    # is exactly why a changed API key used to require restarting the app. Push the
+    # new values in directly so the next build_profile() (via _reload_config) sees
+    # them immediately.
+    for k, v in updates.items():
+        if k:
+            os.environ[k] = v

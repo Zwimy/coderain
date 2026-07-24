@@ -187,7 +187,9 @@ pre.table {
             display: flex; flex-wrap: wrap; gap: 6px; }
 .evt { border: 1px solid var(--accent-dim); color: var(--accent);
        border-radius: 20px; padding: 1px 10px; font-size: 11.5px; }
-.evt.warn { border-color: var(--danger); color: var(--danger); }
+/* validator drops are PROTECTIVE (the engine refused a malformed delta so it
+   can't corrupt the save), not crashes — an amber note, not an alarming red. */
+.evt.warn { border-color: var(--player); color: var(--player); }
 #composer {
   border-top: 1px solid var(--line); background: var(--panel);
   padding: 12px 20px;

@@ -48,6 +48,67 @@ _WORLD = {"time_advance", "flag_set", "location", "gold_delta",
 # undone (reveal -> re-hide; event_fired -> un-consume).
 _LORE = {"reveal", "event_fired"}
 
+# Wrong key NAMES models actually emit for deltas that do exist. Only the LABEL is
+# corrected here; the value still goes through that delta's full validation, so
+# nothing unsafe gets through.
+_DELTA_ALIASES = {
+    "quests": "quest_update", "quest": "quest_update",
+    "quest_status": "quest_update", "quests_update": "quest_update",
+    "characters": "npc_state", "character": "npc_state",
+    "npc": "npc_state", "npcs": "npc_state", "npc_states": "npc_state",
+    "time": "time_advance", "advance_time": "time_advance",
+    "flags": "flag_set", "flag": "flag_set", "set_flag": "flag_set",
+    "reveals": "reveal", "events_fired": "event_fired",
+    "gold": "gold_delta", "hp": "hp_delta", "mana": "mana_delta",
+    "xp": "xp_delta", "statuses_add": "status_add",
+}
+# Dotted-path keys: scene summaries carry a `state_changes:` line written in a
+# "quests.the-hunt -> active" shorthand, and models copy that syntax straight into
+# their delta keys ("quests.qualifier-fight-siren ->", "characters.foo.status"),
+# which then dropped as unknown and lost the intent. Un-flatten those back into
+# the real delta they meant.
+_DOTTED_ROOTS = {"quests": "quest_update", "quest": "quest_update",
+                 "characters": "npc_state", "character": "npc_state",
+                 "npc": "npc_state", "npcs": "npc_state",
+                 "flags": "flag_set", "flag": "flag_set"}
+
+
+def _unflatten(key: str, value):
+    """Turn a flattened delta key back into (canonical_key, value), or None when
+    it isn't one. 'quests.the-hunt' -> ('quest_update', {'the-hunt': value}) and
+    'characters.mara.mood' -> ('npc_state', {'mara': {'mood': value}}). A trailing
+    '-> state' arrow (the state_changes shorthand) supplies the value when the key
+    carries it. The result is validated normally by the caller."""
+    head, _, tail = key.partition(".")
+    root = _DOTTED_ROOTS.get(head.strip().lower())
+    if not root or not tail.strip():
+        return None
+    # "the-hunt -> completed" — the arrow form puts the new state in the KEY.
+    name, arrow, arrow_val = tail.partition("->")
+    arrow_val = arrow_val.strip()
+    name = name.strip()
+    if root == "quest_update":
+        slug = name.split(".")[0].strip()
+        val = arrow_val if arrow and arrow_val else value
+        if not slug or not isinstance(val, str) or not val.strip():
+            return None
+        return root, {slug: val.strip()}
+    if root == "flag_set":
+        return (root, {name.split(".")[0].strip(): value}) if name else None
+    # npc_state: "characters.<slug>[.<field>]"
+    parts = [p.strip() for p in name.split(".") if p.strip()]
+    if not parts:
+        return None
+    slug, field = parts[0], (parts[1] if len(parts) > 1 else "mood")
+    val = arrow_val if arrow and arrow_val else value
+    if not isinstance(val, str) or not val.strip():
+        return None
+    # npc_state only carries mood/disposition; anything else (e.g. 'status')
+    # is the model describing a mood in another word, so keep it as mood.
+    field = field if field in ("mood", "disposition") else "mood"
+    return root, {slug: {field: val.strip()}}
+
+
 _INT_DELTAS = {"hp_delta", "mana_delta", "xp_delta"}
 _STR_LISTS = {"status_add", "status_remove"}
 _ITEM_LISTS = {"inventory_add", "inventory_remove"}
@@ -126,6 +187,12 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
         return clean, rejected
 
     state = store.world_state()
+    # Repair malformed delta LABELS before dispatch: a known wrong name
+    # ("quests" -> quest_update) or a flattened dotted path
+    # ("quests.the-hunt -> active"). Values still run through each delta's full
+    # validation below, so this only rescues the model's intent and never relaxes
+    # a rule. Same-target entries merge; a correctly-named key always wins.
+    d = _repair_delta_keys(d)
     out: dict = {}
     for key, value in d.items():
         if key in _INT_DELTAS:
@@ -221,6 +288,41 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
     if out:
         clean["deltas"] = out
     return clean, rejected
+
+
+def _repair_delta_keys(d: dict) -> dict:
+    """Rewrite malformed delta keys to the canonical ones (see _DELTA_ALIASES and
+    _unflatten). Correctly named keys are copied through untouched and always take
+    precedence; repaired entries merge into dict-valued deltas rather than
+    clobbering. Unrecognized keys are left alone so they still get reported."""
+    known = set(_INT_DELTAS) | _STR_LISTS | _ITEM_LISTS | _MECHANICS | _WORLD | _LORE
+    out: dict = {}
+    repaired: dict = {}
+    for key, value in d.items():
+        if key in known:
+            out[key] = value
+            continue
+        canon, new_val = None, None
+        got = _unflatten(key, value) if "." in key else None
+        if got is not None:
+            canon, new_val = got
+        elif key in _DELTA_ALIASES:
+            canon, new_val = _DELTA_ALIASES[key], value
+        if canon is None:
+            out[key] = value                      # unknown: report it as before
+            continue
+        cur = repaired.get(canon)
+        if isinstance(cur, dict) and isinstance(new_val, dict):
+            for k, v in new_val.items():          # merge per-entity repairs
+                if isinstance(cur.get(k), dict) and isinstance(v, dict):
+                    cur[k].update(v)
+                else:
+                    cur[k] = v
+        else:
+            repaired[canon] = new_val
+    for canon, value in repaired.items():
+        out.setdefault(canon, value)              # a real key the model sent wins
+    return out
 
 
 def _slug(value) -> str:
