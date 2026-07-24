@@ -2665,6 +2665,11 @@ async function renderSettings() {
   $("#pf-save").addEventListener("click", async () => {
     const name = $("#pf-name").value.trim();
     if (!name) return pfStatus("enter a name first");
+    // Apply the form FIRST: this button used to snapshot only the already-active
+    // connection, so editing the API key (or model/URL) and pressing this Save
+    // silently discarded the edit. Now both Save buttons persist what you see.
+    pfStatus("saving…");
+    if (!await applySettings(null)) return pfStatus("couldn't save the connection");
     try { await api("/api/profiles", {method: "POST", body: {name}}); render(); }
     catch (e) { pfStatus("error: " + e.message); }
   });
@@ -2685,7 +2690,11 @@ async function renderSettings() {
       render();
     } catch (e) { pfStatus("error: " + e.message); }
   });
-  $("#save-settings").addEventListener("click", async () => {
+  // The form as the server wants it. Shared so "Save & apply" AND "Save current
+  // connection as…" both persist what you are actually looking at — the latter
+  // used to snapshot only the ALREADY-ACTIVE connection, so typing a new API key
+  // and pressing the nearer Save silently did nothing.
+  const settingsBody = () => {
     const body = {
       mode,
       retrieval: {
@@ -2731,16 +2740,28 @@ async function renderSettings() {
         api_key: $("#hm-key").value.trim(),
       },
     };
+    return body;
+  };
+
+  // Apply the form. Returns true on success. Shared by both Save buttons.
+  const applySettings = async (statusEl) => {
     try {
-      await api("/api/settings", {method: "PUT", body});
+      await api("/api/settings", {method: "PUT", body: settingsBody()});
       invalidateReady();          // the model may now (or no longer) be reachable
-      $("#save-status").textContent = "Saved — applied to new turns.";
       setBrainline();
-      setTimeout(() => { $("#save-status").textContent = ""; }, 3000);
+      if (statusEl) {
+        statusEl.textContent = "Saved — applied to new turns.";
+        setTimeout(() => { statusEl.textContent = ""; }, 3000);
+      }
+      return true;
     } catch (e) {
-      $("#save-status").textContent = "error: " + e.message;
+      if (statusEl) statusEl.textContent = "error: " + e.message;
+      return false;
     }
-  });
+  };
+
+  $("#save-settings").addEventListener("click",
+    () => applySettings($("#save-status")));
 }
 
 /* ---------- brainline ---------- */
