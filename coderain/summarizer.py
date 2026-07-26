@@ -250,9 +250,27 @@ class Summarizer:
                    if any(trigger_hit(tok, text) for tok in e.triggers())]
         if not matched:
             return "EXISTING ENTITIES: (none relevant)"
+        # Which 12 matters. This used to be an arbitrary first-12 slice of dict
+        # order, so on a busy chunk (measured: 31 entities relevant in one) the
+        # entities that got shown — and therefore the only ones that could be
+        # UPDATED — were effectively random, quietly leaving major characters
+        # stale. Rank by importance, then by how recently the text mentions them,
+        # so the fold always sees the ones that matter most.
+        def rank(item):
+            _rel, e = item
+            last = max((text.rfind(t.lower()) for t in e.triggers()), default=-1)
+            return (-e.importance, -last)
+        matched.sort(key=rank)
+        shown, overflow = matched[:12], matched[12:]
         out = ("EXISTING ENTITIES (rewrite in full if they change):\n\n"
-               + "\n\n".join(e.render() for _rel, e in matched[:12]))
-        goalless = [e.title for rel, e in matched[:12]
+               + "\n\n".join(e.render() for _rel, e in shown))
+        # Never let an entity vanish silently: name the rest so the model can
+        # still promote one it must update (it can restate the full entry).
+        if overflow:
+            out += ("\n\nALSO PRESENT (not shown in full — promote one only if "
+                    "these turns genuinely change it): "
+                    + ", ".join(f"{e.title} [[{e.slug}]]" for _rel, e in overflow))
+        goalless = [e.title for rel, e in shown
                     if rel == "characters.md"
                     and not str(e.attrs.get("wants", "")).strip()]
         if goalless:

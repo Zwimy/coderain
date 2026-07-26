@@ -248,10 +248,42 @@ class Retriever:
             return []
 
 
-def build_retriever(store: MemoryStore, client, cfg: dict | None) -> Retriever | None:
-    """Construct a Retriever if retrieval is enabled; else None (recall stays off)."""
+def build_retriever(store: MemoryStore, client, cfg: dict | None,
+                    app_config=None) -> Retriever | None:
+    """Construct a Retriever if retrieval is enabled; else None (recall stays off).
+
+    The chat provider is often NOT an embeddings provider — DeepSeek, for one,
+    answers 404 for /embeddings, and the failure was invisible: recall read as
+    "enabled" in Settings while silently doing nothing, quietly costing continuity.
+    So `retrieval.profile` may name a DIFFERENT profile to embed with (typically
+    local Ollama with nomic-embed-text, which is free and runs beside a hosted
+    story model). Unset = embed on the chat client, as before."""
     cfg = cfg or {}
     if not cfg.get("enabled"):
         return None
+    name = str(cfg.get("profile", "") or "").strip()
+    if name and app_config is not None:
+        from ..config import build_profile
+        from ..llm import LLM
+        prof = build_profile(app_config.raw, name)
+        client = LLM(prof, app_config.generation).client
     embedder = Embedder(client, str(cfg_get(cfg, "embed_model")))
     return Retriever(store, VectorIndex(store, embedder), cfg)
+
+
+def probe_embedder(client, cfg: dict | None, app_config=None) -> str:
+    """Return "" when embeddings actually work, else a human-readable reason.
+    Used by the health check so a dead embedder is reported instead of hidden."""
+    cfg = cfg or {}
+    name = str(cfg.get("profile", "") or "").strip()
+    model = str(cfg_get(cfg, "embed_model"))
+    try:
+        if name and app_config is not None:
+            from ..config import build_profile
+            from ..llm import LLM
+            client = LLM(build_profile(app_config.raw, name),
+                         app_config.generation).client
+        Embedder(client, model).embed(["probe"])
+        return ""
+    except Exception as e:  # noqa: BLE001 — any failure means "not usable"
+        return f"{type(e).__name__}: {str(e)[:160]}"
