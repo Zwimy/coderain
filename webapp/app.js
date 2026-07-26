@@ -2410,9 +2410,13 @@ async function renderSettings() {
       <input id="hm-base" value="${esc(st.hosted.base_url)}">
       <label>API key ${st.hosted.key_set
         ? '<span style="color:var(--ok)">(saved — leave blank to keep)</span>'
-        : ""}</label>
+        : '<span style="color:var(--player)">(not saved yet)</span>'}</label>
       <input id="hm-key" type="password" placeholder="${st.hosted.key_set
         ? "••••••••" : "paste your key"}">
+      <p class="muted">Keys and stories live in this app's data folder:
+        <code>${esc(st.home || "")}</code>. The desktop app and a source run use
+        DIFFERENT folders, so a key saved in one will read as "not saved" in the
+        other.</p>
       <h2>Context windows (snapshot)</h2>
       <pre class="table">${esc(hosted.hints.join("\n"))}</pre>
       <details><summary class="muted">What the big platforms actually run</summary>
