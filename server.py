@@ -1799,6 +1799,11 @@ def get_settings():
             "context_tokens": hosted.get("context_tokens", 131072),
             "key_set": bool(read_env().get(HOSTED_KEY_ENV, "")),
         },
+        # Which data folder this instance reads and writes. The desktop build and a
+        # source run use DIFFERENT homes (%LOCALAPPDATA%\Coderain vs the repo), so a
+        # key saved in one looks "not saved" in the other. Showing it makes that
+        # visible instead of feeling like settings failed to persist.
+        "home": str(DATA_ROOT),
         "generation": {
             "response_length":
                 _cfg.generation.get("response_length", "medium"),
