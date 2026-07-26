@@ -1693,6 +1693,38 @@ def drop_rule_override(slug: str, rel: str):
     return {"ok": True, "layer": store.layer_of(rel)}
 
 
+@app.get("/api/retrieval/check")
+def retrieval_check():
+    """Does semantic recall ACTUALLY work? Settings only reported the checkbox, so
+    a provider without an embeddings endpoint (DeepSeek answers 404) read as
+    'enabled' while the retriever silently degraded to a no-op — losing recall
+    with nothing to show for it. This spends one tiny embedding call to find out."""
+    if not bool(_cfg.retrieval.get("enabled")):
+        return {"ok": False, "state": "off",
+                "detail": "Semantic recall is switched off."}
+    if not features.enabled("vector"):
+        return {"ok": False, "state": "unavailable",
+                "detail": "The vector recall module is not in this build."}
+    vector_mod = features.module("vector")
+    probe = getattr(vector_mod, "probe_embedder", None)
+    if probe is None:
+        return {"ok": True, "state": "unknown", "detail": ""}
+    who = str(_cfg.retrieval.get("profile", "") or "").strip() or "the chat model"
+    try:
+        err = probe(LLM(_cfg.profile, _cfg.generation).client,
+                    _cfg.retrieval, _cfg)
+    except Exception as e:  # noqa: BLE001 — a broken profile must not 500 here
+        err = f"{type(e).__name__}: {str(e)[:160]}"
+    if err:
+        return {"ok": False, "state": "failing", "embedder": who, "error": err,
+                "detail": f"Embeddings are not working on {who}, so semantic "
+                          "recall is doing nothing. Point 'Embed with' at a "
+                          "provider that serves embeddings (local Ollama with "
+                          "nomic-embed-text is free)."}
+    return {"ok": True, "state": "working", "embedder": who,
+            "detail": f"Semantic recall is live (embedding on {who})."}
+
+
 @app.get("/api/ready")
 def ready():
     """Is there a model this install can actually talk to?
@@ -1844,6 +1876,8 @@ def get_settings():
             "half_life_turns": _cfg.retrieval.get("half_life_turns", 40),
             "min_similarity": _cfg.retrieval.get("min_similarity", 0.25),
             "available": features.enabled("vector"),
+            "profile": _cfg.retrieval.get("profile", ""),
+            "profiles": sorted((_cfg.raw.get("profiles") or {}).keys()),
         },
     }
 
@@ -1911,6 +1945,13 @@ def put_settings(body: dict):
             raw["retrieval"]["enabled"] = bool(ret["enabled"])
         if str(ret.get("embed_model", "")).strip():
             raw["retrieval"]["embed_model"] = str(ret["embed_model"]).strip()
+        if "profile" in ret:
+            # Which profile does the EMBEDDING (may differ from the chat model:
+            # a hosted story model often has no embeddings endpoint at all).
+            name = str(ret.get("profile", "") or "").strip()
+            if name and name not in (raw.get("profiles") or {}):
+                raise HTTPException(400, f"no such profile: {name}")
+            raw["retrieval"]["profile"] = name
         for key, lo, hi, cast in (("top_k", 1, 20, int),
                                   ("half_life_turns", 1, 500, int),
                                   ("min_similarity", 0.0, 1.0, float)):

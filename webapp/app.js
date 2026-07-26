@@ -2503,8 +2503,25 @@ async function renderSettings() {
           ${st.retrieval.enabled ? "checked" : ""}>
         Semantic recall (find relevant past scenes by meaning, not just keywords)
       </label>
-      <p class="muted">Needs an embedding model pulled in Ollama
-        (<code>ollama pull nomic-embed-text</code>).</p>
+      <p class="muted">The strongest consistency feature: it surfaces the right
+        past entry even when the wording doesn't match. Needs a provider that
+        serves embeddings — many hosted story models (DeepSeek among them) do NOT,
+        and the recall then silently does nothing. Use <b>Embed with</b> to run
+        embeddings on local Ollama (<code>ollama pull nomic-embed-text</code>)
+        while the story runs on your hosted model. Press <b>Check</b> to see
+        whether it is genuinely working.</p>
+      <div class="row">
+        <div><label>Embed with</label>
+          <select id="rt-profile">
+            <option value="">(the chat model)</option>
+            ${(st.retrieval.profiles || []).map(p =>
+              `<option value="${esc(p)}" ${st.retrieval.profile === p
+                ? "selected" : ""}>${esc(p)}</option>`).join("")}
+          </select></div>
+        <div style="align-self:flex-end">
+          <button id="rt-check" type="button">Check</button></div>
+      </div>
+      <p id="rt-status" class="muted"></p>
       <div class="row">
         <div><label>Embedding model</label>
           <input id="rt-model" value="${esc(st.retrieval.embed_model)}"></div>
@@ -2717,6 +2734,7 @@ async function renderSettings() {
       retrieval: {
         enabled: $("#rt-enabled").checked,
         embed_model: $("#rt-model").value,
+        profile: $("#rt-profile") ? $("#rt-profile").value : "",
         top_k: $("#rt-topk").value,
         min_similarity: $("#rt-minsim").value,
       },
@@ -2779,6 +2797,30 @@ async function renderSettings() {
 
   $("#save-settings").addEventListener("click",
     () => applySettings($("#save-status")));
+
+  // Does semantic recall actually work? The checkbox alone was misleading: a
+  // provider with no embeddings endpoint left it "on" while doing nothing.
+  const rtCheck = $("#rt-check");
+  if (rtCheck) rtCheck.addEventListener("click", async () => {
+    const out = $("#rt-status");
+    rtCheck.disabled = true;
+    out.textContent = "Saving settings and testing embeddings…";
+    if (!await applySettings(null)) {       // test what's on screen, not on disk
+      rtCheck.disabled = false;
+      out.textContent = "Couldn't save the settings to test them.";
+      return;
+    }
+    try {
+      const r = await api("/api/retrieval/check");
+      out.textContent = (r.ok ? "✓ " : "✗ ") + (r.detail || r.state)
+        + (r.error ? ` (${r.error})` : "");
+      out.style.color = r.ok ? "var(--ok)" : "var(--player)";
+    } catch (e) {
+      out.textContent = "Check failed: " + e.message;
+      out.style.color = "var(--player)";
+    }
+    rtCheck.disabled = false;
+  });
 }
 
 /* ---------- brainline ---------- */

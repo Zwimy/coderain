@@ -157,7 +157,7 @@ class Engine:
         if vector_mod is not None:
             try:
                 self.retriever = vector_mod.build_retriever(
-                    store, self.llm.client, config.retrieval)
+                    store, self.llm.client, config.retrieval, config)
             except Exception:  # noqa: BLE001 — retrieval setup never breaks the engine
                 self.retriever = None
 
