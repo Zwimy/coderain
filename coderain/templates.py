@@ -52,6 +52,13 @@ narrator's system prompt every turn. Edit freely.
   anything the player has only thought — unless the story establishes how they
   found out. When in doubt, have them not know.
 
+## What characters want
+- Characters have their own agenda. When an entry carries `wants:` (their current
+  goal) and `motivation:` (why), play them pursuing it — pushing their own angle,
+  not just answering the player. Two characters with clashing goals should clash.
+- A character acts on their goal even when the player doesn't raise it, and drops
+  or changes it only when the story gives them a reason.
+
 ## Content boundaries
 - (Set any tone or content limits here.)
 """
@@ -171,6 +178,25 @@ field; events belong in canon-events, not facts.
 Every scene fold reports which `characters`, `locations`, and `quests` the turns
 touched (slugs) plus terse `state_changes` — these build the entity/quest
 indexes ("what happened with X?"). Best effort: never block a fold on them.
+
+## Motivations and goals (every character keeps these current)
+Every character carries two header lines, and they are LIVE — they change as the
+story does:
+- `wants:` what this character is trying to get RIGHT NOW, in one concrete line.
+  A goal, not a mood: "get the ledger back before the ring notices", not "is angry".
+- `motivation:` WHY they want it — the driver underneath (a debt, a fear, loyalty,
+  revenge, ambition). This changes more slowly than `wants`.
+Rules:
+- When a character appears in the turns you are folding and has NO `wants:` yet,
+  infer one from what they have actually done and said, and add it. Never leave a
+  character who has acted on the page without a goal.
+- When the fiction changes what someone is after — they get what they wanted, lose
+  it, are talked out of it, or a bigger threat replaces it — REWRITE `wants:` to the
+  new one. A stale goal is worse than none.
+- Only change `motivation:` when the story genuinely reveals or shifts it.
+- A goal that has just been reached or abandoned belongs in the body as history
+  ("she already got the chip"), not left standing in `wants:`.
+Keep both lines when rewriting an entry; they steer how the character acts.
 
 ## Character facets (visual, mentality, voice, skills)
 When you promote or rewrite a character, keep these four labeled facets in the body
@@ -524,7 +550,7 @@ def initial_state(rpg_cfg: dict | None = None) -> dict:
 # Bump whenever any master's default text changes, and append the OUTGOING hash of
 # each changed file to `_SHIPPED_RULE_HASHES` below. The version is informational
 # (stored in the ledger for diagnostics); correctness is driven by the hashes.
-RULES_VERSION = 9
+RULES_VERSION = 10
 
 # Every default rule text we have ever SHIPPED, per file (current defaults are added
 # automatically). On an app update, an on-disk master whose content hashes to one of
@@ -532,9 +558,11 @@ RULES_VERSION = 9
 # anything else is treated as a user edit and preserved. When you change a master,
 # add its previous hash here so installs still on that version auto-update cleanly.
 _SHIPPED_RULE_HASHES: dict[str, set[str]] = {
-    # v7 superseded in v8 (the "What characters know" rule).
+    # v7 superseded in v8 (the "What characters know" rule); v9 superseded in v10
+    # (the "What characters want" rule — goals/motivations drive behaviour).
     "writer-rules.md": {
-        "53a5d2bf8355cef2cc5d219b853814e7cbb079e9ab766377fd6d1a60799c8e3f"},
+        "53a5d2bf8355cef2cc5d219b853814e7cbb079e9ab766377fd6d1a60799c8e3f",
+        "8441c4181750f92cf991a0e6dc89ea5eddc7e36e4ed66271c57b08f0450c1a43"},
     # v1 superseded in v2 (character facets + skill-check `skill` field);
     # v2 superseded in v3 (stats: baselines in Markdown + NPC `actor` checks).
     # memory-rules: v5 added lorebook attrs + facts + episode metadata; v6 added
@@ -545,7 +573,9 @@ _SHIPPED_RULE_HASHES: dict[str, set[str]] = {
         "920ea7d51cf1935daff23527dbcdcb8fa1569c7987e1e37771c63dba6e0b7459",
         "e355aa8ec948bced66849cf944ca4fbf25b0fdefeb0822281aa95816d84e9336",
         "9d7da2fafce2b686fb13577070fc4690e949dc1dbbe75969355f3f671aefb819",
-        "031f7bcb2cb8ad514dc76c75ed747c4c8dc62bd5d30c52e7d12b3a5cfff14791"},
+        "031f7bcb2cb8ad514dc76c75ed747c4c8dc62bd5d30c52e7d12b3a5cfff14791",
+        # v9 superseded in v10 (motivations and goals kept live per character).
+        "9c2fc82d04863bf20c78a4b5c3c20fe5ef0720c860a019bee47e77c35c1379a4"},
     # rpg-rules: v4 = envelope v1 (world deltas + validator); v5 = reveal +
     # stat-list validation; v6 = gold/inventory-mirror/quests/grants/beats.
     "rpg-rules.md": {

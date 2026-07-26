@@ -125,6 +125,8 @@ _CHAR_SHAPE = (
     '"visual": "40-80 words: appearance at a glance — build, face, dress, tells", '
     '"mentality": "40-80 words: how they act, decide, and treat people", '
     '"voice": "how they talk + one sample line in quotes", '
+    '"wants": "their goal RIGHT NOW, one concrete line (what they are trying to get)", '
+    '"motivation": "why they want it — the driver underneath (debt, fear, revenge, love)", '
     '"skills": [{"name": "skill", "stat": "strength|agility|intelligence|knowledge|willpower|charisma"}], '
     '"stats": {"strength": 1-5, "agility": 1-5, "intelligence": 1-5, "knowledge": 1-5, '
     '"willpower": 1-5, "charisma": 1-5}, '
@@ -261,6 +263,12 @@ def _character_entry(d: dict) -> Entry | None:
     rels = _rels_attr(d.get("relationships"))
     if rels:
         e.attrs["relationships"] = rels
+    # Live goal + driver: the writer plays characters pursuing these, and the
+    # memory pass keeps them current as the fiction changes what they are after.
+    for key in ("wants", "motivation"):
+        val = _s(d.get(key))
+        if val:
+            e.attrs[key] = val
     facets = []
     for label, key in (("Visual", "visual"), ("Mentality", "mentality"),
                        ("Voice", "voice")):

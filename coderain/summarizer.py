@@ -45,6 +45,8 @@ Return ONLY a JSON object, no prose, with this shape:
      "when": "in-world time this became true (optional)",
      "cause": "canon-event importance>=4 ONLY: what caused it (the WHY)",
      "consequence": "canon-event importance>=4 ONLY: what it changed (the SO-WHAT)",
+     "wants": "characters ONLY: their goal RIGHT NOW, one concrete line",
+     "motivation": "characters ONLY: why they want it (the driver underneath)",
      "relationships": [{"with": "other-slug", "note": "ally / rival / owes debt"}],
      "detail": "FULL rewritten detail for this entity's home file"}
   ],
@@ -132,6 +134,14 @@ class Summarizer:
                 attrs["status"] = str(p["status"]).strip()
             if p.get("when"):
                 attrs["when"] = str(p["when"]).strip()
+            # Live goals/motivations (memory-rules v10). Blank means "no change",
+            # so a fold that doesn't mention them never wipes what's already there;
+            # the rewrite path below re-attaches the previous values in that case.
+            if kind == "character":
+                for key in ("wants", "motivation"):
+                    val = str(p.get(key, "") or "").strip()
+                    if val:
+                        attrs[key] = val
             rel_pairs = []
             for r in p.get("relationships", []) or []:
                 if isinstance(r, dict) and r.get("with"):
@@ -229,14 +239,29 @@ class Summarizer:
 
     def _existing_context(self, turns: list[dict]) -> str:
         """Show the model the current entries for entities mentioned in the turns,
-        so it can rewrite (not append) them."""
+        so it can rewrite (not append) them.
+
+        Also names any CHARACTER present here that has no `wants:` yet. That is the
+        backfill path for stories that began before goals existed: a character gets
+        one the next time they actually appear, so an ongoing save fills in as it
+        plays rather than needing a migration."""
         text = _turns_text(turns).lower()
-        hits = [e.render() for _, e in self.store.index().entries.values()
-                if any(trigger_hit(tok, text) for tok in e.triggers())]
-        if not hits:
+        matched = [(rel, e) for rel, e in self.store.index().entries.values()
+                   if any(trigger_hit(tok, text) for tok in e.triggers())]
+        if not matched:
             return "EXISTING ENTITIES: (none relevant)"
-        return ("EXISTING ENTITIES (rewrite in full if they change):\n\n"
-                + "\n\n".join(hits[:12]))
+        out = ("EXISTING ENTITIES (rewrite in full if they change):\n\n"
+               + "\n\n".join(e.render() for _rel, e in matched[:12]))
+        goalless = [e.title for rel, e in matched[:12]
+                    if rel == "characters.md"
+                    and not str(e.attrs.get("wants", "")).strip()]
+        if goalless:
+            out += ("\n\nNO GOAL RECORDED YET for: " + ", ".join(goalless)
+                    + ". These characters act in these turns, so infer a concrete "
+                      "`wants` (what they are after right now) and `motivation` "
+                      "(why) for each from what they actually do and say, and "
+                      "include them in that character's promotion.")
+        return out
 
     # --- the folds ---
     def _fold_scene(self, turns: list[dict], scene_no: int,
