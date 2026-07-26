@@ -1138,7 +1138,16 @@ function pieceModal(slug, rel, piece, lib = null, base = null, vocab = null) {
       ${isChar ? check("p-playable", "Playable ★", a.playable === "true") : ""}
       ${isEvent ? check("p-once", "Fires once", a.once === "true") : ""}
     </div>
-    ${isChar ? `<div class="row">
+    ${isChar ? `<label>Wants (their goal right now — what they are trying to get)</label>
+      <input id="p-wants" value="${esc(a.wants || "")}"
+             placeholder="e.g. win the qualifier without revealing her handler">
+      <label>Motivation (why they want it — the driver underneath)</label>
+      <input id="p-motivation" value="${esc(a.motivation || "")}"
+             placeholder="e.g. her sister's debt is owed to the people running it">
+      <p class="muted">The story keeps these current: as the fiction changes what a
+        character is after, the memory pass rewrites them. A character with no goal
+        gets one filled in the next time they appear in a scene.</p>
+      <div class="row">
       <div><label>Stats ("strength 3, agility 2")</label>
         <input id="p-stats" value="${esc(a.stats || "")}"></div>
       <div><label>Skills ("name (stat), …")</label>
@@ -1239,12 +1248,16 @@ function pieceModal(slug, rel, piece, lib = null, base = null, vocab = null) {
     // preserve attrs the form doesn't manage
     for (const [k, v] of Object.entries(a)) {
       if (!(k in attrs) && !["playable", "once", "stats", "skills", "rarity",
-                             "objectives"].includes(k)) attrs[k] = v;
+                             "objectives", "wants", "motivation"].includes(k)) {
+        attrs[k] = v;
+      }
     }
     if (isChar) {
       attrs.playable = $("#p-playable").checked ? "true" : "";
       attrs.stats = $("#p-stats").value.trim();
       attrs.skills = $("#p-skills").value.trim();
+      attrs.wants = $("#p-wants").value.trim();
+      attrs.motivation = $("#p-motivation").value.trim();
     }
     if (isEvent) attrs.once = $("#p-once").checked ? "true" : "";
     if (isItem) attrs.rarity = $("#p-rarity").value;
