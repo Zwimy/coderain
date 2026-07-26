@@ -90,6 +90,38 @@ LOOKUP_TOOL = [{
 }]
 
 
+LORE_CHECK_SYS = """\
+You are the LORE-KEEPER (continuity) for an interactive story. You are given the
+story context and the player's latest action. Before the prose is written, work out
+what the narration MUST honor so it cannot contradict established canon. Use the
+lookup_memory and recall_turns tools when you need a specific detail or the exact
+wording of an earlier moment.
+
+Return ONLY a JSON object:
+{
+  "vetted_facts": ["exact facts the writer must honor this turn"],
+  "patches": ["contradictions to avoid, or corrections to likely assumptions"]
+}
+Keep both lists short and concrete — only what THIS turn could get wrong.
+"""
+
+
+def _lore_directive(facts: dict) -> str:
+    """Render the lore-keeper's findings as a post-history instruction (appended
+    AFTER the player's action, where it binds hardest on the next tokens)."""
+    honor = [str(f).strip() for f in (facts.get("vetted_facts") or [])
+             if str(f).strip()]
+    patches = [str(p).strip() for p in (facts.get("patches") or []) if str(p).strip()]
+    if not honor and not patches:
+        return ""
+    out = ["# CONTINUITY CHECK (verified against memory — do not contradict)"]
+    out += [f"- {h}" for h in honor]
+    if patches:
+        out.append("\n# CORRECTIONS")
+        out += [f"- {p}" for p in patches]
+    return "\n".join(out)
+
+
 def _any_applied(events: list[str]) -> bool:
     """True when at least one REAL delta landed — validator rejection warnings
     are UI events, not applied state, and must not keep an orphan player turn."""
@@ -540,6 +572,13 @@ class Engine:
                 messages = [{**messages[0],
                              "content": messages[0]["content"] + "\n\n" + add},
                             *messages[1:]]
+            # Optional continuity pass BEFORE the prose (one extra call). Works
+            # without the quad pipeline — see _lore_check.
+            if self.cfg.generation.get("lore_check", False):
+                directive = self._lore_check(messages, on_stage)
+                if directive:
+                    messages = [*messages,
+                                {"role": "system", "content": directive}]
         if self.trinity is not None:
             # Quad pipeline: the Logic Agent's envelope is validated and RESOLVED
             # before the Narrator writes (so prose narrates the actual outcome);
@@ -746,6 +785,45 @@ class Engine:
         reply = "".join(chunks).strip()
         if reply:
             self.store.append_companion_chat(slug, user_text, reply)
+
+    def _lore_check(self, messages, on_stage=None) -> str:
+        """Standalone continuity pass — the lore-keeper WITHOUT the quad pipeline.
+        It never needed the Director's plan: given the context and the action it can
+        work out what the prose must not contradict. So single-brain + this is TWO
+        calls with verification, rather than the three quad + lore-keeper costs.
+        Returns a post-history directive, or "" when it finds nothing / fails
+        (continuity is best-effort and must never break a turn)."""
+        import time
+        from .llm import extract_json
+        t0 = time.monotonic()
+        if on_stage:
+            on_stage("Continuity check")
+        payload = ("STORY CONTEXT:\n" + messages[0]["content"]
+                   + "\n\nPLAYER ACTION:\n"
+                   + next((m["content"] for m in reversed(messages)
+                           if m["role"] == "user"), ""))
+        convo = [{"role": "system", "content": LORE_CHECK_SYS},
+                 {"role": "user", "content": payload}]
+        try:
+            raw = self.llm.complete_with_tools(convo, LOOKUP_TOOL,
+                                               self._dispatch_tool)
+        except Exception as e:  # noqa: BLE001 — never fatal
+            if on_stage:
+                on_stage(f"Lore-keeper FAILED ({time.monotonic() - t0:.1f}s): {e} "
+                         "— continuing unvetted")
+            return ""
+        obj = extract_json(raw)
+        if not isinstance(obj, dict):
+            if on_stage:
+                on_stage(f"Lore-keeper FAILED ({time.monotonic() - t0:.1f}s): "
+                         "no valid JSON — continuing unvetted")
+            return ""
+        directive = _lore_directive(obj)
+        if on_stage:
+            n = len(obj.get("vetted_facts") or []) + len(obj.get("patches") or [])
+            on_stage(f"Lore-keeper done ({time.monotonic() - t0:.1f}s): "
+                     f"{n} continuity point(s)")
+        return directive
 
     def _generate_with_tool(self, messages) -> str:
         return self.llm.complete_with_tools(

@@ -2468,6 +2468,17 @@ async function renderSettings() {
         and writes a new one as each completes, steering the arc. It's not a
         per-turn brain — it only plans at the memory-fold cadence. See the
         <b>Plan</b> button while playing. Off = no outline.</p>
+      <label style="margin-top:14px">
+        <input type="checkbox" id="gc-lore"
+          ${st.generation.lore_check ? "checked" : ""}>
+        Continuity check before each turn (lore-keeper)
+      </label>
+      <p class="muted">A verification pass that looks up what the turn must not
+        contradict and hands the writer the facts to honor. The only stage that
+        VERIFIES rather than just recalls, so it's the strongest guard against
+        contradictions — and the most expensive: it adds one full call per turn
+        (roughly double the input cost on single-brain, triple with Quality).
+        Works with or without the quad brain.</p>
       <label>Chapters planned ahead</label>
       <input type="number" id="gc-horizon" min="2" max="8" step="1"
         value="${st.generation.chapter_horizon || 4}" style="width:80px">
@@ -2751,6 +2762,7 @@ async function renderSettings() {
         ai_acts_as_player: $("#gc-agency").checked,
         chapter_outline: $("#gc-outline").checked,
         chapter_horizon: $("#gc-horizon").value,
+        lore_check: $("#gc-lore").checked,
         start_reply_with: $("#gc-prefix").value,
         stop: $("#gc-stop").value,
         temperature: $("#gc-temp").value,
