@@ -1847,6 +1847,7 @@ def get_settings():
                 bool(_cfg.generation.get("chapter_outline", True)),
             "chapter_horizon": int(_cfg.generation.get("chapter_horizon", 4)),
             "lore_check": bool(_cfg.generation.get("lore_check", False)),
+            "lore_check_every": int(_cfg.generation.get("lore_check_every", 1)),
             "start_reply_with": _cfg.generation.get("start_reply_with", ""),
             "stop": _cfg.generation.get("stop", []),
             "temperature": _cfg.generation.get("temperature", 0.9),
@@ -1908,6 +1909,12 @@ def put_settings(body: dict):
         raw["generation"]["chapter_outline"] = bool(gen["chapter_outline"])
     if "lore_check" in gen:
         raw["generation"]["lore_check"] = bool(gen["lore_check"])
+    if "lore_check_every" in gen and gen["lore_check_every"] not in (None, ""):
+        try:
+            raw["generation"]["lore_check_every"] = max(
+                1, min(10, int(gen["lore_check_every"])))
+        except (TypeError, ValueError):
+            pass
     if "chapter_horizon" in gen and gen["chapter_horizon"] not in (None, ""):
         try:
             raw["generation"]["chapter_horizon"] = max(2, min(8, int(gen["chapter_horizon"])))

@@ -171,6 +171,9 @@ class Engine:
                         if trinity_mod is not None
                         and config.generation.get("trinity_brain", False)
                         else None)
+        if self.trinity is not None:
+            # Frequency only: trinity does its own enablement check.
+            self.trinity.lore_due = self.lore_cadence_due
         self._rpg_events: list[str] = []
         self._swipes = None            # ST-02 alternates for the last narrator turn
         self._pre_turn_rpg = None
@@ -573,8 +576,10 @@ class Engine:
                              "content": messages[0]["content"] + "\n\n" + add},
                             *messages[1:]]
             # Optional continuity pass BEFORE the prose (one extra call). Works
-            # without the quad pipeline — see _lore_check.
-            if self.cfg.generation.get("lore_check", False):
+            # without the quad pipeline — see _lore_check. Rate-limited by
+            # lore_check_every, since the world rarely changes enough to need
+            # re-verifying on every single turn.
+            if self.lore_due():
                 directive = self._lore_check(messages, on_stage)
                 if directive:
                     messages = [*messages,
@@ -785,6 +790,33 @@ class Engine:
         reply = "".join(chunks).strip()
         if reply:
             self.store.append_companion_chat(slug, user_text, reply)
+
+    def lore_due(self) -> bool:
+        """Is the continuity pass due on the exchange we're about to write?
+
+        Frequency mirrors the author's note (ST-21): count NARRATOR turns so far,
+        +1 for the one being written, and fire when that number is a multiple of
+        `lore_check_every`. every=1 is every turn; every=3 is turns 3, 6, 9...
+        Counting exchanges (not raw messages) keeps it independent of
+        player/narrator parity, and it is derived from the transcript so a retry of
+        the same turn makes the same decision."""
+        return (bool(self.cfg.generation.get("lore_check", False))
+                and self.lore_cadence_due())
+
+    def lore_cadence_due(self) -> bool:
+        """The FREQUENCY half only — is this exchange a multiple of every-N?
+        Kept separate because the quad pipeline decides enablement its own way
+        (the legacy trinity.lorekeeper.llm_pass flag), and must still honor the
+        cadence without being gated on `lore_check`."""
+        try:
+            every = max(1, int(self.cfg.generation.get("lore_check_every", 1) or 1))
+        except (TypeError, ValueError):
+            every = 1
+        if every == 1:
+            return True
+        exchange = sum(1 for t in self.store.turns()
+                       if t.get("role") == "narrator") + 1
+        return exchange % every == 0
 
     def _lore_check(self, messages, on_stage=None) -> str:
         """Standalone continuity pass — the lore-keeper WITHOUT the quad pipeline.

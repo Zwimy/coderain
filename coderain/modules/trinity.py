@@ -280,7 +280,12 @@ class TrinityBrain:
                 note(f"Director done ({time.monotonic() - t0:.1f}s)")
 
         facts: dict = {}
-        if self.lore_llm_pass and not skip_logic:
+        # `lore_due` (set by the engine) carries the same every-N cadence the
+        # single-brain path uses, so the frequency setting means one thing
+        # everywhere. Absent (standalone/test construction) = due.
+        due = getattr(self, "lore_due", None)
+        due = True if due is None else bool(due() if callable(due) else due)
+        if self.lore_llm_pass and due and not skip_logic:
             t1 = time.monotonic()
             note("Continuity check")
             facts, err = self._keep_lore(messages, plan)

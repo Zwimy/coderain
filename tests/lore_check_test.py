@@ -138,5 +138,43 @@ assert "model" not in tri.get("lorekeeper", {}), \
 assert r.json()["generation"]["lore_check"] is True
 print("4) a hosted save keeps the lore-keeper (only local model pins are dropped)")
 
+
+# ---- 5) frequency: every-N cadence (not every turn) ------------------------
+cfg5 = load_config()
+cfg5.generation["trinity_brain"] = False
+cfg5.generation["lore_check"] = True
+cfg5.generation["lore_check_every"] = 3
+store5 = _story("Every3")
+eng5 = Engine(cfg5, store5)
+s5 = LoreStub()
+eng5.llm = s5
+fired = []
+for i in range(1, 10):                      # 9 exchanges
+    before = s5.tool_calls
+    "".join(eng5.turn(f"step {i}"))
+    fired.append(s5.tool_calls > before)
+# exchanges 3, 6, 9 -> indexes 2, 5, 8
+assert fired == [False, False, True, False, False, True, False, False, True], fired
+assert s5.tool_calls == 3, f"expected 3 checks over 9 turns, got {s5.tool_calls}"
+print("5) every-3 cadence: fired on exchanges 3, 6, 9 only (3 calls, not 9)")
+
+# every=1 still means every turn
+cfg6 = load_config()
+cfg6.generation["trinity_brain"] = False
+cfg6.generation["lore_check"] = True
+cfg6.generation["lore_check_every"] = 1
+eng6 = Engine(cfg6, _story("Every1"))
+s6 = LoreStub(); eng6.llm = s6
+for i in range(3):
+    "".join(eng6.turn(f"go {i}"))
+assert s6.tool_calls == 3, s6.tool_calls
+print("   every=1 unchanged: fires on every turn")
+
+# the decision is replay-stable (a retry of the same turn decides the same way)
+eng6b = Engine(cfg5, store5)
+a, b = eng6b.lore_due(), eng6b.lore_due()
+assert a == b, "lore_due is not stable for the same transcript"
+print("   the cadence decision is derived from the transcript, so retries agree")
+
 shutil.rmtree(HOME, ignore_errors=True)
 print("\nLORE-CHECK TESTS PASSED")

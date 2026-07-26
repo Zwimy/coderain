@@ -2479,6 +2479,16 @@ async function renderSettings() {
         contradictions — and the most expensive: it adds one full call per turn
         (roughly double the input cost on single-brain, triple with Quality).
         Works with or without the quad brain.</p>
+      <label>Run the check every…</label>
+      <select id="gc-lore-every">
+        ${[[1, "every turn"], [2, "every 2nd turn"], [3, "every 3rd turn"],
+           [4, "every 4th turn"], [5, "every 5th turn"]].map(([v, t]) =>
+          `<option value="${v}" ${Number(st.generation.lore_check_every || 1) === v
+            ? "selected" : ""}>${t}</option>`).join("")}
+      </select>
+      <p class="muted">The world rarely changes enough to need re-verifying every
+        turn. Every 3rd turn keeps most of the benefit for a third of the cost —
+        the facts it surfaces are usually still true a turn or two later.</p>
       <label>Chapters planned ahead</label>
       <input type="number" id="gc-horizon" min="2" max="8" step="1"
         value="${st.generation.chapter_horizon || 4}" style="width:80px">
@@ -2763,6 +2773,7 @@ async function renderSettings() {
         chapter_outline: $("#gc-outline").checked,
         chapter_horizon: $("#gc-horizon").value,
         lore_check: $("#gc-lore").checked,
+        lore_check_every: $("#gc-lore-every").value,
         start_reply_with: $("#gc-prefix").value,
         stop: $("#gc-stop").value,
         temperature: $("#gc-temp").value,
