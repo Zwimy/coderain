@@ -31,11 +31,24 @@ def _reload(raw):
 
 
 def test_local_without_ollama_is_not_ready():
+    # ready() probes the FIXED OLLAMA_TAGS url, not the profile's base_url, so a
+    # dead base_url here proved nothing: on a machine where Ollama happens to be
+    # running this asserted against the real daemon and failed. Stub the probe so
+    # the case ("Ollama is not up") is actually the case under test.
     _reload({"active_profile": "local",
              "profiles": {"local": {"base_url": "http://127.0.0.1:1/v1",
                                     "model": "qwen3:4b",
                                     "api_key_env": "OLLAMA_API_KEY"}}})
-    r = client.get("/api/ready").json()
+    real_get = server.httpx.get
+
+    def dead_get(*a, **k):
+        raise server.httpx.ConnectError("connection refused")
+
+    server.httpx.get = dead_get
+    try:
+        r = client.get("/api/ready").json()
+    finally:
+        server.httpx.get = real_get
     assert r["ok"] is False, r
     assert r["reason"] == "no_ollama", r
     assert r["detail"], "no human-readable detail"
@@ -76,7 +89,18 @@ def test_incomplete_profile_falls_back_instead_of_killing_the_server():
     _reload({"active_profile": "hosted",
              "profiles": {"hosted": {"base_url": "", "model": "",
                                      "api_key_env": server.HOSTED_KEY_ENV}}})
-    r = client.get("/api/ready").json()          # must not 500 / not exit
+    # The fallback lands on the LOCAL default profile, so this probes Ollama too:
+    # stub it out or a machine with Ollama up reports ready and hides the case.
+    real_get = server.httpx.get
+
+    def dead_get(*a, **k):
+        raise server.httpx.ConnectError("connection refused")
+
+    server.httpx.get = dead_get
+    try:
+        r = client.get("/api/ready").json()       # must not 500 / not exit
+    finally:
+        server.httpx.get = real_get
     assert r["ok"] is False, r
     assert r["reason"] in ("no_model", "no_key", "no_ollama"), r
     assert client.get("/api/saves").status_code == 200, "server unusable"

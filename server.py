@@ -1846,6 +1846,7 @@ def get_settings():
             "chapter_outline":
                 bool(_cfg.generation.get("chapter_outline", True)),
             "chapter_horizon": int(_cfg.generation.get("chapter_horizon", 4)),
+            "lore_check": bool(_cfg.generation.get("lore_check", False)),
             "start_reply_with": _cfg.generation.get("start_reply_with", ""),
             "stop": _cfg.generation.get("stop", []),
             "temperature": _cfg.generation.get("temperature", 0.9),
@@ -1905,6 +1906,8 @@ def put_settings(body: dict):
         raw["generation"]["ai_acts_as_player"] = bool(gen["ai_acts_as_player"])
     if "chapter_outline" in gen:
         raw["generation"]["chapter_outline"] = bool(gen["chapter_outline"])
+    if "lore_check" in gen:
+        raw["generation"]["lore_check"] = bool(gen["lore_check"])
     if "chapter_horizon" in gen and gen["chapter_horizon"] not in (None, ""):
         try:
             raw["generation"]["chapter_horizon"] = max(2, min(8, int(gen["chapter_horizon"])))
@@ -2043,8 +2046,20 @@ def put_settings(body: dict):
         key = str(ho.get("api_key", "")).strip()
         if key:
             write_env({HOSTED_KEY_ENV: key})
-        # One big dual-mode model serves every stage — drop the local pins.
-        raw.pop("trinity", None)
+        # One big dual-mode model serves every stage, so drop the LOCAL per-stage
+        # model pins — but keep any other trinity settings. This used to pop the
+        # whole block, which silently deleted a hand-configured lore-keeper every
+        # time the user pressed Save in hosted mode.
+        tri = raw.get("trinity")
+        if isinstance(tri, dict):
+            kept = {k: {kk: vv for kk, vv in v.items()
+                        if kk not in ("profile", "model")}
+                    for k, v in tri.items() if isinstance(v, dict)}
+            kept = {k: v for k, v in kept.items() if v}
+            if kept:
+                raw["trinity"] = kept
+            else:
+                raw.pop("trinity", None)
         raw["active_profile"] = "hosted"
 
     save_yaml(raw)

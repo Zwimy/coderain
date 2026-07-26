@@ -117,8 +117,11 @@ class TrinityBrain:
         # Memory Manager is code-first (SPEC-V2 §1.1): the per-turn Lore-keeper LLM
         # pass is opt-in — retrieval itself is deterministic assembly, already done.
         lk = tcfg.get("lorekeeper")
-        self.lore_llm_pass = bool(lk.get("llm_pass", False)) \
-            if isinstance(lk, dict) else False
+        # `generation.lore_check` is the one user-facing switch (it works in
+        # single-brain too, and unlike the trinity block it survives a hosted-mode
+        # settings save). The legacy per-stage flag still turns it on.
+        self.lore_llm_pass = bool(config.generation.get("lore_check", False)) or (
+            bool(lk.get("llm_pass", False)) if isinstance(lk, dict) else False)
         # Director diet (token optimization): it plans LOGIC, so it doesn't need
         # the prose-writing rules or the full short-term window — just the story
         # state and the recent exchanges. `history_turns` caps how many tail
