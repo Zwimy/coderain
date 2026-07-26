@@ -1305,8 +1305,27 @@ class MemoryStore:
                         if e.attrs.get("status", "open").lower() != "resolved"
                         and not e.hidden()]
         if open_threads:
-            sections.append((1, "Open threads",
-                             "\n\n".join(e.render() for e in open_threads)))
+            # BOUNDED, like the facts list below: threads accumulate for the whole
+            # story and never shrink, so an unbounded block quietly ate the budget
+            # that recent scenes / the timeline / the characters actually on stage
+            # needed (measured live: 21 threads = 10k chars crowding all of them
+            # out). Most important first, whole entries only, then a one-line
+            # index of the rest so nothing silently disappears.
+            ranked = sorted(open_threads, key=lambda e: -e.importance)
+            cap = max(1200, int(budget_tokens * 4 * 0.12))
+            kept, used_t = [], 0
+            for e in ranked:
+                block = e.render()
+                if kept and used_t + len(block) > cap:
+                    continue
+                kept.append(e)
+                used_t += len(block)
+            body = "\n\n".join(e.render() for e in kept)
+            rest = [e for e in ranked if e not in kept]
+            if rest:
+                body += ("\n\nAlso open (ask memory for detail): "
+                         + ", ".join(f"{e.title} [[thread:{e.slug}]]" for e in rest))
+            sections.append((1, "Open threads", body))
         arc = _strip_h1(self.read("memory/arc.md"))
         if arc:
             sections.append((1, "Story so far (arc)", arc))
@@ -1341,13 +1360,24 @@ class MemoryStore:
         else:
             scenes = _recent_paragraphs(self.read("memory/scenes.md"),
                                         scenes_tail)
+        # Priority 1, not 2: the folded scenes ARE the story's short-term memory —
+        # they stand in for the raw turns that scrolled out. Losing them to a
+        # lower-value block (measured: a tight budget kept 21 open threads and
+        # dropped every recent scene) breaks continuity far worse than trimming
+        # lore does.
         if scenes:
-            sections.append((2, "Recent scenes", scenes))
+            sections.append((1, "Recent scenes", scenes))
+        # Newest lines only: the timeline is append-only and grows without bound
+        # (8k chars by turn 234), so an unbounded block squeezes out live lore.
         tl_lines = [ln for ln in self.read("memory/timeline.md").splitlines()
                     if ln.lstrip().startswith("- [T")]
         if tl_lines:
+            tl_cap = max(20, int(budget_tokens * 4 * 0.06) // 90)
+            shown = tl_lines[-tl_cap:]
+            head = ("(earlier turns folded into the arc above)\n"
+                    if len(shown) < len(tl_lines) else "")
             sections.append((2, "Timeline (shorthand; recall a [T..] range for detail)",
-                             "\n".join(tl_lines)))
+                             head + "\n".join(shown)))
 
         # --- lorebook activation (Wave 2 + Tier 2) ------------------------
         # pinned/critical entries are ALWAYS in; the rest activate on a trigger
@@ -1502,16 +1532,24 @@ class MemoryStore:
         # salience budget: keep priority-0 always; fill the rest until budget.
         # No single section may exceed the whole budget, so even an always-on
         # premise/player can't blow past the context window.
+        # Ties within a priority are broken SMALLEST-FIRST: the fill is greedy
+        # first-fit, so a single fat section used to consume the room several
+        # smaller (equally important) ones needed — which made the result
+        # non-monotonic, a bigger budget could drop a section a smaller one kept.
+        # Order is then restored so the prompt keeps its authored reading order.
         budget = budget_tokens * 4
         used = 0
-        chosen = []
-        for pr, title, body in sorted(sections, key=lambda s: s[0]):
+        picked: list[tuple[int, str]] = []      # (authored position, rendered text)
+        ranked = sorted(enumerate(sections),
+                        key=lambda it: (it[1][0], len(it[1][2])))
+        for pos, (pr, title, body) in ranked:
             seg = f"## {title}\n{body}"
             if len(seg) > budget:
                 seg = seg[:budget] + "\n…(truncated)"
             if pr == 0 or used + len(seg) <= budget:
-                chosen.append(seg)
+                picked.append((pos, seg))
                 used += len(seg)
+        chosen = [seg for _pos, seg in sorted(picked)]
 
         system = writer_rules
         if chosen:
