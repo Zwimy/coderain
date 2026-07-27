@@ -96,7 +96,9 @@ def test_server_has_cancel_endpoint_and_frees_lock_on_error():
     server._cfg.generation["use_memory_tool"] = False
     c = TestClient(server.app)
 
-    paths = {r.path for r in server.app.routes if hasattr(r, "path")}
+    # Ask the OpenAPI schema, not app.routes: endpoints live in srv/ routers now
+    # and app.routes doesn't flatten an included router into per-path entries.
+    paths = set(server.app.openapi()["paths"])
     assert "/api/saves/{slug}/cancel" in paths, "no cancel endpoint"
 
     slug = server.lib.saves.create("Lock", premise="x", mode="simple")
