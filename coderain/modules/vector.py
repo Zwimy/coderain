@@ -72,7 +72,20 @@ class Embedder:
     """Thin wrapper over an OpenAI-compatible embeddings endpoint. Reuses the same
     client (base_url / api_key) as the chat model, so it's provider-agnostic."""
 
+    # Recall is BEST-EFFORT: it must never make a turn wait. The chat client is
+    # tuned for generation (retries with backoff, a long timeout), which is
+    # exactly wrong here — measured on a real save with Ollama stopped, a single
+    # unreachable embed cost 13.5s of retries, and assemble() calls the retriever
+    # twice, so every turn paid 28 SECONDS before the model even started, then
+    # silently returned nothing. Fail fast instead: no retries, short timeout.
+    FAIL_FAST_TIMEOUT = 8.0
+
     def __init__(self, client, model: str):
+        try:
+            client = client.with_options(max_retries=0,
+                                         timeout=self.FAIL_FAST_TIMEOUT)
+        except (AttributeError, TypeError):
+            pass          # a stub/older client: use it as-is
         self.client = client
         self.model = model
 
@@ -198,7 +211,14 @@ class VectorIndex:
         w_imp = float(cfg_get(cfg, "weight_importance"))
         w_ref = float(cfg_get(cfg, "weight_references"))
         try:
-            qv = self.embedder.embed([query])[0]
+            # assemble() runs TWO passes over the same text (semantic-triggered
+            # lore, then Recalled), so embedding the query twice per turn was
+            # pure waste — and double the latency when the endpoint is slow.
+            if getattr(self, "_qcache", (None, None))[0] == query:
+                qv = self._qcache[1]
+            else:
+                qv = self.embedder.embed([query])[0]
+                self._qcache = (query, qv)
         except Exception as e:  # noqa: BLE001 — no endpoint -> no extra recall
             # THE swallow that hid a dead embedder for weeks: recall reported
             # "enabled" and returned nothing, every turn, in silence. Still not a
@@ -209,9 +229,9 @@ class VectorIndex:
                 log = getattr(getattr(self, "store", None), "log_degraded", None)
                 if callable(log):
                     log("semantic-recall",
-                        f"embedding failed, recall is doing nothing: "
+                        f"embedding failed, recall is off for this session: "
                         f"{type(e).__name__}: {e}")
-            return []
+            raise      # let the Retriever trip its circuit breaker
         conn = self._connect()
         try:
             rows = conn.execute("SELECT slug, rel, importance, ref_count, last_turn, "
@@ -242,10 +262,17 @@ class Retriever:
         self.store = store
         self.index = index
         self.cfg = cfg or {}
+        self._fails = 0             # consecutive failures; 2 trips the breaker
         self._failed = False        # log a dead embedder once, not every turn
         self.top_k = int(cfg_get(self.cfg, "top_k"))
 
     def __call__(self, query: str, exclude: set[str]) -> list[Entry]:
+        # Circuit breaker: an unreachable embedder fails on EVERY turn, and even
+        # a fail-fast timeout is seconds the player waits for nothing. Once it has
+        # failed, stop asking for the rest of the session — the health log says
+        # why, and Settings > Check re-tests on demand.
+        if self._failed:
+            return []
         try:
             now = len(self.store.turns())
             self.index.sync(now)
@@ -255,11 +282,14 @@ class Retriever:
             resolved = {slug: e for slug, (_, e) in self.store.index().entries.items()}
             for e in self.store.entries("memory/scenes.md"):
                 resolved.setdefault(e.slug, e)
+            self._fails = 0                       # a good call clears the count
             return [resolved[h.slug] for h in hits if h.slug in resolved]
         except Exception as e:  # noqa: BLE001 — best-effort, never a turn-breaker
-            # ...but never silent. Once per session: a broken provider fails on
-            # EVERY turn, and a log line per turn would be its own problem.
-            if not self._failed:
+            # ...but never silent. Two CONSECUTIVE failures trip the breaker: one
+            # blip should not disable recall for the session, a dead endpoint
+            # should. Logged once, since a broken provider fails on every turn.
+            self._fails += 1
+            if self._fails >= 2 and not self._failed:
                 self._failed = True
                 try:
                     self.store.log_degraded(
