@@ -30,7 +30,7 @@ track lets a developer understand the architecture well enough to contribute.
 - Keep each page short and single topic. Link between pages rather than repeating.
 - Every claim must match the code. When a page names a setting, a default, or a file,
   verify it against the source before publishing (defaults live in
-  coderain/config.py, the API in server.py, the UI in webapp/app.js).
+  coderain/config.py, the API in srv/, the UI in webapp/js/).
 
 ## Proposed structure (docs/ folder, one file per topic)
 
