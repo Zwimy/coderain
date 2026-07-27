@@ -13,43 +13,64 @@
 
   const GLYPHS = "アカサタナハマヤラ0123456789CODERAIN".split("");
   const STEP = 16;                       // column width / row height (px)
-  let cols, drops;
+  const FADE = 0.7;                      // per-row falloff behind the lead glyph
+  const TAIL = 14;                       // rows still bright enough to matter
+  let cols, rows, drops, glyph, lead;
 
   function paintBase() {
-    // Lay down an OPAQUE background first so painted and never-painted regions
-    // are byte-identical — otherwise the canvas alpha caps below 255 and the
-    // rain band reads as a faint grey rectangle against the page.
-    ctx.fillStyle = "#03060a";               // == --bg, fully opaque
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // EXACTLY transparent — clearRect writes literal zeros, so the page's own
+    // html{background:var(--bg)} shows through untouched.
+    //
+    // This used to fill an opaque copy of --bg and fade it with an alpha wash,
+    // which cannot converge: compositing rgba(3,6,10,0.30) over a pixel already
+    // at rgb(3,6,10) rounds to rgb(3,6,9) and then stays there. The whole
+    // viewport settled one step off the page and read as a faint dark rectangle.
+    // Raising the wash alpha only moved the resting point. Drawing the trail
+    // explicitly (below) removes the rounding loop entirely, and as a bonus the
+    // backdrop now follows the active theme instead of a hardcoded #03060a.
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
   function resize() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     cols = Math.ceil(canvas.width / STEP);
+    rows = Math.ceil(canvas.height / STEP) + 1;
     drops = Array.from({length: cols}, () =>
       Math.floor(Math.random() * -50));  // stagger the start of each column
+    // A cell keeps the glyph and brightness it was born with, so the tail fades
+    // in place instead of re-randomising into static every frame.
+    glyph = Array.from({length: cols}, () => new Array(rows).fill(""));
+    lead = Array.from({length: cols}, () => new Uint8Array(rows));
     paintBase();
   }
   resize();
   window.addEventListener("resize", resize);
 
   function draw() {
-    // Opaque-background wash → the classic fading trail. Colour == --bg and the
-    // alpha is high enough that faded glyphs actually reach the background
-    // instead of lingering as a grey-green haze (measured: prior 0.16 left the
-    // band at rgb 2,8,14 vs the 3,6,10 page — a visible rectangle).
-    ctx.fillStyle = "rgba(3, 6, 10, 0.30)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    paintBase();
     ctx.font = STEP + "px monospace";
-    for (let i = 0; i < drops.length; i++) {
-      const g = GLYPHS[(Math.random() * GLYPHS.length) | 0];
-      const y = drops[i] * STEP;
-      // lead glyph brighter, the rest dim green — reads as depth
-      ctx.fillStyle = Math.random() > 0.94
-        ? "rgba(120, 255, 140, 0.85)" : "rgba(31, 218, 37, 0.5)";
-      ctx.fillText(g, i * STEP, y);
-      if (y > canvas.height && Math.random() > 0.975) drops[i] = 0;
+    for (let i = 0; i < cols; i++) {
+      const head = drops[i];
+      if (head >= 0 && head < rows && !glyph[i][head]) {
+        glyph[i][head] = GLYPHS[(Math.random() * GLYPHS.length) | 0];
+        lead[i][head] = Math.random() > 0.94 ? 1 : 0;   // occasional bright one
+      }
+      // Same falloff the wash produced (alpha x0.7 per frame, head moves one row
+      // per frame), so the look is unchanged — only the residue is gone.
+      for (let k = 0; k < TAIL; k++) {
+        const row = head - k;
+        if (row < 0 || row >= rows || !glyph[i][row]) continue;
+        const f = Math.pow(FADE, k);
+        ctx.fillStyle = lead[i][row]
+          ? `rgba(120, 255, 140, ${0.85 * f})`
+          : `rgba(31, 218, 37, ${0.5 * f})`;
+        ctx.fillText(glyph[i][row], i * STEP, row * STEP);
+      }
+      if (head * STEP > canvas.height && Math.random() > 0.975) {
+        drops[i] = 0;
+        glyph[i].fill("");
+      }
       drops[i]++;
     }
   }
