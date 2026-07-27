@@ -199,7 +199,18 @@ class VectorIndex:
         w_ref = float(cfg_get(cfg, "weight_references"))
         try:
             qv = self.embedder.embed([query])[0]
-        except Exception:  # noqa: BLE001 — no embeddings endpoint -> no extra recall
+        except Exception as e:  # noqa: BLE001 — no endpoint -> no extra recall
+            # THE swallow that hid a dead embedder for weeks: recall reported
+            # "enabled" and returned nothing, every turn, in silence. Still not a
+            # turn-breaker, but it now leaves a trace (once per session, so a
+            # broken provider can't spam the log on every turn).
+            if not getattr(self, "_embed_failed", False):
+                self._embed_failed = True
+                log = getattr(getattr(self, "store", None), "log_degraded", None)
+                if callable(log):
+                    log("semantic-recall",
+                        f"embedding failed, recall is doing nothing: "
+                        f"{type(e).__name__}: {e}")
             return []
         conn = self._connect()
         try:
@@ -231,6 +242,7 @@ class Retriever:
         self.store = store
         self.index = index
         self.cfg = cfg or {}
+        self._failed = False        # log a dead embedder once, not every turn
         self.top_k = int(cfg_get(self.cfg, "top_k"))
 
     def __call__(self, query: str, exclude: set[str]) -> list[Entry]:
@@ -244,7 +256,17 @@ class Retriever:
             for e in self.store.entries("memory/scenes.md"):
                 resolved.setdefault(e.slug, e)
             return [resolved[h.slug] for h in hits if h.slug in resolved]
-        except Exception:  # noqa: BLE001 — recall is best-effort, never a turn-breaker
+        except Exception as e:  # noqa: BLE001 — best-effort, never a turn-breaker
+            # ...but never silent. Once per session: a broken provider fails on
+            # EVERY turn, and a log line per turn would be its own problem.
+            if not self._failed:
+                self._failed = True
+                try:
+                    self.store.log_degraded(
+                        "semantic-recall",
+                        f"recall is returning nothing: {type(e).__name__}: {e}")
+                except Exception:  # noqa: BLE001 — logging must never break a turn
+                    pass
             return []
 
 
