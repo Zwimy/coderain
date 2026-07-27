@@ -2438,83 +2438,76 @@ async function renderSettings() {
 
     <div class="setting-panel">
       <h2>Storytelling</h2>
-      <label>Cost vs quality</label>
+      <div class="sub-head">Cost vs quality</div>
       <div class="seg" id="cost-seg">
         <button data-v="economy" type="button">Economy</button>
         <button data-v="balanced" type="button">Balanced</button>
         <button data-v="quality" type="button">Quality</button>
       </div>
-      <p class="muted">The biggest lever on token cost. <b>Economy</b> /
-        <b>Balanced</b> = one model call per turn (single-brain) — best for pure
-        narrative; consistency comes from the memory system, and that one pass
-        still tracks reveals, time, and quests. <b>Quality</b> = a planner runs
-        before the writer to resolve mechanics first — worth it for RPG/tactical
-        play, roughly 2× the tokens per turn.
-        (Sets the toggles below; press Save &amp; apply.)</p>
-      <label style="margin-top:14px">
-        <input type="checkbox" id="gc-agency"
-          ${st.generation.ai_acts_as_player ? "checked" : ""}>
-        Let the AI speak &amp; act as my character
-      </label>
-      <p class="muted">Off (default) = the AI only plays the world and other
-        characters and hands control back to you; it won't decide or speak for
-        you. Turn it on if you want it to move your character along.</p>
-      <label style="margin-top:14px">
-        <input type="checkbox" id="gc-outline"
-          ${st.generation.chapter_outline !== false ? "checked" : ""}>
-        Plan the story in chapters (book plan)
-      </label>
-      <p class="muted">On (default) = a rolling outline plans a few chapters ahead
-        and writes a new one as each completes, steering the arc. It's not a
-        per-turn brain — it only plans at the memory-fold cadence. See the
-        <b>Plan</b> button while playing. Off = no outline.</p>
-      <label style="margin-top:14px">
-        <input type="checkbox" id="gc-lore"
-          ${st.generation.lore_check ? "checked" : ""}>
-        Continuity check before each turn (lore-keeper)
-      </label>
-      <p class="muted">A verification pass that looks up what the turn must not
-        contradict and hands the writer the facts to honor. The only stage that
-        VERIFIES rather than just recalls, so it's the strongest guard against
-        contradictions — and the most expensive: it adds one full call per turn
-        (roughly double the input cost on single-brain, triple with Quality).
-        Works with or without the quad brain.</p>
-      <label>Run the check every…</label>
-      <select id="gc-lore-every">
-        ${[[1, "every turn"], [2, "every 2nd turn"], [3, "every 3rd turn"],
-           [4, "every 4th turn"], [5, "every 5th turn"]].map(([v, t]) =>
-          `<option value="${v}" ${Number(st.generation.lore_check_every || 1) === v
-            ? "selected" : ""}>${t}</option>`).join("")}
-      </select>
-      <p class="muted">The world rarely changes enough to need re-verifying every
-        turn. Every 3rd turn keeps most of the benefit for a third of the cost —
-        the facts it surfaces are usually still true a turn or two later.</p>
-      <label>Chapters planned ahead</label>
-      <input type="number" id="gc-horizon" min="2" max="8" step="1"
-        value="${st.generation.chapter_horizon || 4}" style="width:80px">
-      <p class="muted">How many chapters the plan keeps ahead of you (default 4,
-        range 2–8). Higher = a longer plotted arc, but a little more planning work
-        when a chapter completes.</p>
-      <label>Response length</label>
+      <p class="hint">The biggest lever on token cost. <b>Economy</b> /
+        <b>Balanced</b> = one call per turn — best for pure narrative.
+        <b>Quality</b> = a planner runs first to resolve mechanics, worth it for
+        RPG play at roughly 2× the tokens. Sets the two toggles below.</p>
+      <div class="indent">
+        <label><input type="checkbox" id="gc-trinity"
+          ${st.generation.trinity_brain ? "checked" : ""}>
+          Multi-stage brain (a planner runs before the writer)</label>
+        <p class="hint">Better mechanics, about twice the work per turn.</p>
+        <label><input type="checkbox" id="gc-memtool"
+          ${st.generation.use_memory_tool ? "checked" : ""}>
+          Let the model look things up mid-turn</label>
+        <p class="hint">Only worth it on a big hosted model — small local models
+          are unreliable at using tools.</p>
+      </div>
+
+      <div class="sub-head">Writing</div>
+      <label><input type="checkbox" id="gc-agency"
+        ${st.generation.ai_acts_as_player ? "checked" : ""}>
+        Let the AI speak &amp; act as my character</label>
+      <p class="hint">Off (default) = it plays the world and other characters, then
+        hands control back to you.</p>
+      <label style="margin-top:16px">Response length</label>
       <div class="seg" id="len-seg">
         ${["short", "medium", "long"].map(v => `<button data-v="${v}"
           ${st.generation.response_length === v ? 'class="on"' : ""}>
           ${v}</button>`).join("")}
       </div>
-      <label style="margin-top:14px">
-        <input type="checkbox" id="gc-trinity"
-          ${st.generation.trinity_brain ? "checked" : ""}>
-        Multi-stage brain (a planner runs before the writer)
-      </label>
-      <p class="muted">Better continuity and mechanics, but roughly twice the
-        work per turn. Turn it off if turns feel slow on a local GPU.</p>
-      <label>
-        <input type="checkbox" id="gc-memtool"
-          ${st.generation.use_memory_tool ? "checked" : ""}>
-        Let the model look things up mid-turn
-      </label>
-      <p class="muted">Only worth it on a big hosted model — small local models
-        are unreliable at using tools.</p>
+
+      <div class="sub-head">Story structure</div>
+      <label><input type="checkbox" id="gc-outline"
+        ${st.generation.chapter_outline !== false ? "checked" : ""}>
+        Plan the story in chapters (book plan)</label>
+      <p class="hint">A rolling outline plans a few chapters ahead and writes a new
+        one as each completes. Not a per-turn brain — it only plans at the
+        memory-fold cadence. See the <b>Plan</b> button while playing.</p>
+      <div class="indent">
+        <label style="text-transform:uppercase;font-size:12px;color:var(--dim)"
+          >Chapters planned ahead</label>
+        <input type="number" id="gc-horizon" min="2" max="8" step="1"
+          value="${st.generation.chapter_horizon || 4}" style="width:80px">
+        <p class="hint">Default 4 (range 2–8). Higher = a longer plotted arc.</p>
+      </div>
+
+      <div class="sub-head">Continuity</div>
+      <label><input type="checkbox" id="gc-lore"
+        ${st.generation.lore_check ? "checked" : ""}>
+        Continuity check (lore-keeper)</label>
+      <p class="hint">The only stage that <b>verifies</b> rather than recalls: it
+        looks up what the turn must not contradict and hands the writer the facts
+        to honor. Strongest guard against contradictions, and the most expensive —
+        one extra call each time it runs.</p>
+      <div class="indent">
+        <label style="text-transform:uppercase;font-size:12px;color:var(--dim)"
+          >Run it every…</label>
+        <select id="gc-lore-every" style="max-width:200px">
+          ${[[1, "every turn"], [2, "every 2nd turn"], [3, "every 3rd turn"],
+             [4, "every 4th turn"], [5, "every 5th turn"]].map(([v, t]) =>
+            `<option value="${v}" ${Number(st.generation.lore_check_every || 1) === v
+              ? "selected" : ""}>${t}</option>`).join("")}
+        </select>
+        <p class="hint">The world rarely changes enough to re-verify every turn.
+          Every 3rd keeps most of the benefit for a third of the cost.</p>
+      </div>
     </div>
 
     <div class="setting-panel">
