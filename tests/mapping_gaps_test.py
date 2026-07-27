@@ -118,7 +118,10 @@ def test_rpg_mode_can_change_after_creation():
 
 
 def test_orphan_generate_route_is_gone():
-    paths = {r.path for r in server.app.routes if hasattr(r, "path")}
+    # The OpenAPI schema, not app.routes — an included router doesn't flatten
+    # into app.routes, so the old check would have passed on an empty set.
+    paths = set(server.app.openapi()["paths"])
+    assert paths, "route table came back empty — the check would be vacuous"
     assert "/api/scenarios/generate" not in paths, "dead route still registered"
     print("orphan /api/scenarios/generate removed")
 
