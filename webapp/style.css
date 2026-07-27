@@ -24,7 +24,7 @@
 html { background: var(--bg); }
 html, body { margin: 0; height: 100%; }
 body {
-  background: transparent;   /* let the fixed matrix-rain canvas show through */
+  background: transparent;   /* html's --bg is the backdrop; the rain sits over it */
   color: var(--text);
   font-family: var(--sans); font-size: 15px;
   display: flex; flex-direction: column;
