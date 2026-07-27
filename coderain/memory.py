@@ -1090,6 +1090,47 @@ class MemoryStore:
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+    def log_degraded(self, stage: str, reason: str) -> None:
+        """Record that something silently fell back, to memory/health.jsonl.
+
+        The engine is deliberately forgiving — a failed retriever, fold, macro or
+        regex rule must never break a turn — but `except: pass` also meant a
+        feature could report "enabled" while doing nothing for weeks (semantic
+        recall did exactly that against a provider with no embeddings endpoint).
+        Degrading is fine; degrading INVISIBLY is not. Bounded to the last 200
+        lines so it can never grow without limit."""
+        path = self.dir / "memory" / "health.jsonl"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            rec = {"turn": len(self.turns()), "stage": str(stage),
+                   "reason": str(reason)[:300]}
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > 200:
+                path.write_text("\n".join(lines[-200:]) + "\n", encoding="utf-8")
+        except OSError:
+            pass          # health logging must never itself break a turn
+
+    def health(self, limit: int = 20) -> list[dict]:
+        """The most recent degraded passes, newest first."""
+        try:
+            lines = (self.dir / "memory" / "health.jsonl").read_text(
+                encoding="utf-8").splitlines()
+        except (OSError, FileNotFoundError):
+            return []
+        out = []
+        for ln in reversed(lines):
+            try:
+                rec = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+            if len(out) >= limit:
+                break
+        return out
+
     def truncate_event_log(self, max_turn: int) -> None:
         """Drop records logged past the transcript's current end. Undo/retry
         truncate the transcript — a stale envelope surviving here would be

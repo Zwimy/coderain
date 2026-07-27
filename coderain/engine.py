@@ -193,8 +193,12 @@ class Engine:
             try:
                 self.retriever = vector_mod.build_retriever(
                     store, self.llm.client, config.retrieval, config)
-            except Exception:  # noqa: BLE001 — retrieval setup never breaks the engine
+            except Exception as e:  # noqa: BLE001 — never breaks the engine
+                # ...but it MUST leave a trace: this exact swallow is why semantic
+                # recall reported "enabled" while doing nothing for weeks.
                 self.retriever = None
+                store.log_degraded("semantic-recall",
+                                   f"{type(e).__name__}: {e}")
 
     def _messages(self, history, player_input):
         messages = self.store.assemble(history, player_input,
@@ -504,6 +508,9 @@ class Engine:
                 continue
             find = r.get("find")
             if not isinstance(find, str) or not safe_output_regex(find):
+                if isinstance(find, str):
+                    self.store.log_degraded(
+                        "output-regex", f"rule skipped as unsafe: {find[:80]}")
                 continue
             fl = 0
             for ch in str(r.get("flags", "")).lower():
@@ -512,8 +519,9 @@ class Engine:
             repl = re.sub(r"\$(\d)", r"\\\1", str(r.get("replace", "")))
             try:
                 text = re.sub(find, repl, text, flags=fl)
-            except re.error:
-                continue        # invalid rule -> leave the text unchanged
+            except re.error as e:   # invalid rule -> text unchanged, but say so
+                self.store.log_degraded("output-regex",
+                                        f"invalid rule {find[:60]}: {e}")
         return text
 
     def _reply_prefix(self) -> str:
@@ -843,12 +851,14 @@ class Engine:
             if on_stage:
                 on_stage(f"Lore-keeper FAILED ({time.monotonic() - t0:.1f}s): {e} "
                          "— continuing unvetted")
+            self.store.log_degraded("lore-keeper", f"{type(e).__name__}: {e}")
             return ""
         obj = extract_json(raw)
         if not isinstance(obj, dict):
             if on_stage:
                 on_stage(f"Lore-keeper FAILED ({time.monotonic() - t0:.1f}s): "
                          "no valid JSON — continuing unvetted")
+            self.store.log_degraded("lore-keeper", "no valid JSON in output")
             return ""
         directive = _lore_directive(obj)
         if on_stage:

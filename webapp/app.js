@@ -1460,6 +1460,52 @@ async function outlineModal(slug) {
   if (data) render(data);
 }
 
+// What the model actually receives this turn. "The story forgot X" is almost never
+// the model forgetting — X was not in the prompt. This shows which sections are
+// there, how big each one is, and what is eating the budget.
+async function contextModal(slug) {
+  const d = await guard(() => api(`/api/saves/${slug}/context`),
+                        "Couldn't inspect the context");
+  if (!d) return;
+  const bar = (n, max) => `<div class="ctx-bar"><i style="width:${
+    Math.max(1, Math.round(n / max * 100))}%"></i></div>`;
+  const max = Math.max(...d.sections.map(s => s.chars), 1);
+  const warn = d.budget_used_pct >= 95;
+  openModal(`<h2>What the model sees</h2>
+    <p class="hint">The next turn's prompt, assembled for real (no model call).
+      A section missing here is a section the model cannot use.</p>
+    <div class="ctx-stats">
+      <div><b>${d.approx_tokens.toLocaleString()}</b><span>tokens in</span></div>
+      <div><b class="${warn ? "over" : ""}">${d.budget_used_pct}%</b>
+        <span>of memory budget</span></div>
+      <div><b>${d.history_msgs}</b><span>verbatim turns</span></div>
+      <div><b>${d.brain}</b><span>brain</span></div>
+      <div><b class="${d.semantic_recall === "on" ? "" : "over"}"
+        >${d.semantic_recall}</b><span>semantic recall</span></div>
+      <div><b>${d.lore_check.on ? `1/${d.lore_check.every}` : "off"}</b>
+        <span>continuity check</span></div>
+    </div>
+    ${warn ? `<p class="hint" style="color:var(--player)">The budget is nearly
+      full, so lower-priority lore is being cut. Raise the memory budget or trim
+      the biggest sections below.</p>` : ""}
+    ${(d.health || []).length ? `<div class="ctx-health">
+      <b>Something fell back quietly</b>
+      ${d.health.map(h => `<div>· <code>${esc(h.stage)}</code> (turn ${h.turn}):
+        ${esc(h.reason)}</div>`).join("")}
+    </div>` : ""}
+    <div id="ctx-list">${d.sections.map(s => `<div class="ctx-row">
+        <span class="ctx-name">${esc(s.title)}${s.entries
+          ? ` <span class="muted">· ${s.entries}</span>` : ""}</span>
+        ${bar(s.chars, max)}
+        <span class="ctx-n">${s.chars.toLocaleString()}</span>
+      </div>`).join("")}</div>
+    <p class="hint">Rules &amp; directives add ${d.rules_chars.toLocaleString()}
+      chars; the ${d.history_msgs} verbatim turns add
+      ${d.history_chars.toLocaleString()}.</p>
+    <div class="modal-actions"><button id="ctx-close">Close</button></div>`);
+  $("#ctx-close").addEventListener("click", closeModal);
+}
+
 async function renderPlay(slug) {
   const s = await api(`/api/saves/${slug}`);
   s.companions = s.companions || [];        // never deref undefined (play head + Talk)
@@ -1477,6 +1523,8 @@ async function renderPlay(slug) {
           >Memory</button>
         <button id="plan-btn" title="the rolling chapter plan — steer the story ahead"
           >Plan</button>
+        <button id="ctx-btn" title="what the model actually receives this turn"
+          >Context</button>
         <button id="talk-btn" ${s.companions.length ? "" : "disabled"}
           title="${s.companions.length ? "private companion chat"
                  : "no companions yet"}">Talk</button>
@@ -2019,6 +2067,7 @@ async function renderPlay(slug) {
   });
 
   $("#plan-btn").addEventListener("click", () => outlineModal(slug));
+  $("#ctx-btn").addEventListener("click", () => contextModal(slug));
   $("#talk-btn").addEventListener("click", () => talkDrawer(slug, s.companions));
   $("#edit-btn").addEventListener("click", () => { location.hash = `#edit/${slug}`; });
   $("#note-btn").addEventListener("click", async () => {          // ST-21 author's note

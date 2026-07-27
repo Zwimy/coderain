@@ -300,7 +300,14 @@ class Summarizer:
             events += self._apply_promotions(obj)
             events += self._apply_time(obj)  # update clock before stamping the scene
         if not summary:
+            # A stubbed scene is memory permanently lost for those turns: the
+            # fold pointer advances regardless (by design, so it can't loop), so
+            # this is the one degradation that never gets a second chance.
             summary = "(scene summary unavailable)"
+            self.store.log_degraded(
+                "fold", f"scene {scene_no} produced no summary — "
+                        f"turns {start_turn}-{start_turn + len(turns) - 1} "
+                        "are only in the raw transcript")
         when = self.store.clock_str()
         # Source-turn range this block covers (1-based inclusive) — the pointer the
         # timeline shorthand hands back for on-demand detail recall.
