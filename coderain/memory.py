@@ -479,6 +479,39 @@ def _world_defaults(data: dict) -> dict:
     return data
 
 
+@dataclass
+class _Assembly:
+    """Working state threaded through the four stages of assemble().
+
+    Not an API — a parameter object. assemble() used to be one 300-line function
+    where every stage could see every local; this makes the handoffs explicit
+    (stage 2 needs `player` and `current_loc_slug` from stage 1, stage 3 needs
+    `matched_slugs` from stage 2, stage 4 needs `clock` and `seed`) without
+    passing eight arguments down a chain.
+    """
+    history: list[dict]
+    player_input: str
+    scenes_tail: int
+    budget_tokens: int
+    retriever: object = None
+    idx: object = None
+    # (priority, title, body); priority 0 = always keep. Every stage appends.
+    sections: list[tuple[int, str, str]] = field(default_factory=list)
+    haystack: str = ""              # everything just said, lowercased
+    writer_rules: str = ""
+    player: list = field(default_factory=list)
+    clock: str = ""
+    current_loc_slug: str | None = None
+    open_threads: list = field(default_factory=list)
+    arc: str = ""
+    scenes: str = ""
+    turn_index: int = 0
+    seed: int = 0
+    matched_slugs: set = field(default_factory=set)
+    linked_wanted: list = field(default_factory=list)
+    ref_slugs: list = field(default_factory=list)
+
+
 class MemoryStore:
     """A single playthrough (save). Reads are layered for the governing rule files
     (writer/memory/rpg): save override -> scenario override -> global instructions.
@@ -1308,16 +1341,37 @@ class MemoryStore:
     def assemble(self, history: list[dict], player_input: str,
                  scenes_tail: int = 4, budget_tokens: int = 8000,
                  retriever=None) -> list[dict]:
-        idx = self.index()
-        writer_rules = self.read("writer-rules.md").strip()
+        """Build the per-turn message list for the narrator.
+
+        Four stages, in order, each owning one phase and handing the rest along
+        in an `_Assembly` (see below): read the story's own files, activate the
+        lorebook against what was just said, surface anything named but not yet
+        activated, then fit it all into the budget.
+        """
+        a = _Assembly(history=history, player_input=player_input,
+                      scenes_tail=scenes_tail, budget_tokens=budget_tokens,
+                      retriever=retriever, idx=self.index())
+        self._gather_sections(a)
+        self._activate_lore(a)
+        self._resolve_references(a)
+        return self._pack_budget(a)
+
+    # --- assemble stage 1: the story's own files ---------------------------
+    def _gather_sections(self, a: "_Assembly") -> None:
+        """Premise, player, world, threads, arc, facts, beats, plan, scenes,
+        timeline — everything that comes straight off disk, no activation."""
+        history, player_input = a.history, a.player_input
+        budget_tokens = a.budget_tokens
+        a.writer_rules = self.read("writer-rules.md").strip()
         haystack = (" ".join(t["text"] for t in history) + " " + player_input).lower()
+        a.haystack = haystack
 
         # sections: (priority, title, body). priority 0 = always keep.
-        sections: list[tuple[int, str, str]] = []
+        sections = a.sections
         premise = _premise_prose(self.read("premise.md"))
         if premise:
             sections.append((0, "Premise", premise))
-        player = self.entries("player.md")
+        player = a.player = self.entries("player.md")
         if player:
             sections.append((0, "You", "\n\n".join(e.render() for e in player)))
         else:
@@ -1327,13 +1381,13 @@ class MemoryStore:
             raw_player = _strip_h1(self.read("player.md"))
             if raw_player:
                 sections.append((0, "You", raw_player))
-        clock = self.clock_str()
+        clock = a.clock = self.clock_str()
         loc = self.world_state().get("player", {}).get("location", "")
         # The place the player is IN should always be in context so its details
         # stay in play — resolve it to a known location entry and force-activate
         # that entry in the lorebook pass below (dedupe + budget handled there).
         loc_entry = self.resolve_location(loc) if loc else None
-        current_loc_slug = loc_entry.slug if loc_entry else None
+        a.current_loc_slug = loc_entry.slug if loc_entry else None
         if clock or loc:
             now = ("Current in-world time: " + clock) if clock else ""
             if loc:
@@ -1342,9 +1396,10 @@ class MemoryStore:
         world = _strip_h1(self.read("world-bible.md"))
         if world:
             sections.append((1, "World", world))
-        open_threads = [e for e in self.entries("threads.md")
-                        if e.attrs.get("status", "open").lower() != "resolved"
-                        and not e.hidden()]
+        open_threads = a.open_threads = [
+            e for e in self.entries("threads.md")
+            if e.attrs.get("status", "open").lower() != "resolved"
+            and not e.hidden()]
         if open_threads:
             # BOUNDED, like the facts list below: threads accumulate for the whole
             # story and never shrink, so an unbounded block quietly ate the budget
@@ -1367,7 +1422,7 @@ class MemoryStore:
                 body += ("\n\nAlso open (ask memory for detail): "
                          + ", ".join(f"{e.title} [[thread:{e.slug}]]" for e in rest))
             sections.append((1, "Open threads", body))
-        arc = _strip_h1(self.read("memory/arc.md"))
+        arc = a.arc = _strip_h1(self.read("memory/arc.md"))
         if arc:
             sections.append((1, "Story so far (arc)", arc))
         # Newest 50 facts only: the file is append-only, and an unbounded list
@@ -1397,10 +1452,11 @@ class MemoryStore:
         scene_entries = self.entries("memory/scenes.md")
         if scene_entries:
             scenes = "\n\n".join(e.render().strip()
-                                 for e in scene_entries[-scenes_tail:])
+                                 for e in scene_entries[-a.scenes_tail:])
         else:
             scenes = _recent_paragraphs(self.read("memory/scenes.md"),
-                                        scenes_tail)
+                                        a.scenes_tail)
+        a.scenes = scenes
         # Priority 1, not 2: the folded scenes ARE the story's short-term memory —
         # they stand in for the raw turns that scrolled out. Losing them to a
         # lower-value block (measured: a tight budget kept 21 open threads and
@@ -1420,18 +1476,27 @@ class MemoryStore:
             sections.append((2, "Timeline (shorthand; recall a [T..] range for detail)",
                              head + "\n".join(shown)))
 
-        # --- lorebook activation (Wave 2 + Tier 2) ------------------------
-        # pinned/critical entries are ALWAYS in; the rest activate on a trigger
-        # match (title/slug/aliases + the `triggers:` attr), refined by the
-        # optional Tier-2 gates (secondary keys ST-13, probability ST-11), and
-        # compete for a lore budget ranked by weight x importance. Hidden entries
-        # never join the normal sections — they get their own foreshadow block.
-        # turn_index + seed make the probability roll reproducible across a retry
-        # of the same turn (replay-safe, like the RPG dice).
+    # --- assemble stage 2: the lorebook ------------------------------------
+    def _activate_lore(self, a: "_Assembly") -> None:
+        """Lorebook activation (Wave 2 + Tier 2) and the related-scenes recall
+        that rides on which entities just activated.
+
+        pinned/critical entries are ALWAYS in; the rest activate on a trigger
+        match (title/slug/aliases + the `triggers:` attr), refined by the
+        optional Tier-2 gates (secondary keys ST-13, probability ST-11), and
+        compete for a lore budget ranked by weight x importance. Hidden entries
+        never join the normal sections — they get their own foreshadow block.
+        turn_index + seed make the probability roll reproducible across a retry
+        of the same turn (replay-safe, like the RPG dice).
+        """
+        sections, haystack = a.sections, a.haystack
+        player, retriever = a.player, a.retriever
+        budget_tokens, scenes_tail = a.budget_tokens, a.scenes_tail
+        current_loc_slug = a.current_loc_slug
         all_turns = self.turns()
-        turn_index = len(all_turns)
+        turn_index = a.turn_index = len(all_turns)
         recent_texts = [t.get("text", "").lower() for t in all_turns]
-        player_now = player_input.lower()
+        player_now = a.player_input.lower()
         # A hand-edited state.json may carry a malformed rpg block (null, a list,
         # a non-int seed) — degrade to seed 0 (still deterministic) rather than
         # crashing every turn.
@@ -1440,7 +1505,8 @@ class MemoryStore:
             seed = int(rpg_block.get("seed", 0)) if isinstance(rpg_block, dict) else 0
         except (TypeError, ValueError):
             seed = 0
-        matched_slugs = set()
+        a.seed = seed
+        matched_slugs = a.matched_slugs
         candidates: list[tuple[float, str, Entry]] = []   # (score, rel, entry)
         hidden_hits: list[Entry] = []
         by_slug: dict[str, tuple[str, Entry]] = {}
@@ -1488,7 +1554,7 @@ class MemoryStore:
         candidates.sort(key=lambda c: c[0], reverse=True)
         lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
         picked: dict[str, list[Entry]] = {}
-        linked_wanted: list[str] = []
+        linked_wanted = a.linked_wanted
         used_lore = 0
         for score, rel, e in candidates:
             block = len(e.render())
@@ -1541,13 +1607,20 @@ class MemoryStore:
                                  "\n\n".join(all_scenes[j].render()
                                              for j in keep)))
 
+    # --- assemble stage 3: named but not activated -------------------------
+    def _resolve_references(self, a: "_Assembly") -> None:
+        """Surface what the context already talks about but the lorebook pass
+        didn't pull in: [[slug]] references, semantic recall, the canon index."""
+        sections, idx, haystack = a.sections, a.idx, a.haystack
+        matched_slugs, player = a.matched_slugs, a.player
         # reference resolution: one-liners for [[slug]] referenced anywhere in the
         # gathered context, plus `links:` of activated lore — never hidden ones.
-        corpus = haystack + " " + scenes + " " + arc \
-            + " ".join(e.body for e in open_threads)
-        ref_slugs = [s for s in _LINK_RE.findall(corpus) + linked_wanted
-                     if s in idx.entries and s not in matched_slugs
-                     and not idx.entries[s][1].hidden()]
+        corpus = haystack + " " + a.scenes + " " + a.arc \
+            + " ".join(e.body for e in a.open_threads)
+        ref_slugs = a.ref_slugs = [
+            s for s in _LINK_RE.findall(corpus) + a.linked_wanted
+            if s in idx.entries and s not in matched_slugs
+            and not idx.entries[s][1].hidden()]
         if ref_slugs:
             lines = [idx.entries[s][1].oneline() for s in dict.fromkeys(ref_slugs)]
             sections.append((3, "Referenced (by name)", "\n".join(lines)))
@@ -1556,9 +1629,9 @@ class MemoryStore:
         # context that alias-gating and reference resolution didn't already surface.
         # Full exclude BEFORE the retriever's top-K slice so the K slots go to fresh
         # recalls; hidden entries never surface here (they belong only in Secrets).
-        if retriever is not None:
+        if a.retriever is not None:
             exclude = set(matched_slugs) | set(ref_slugs) | {e.slug for e in player}
-            recalled = [e for e in retriever(haystack, exclude)
+            recalled = [e for e in a.retriever(haystack, exclude)
                         if e.slug not in exclude and not e.hidden()]
             if recalled:
                 sections.append((3, "Recalled (semantically related)",
@@ -1570,6 +1643,12 @@ class MemoryStore:
             names = ", ".join(f"{e.title} [[event:{e.slug}]]" for e in canon)
             sections.append((4, "Known canon events", names))
 
+    # --- assemble stage 4: fit it in the budget ----------------------------
+    def _pack_budget(self, a: "_Assembly") -> list[dict]:
+        """Fit the gathered sections into the budget, expand macros, and turn
+        the result into the message list the model actually receives."""
+        sections, budget_tokens = a.sections, a.budget_tokens
+        player, clock, seed = a.player, a.clock, a.seed
         # salience budget: keep priority-0 always; fill the rest until budget.
         # No single section may exceed the whole budget, so even an always-on
         # premise/player can't blow past the context window.
@@ -1580,7 +1659,7 @@ class MemoryStore:
         # Order is then restored so the prompt keeps its authored reading order.
         budget = budget_tokens * 4
         used = 0
-        picked: list[tuple[int, str]] = []      # (authored position, rendered text)
+        kept: list[tuple[int, str]] = []        # (authored position, rendered text)
         ranked = sorted(enumerate(sections),
                         key=lambda it: (it[1][0], len(it[1][2])))
         for pos, (pr, title, body) in ranked:
@@ -1588,11 +1667,11 @@ class MemoryStore:
             if len(seg) > budget:
                 seg = seg[:budget] + "\n…(truncated)"
             if pr == 0 or used + len(seg) <= budget:
-                picked.append((pos, seg))
+                kept.append((pos, seg))
                 used += len(seg)
-        chosen = [seg for _pos, seg in sorted(picked)]
+        chosen = [seg for _pos, seg in sorted(kept)]
 
-        system = writer_rules
+        system = a.writer_rules
         if chosen:
             # ST-20: one macro pass over the whole authored context ({{user}},
             # {{roll::2d6}}, {{random::a::b}}, {{day}}, {{clock}}). Seeded by
@@ -1603,14 +1682,14 @@ class MemoryStore:
                 player=(player[0].title if player else "you"),
                 clock=clock,
                 day=(str(tm.get("day", "")) if isinstance(tm, dict) else ""),
-                seed=seed, turn=turn_index)
+                seed=seed, turn=a.turn_index)
             system += "\n\n# STORY & MEMORY CONTEXT\n\n" + ctx
 
         messages = [{"role": "system", "content": system}]
-        for t in history:
+        for t in a.history:
             messages.append({"role": "user" if t["role"] == "player" else "assistant",
                              "content": t["text"]})
-        messages.append({"role": "user", "content": player_input})
+        messages.append({"role": "user", "content": a.player_input})
         return messages
 
 
