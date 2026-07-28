@@ -199,3 +199,55 @@ def save_usage(slug: str):
     """The token ledger on its own, with the recent per-call rows."""
     store = _engine(slug).store
     return {**_usage_payload(store), "recent": store.usage(limit=60)}
+
+
+# ---------- folded scenes (review the memory a fold just wrote) ----------
+def _scene_dict(e) -> dict:
+    return {"slug": e.slug, "title": e.title, "summary": e.body,
+            "turns": e.attrs.get("turns", ""), "when": e.attrs.get("when", ""),
+            "characters": e.attrs.get("characters", ""),
+            "locations": e.attrs.get("locations", "")}
+
+
+@router.get("/api/saves/{slug}/scenes")
+def list_scenes(slug: str, limit: int = 3):
+    """The most recent folded scenes, newest first.
+
+    A fold rewrites ten turns into a paragraph and then the raw turns stop being
+    sent. If that paragraph dropped something, the story starts contradicting
+    itself many turns later and the cause is long out of view. This is how the
+    player sees what a fold actually wrote, while it still means something."""
+    store = _engine(slug).store
+    scenes = store.entries("memory/scenes.md")
+    return {"scenes": [_scene_dict(e) for e in reversed(scenes[-max(1, limit):])]}
+
+
+@router.put("/api/saves/{slug}/scenes/{sslug}")
+def edit_scene(slug: str, sslug: str, body: dict):
+    """Rewrite one folded scene's summary by hand."""
+    summary = str(body.get("summary", "")).strip()
+    if not summary:
+        raise HTTPException(400, "a scene summary can't be empty")
+    with _exclusive():
+        store = _engine(slug).store
+        entry = next((e for e in store.entries("memory/scenes.md")
+                      if e.slug == sslug), None)
+        if entry is None:
+            raise HTTPException(404, f"no such scene: {sslug}")
+        entry.body = summary
+        store.upsert_entry("memory/scenes.md", entry)
+        return {"ok": True, "scene": _scene_dict(entry)}
+
+
+@router.post("/api/saves/{slug}/scenes/{sslug}/redo")
+def redo_scene(slug: str, sslug: str):
+    """Re-summarise a scene from its original turns. Costs one model call."""
+    with _exclusive():
+        eng = _engine(slug)
+        try:
+            res = eng.summarizer.refold_scene(sslug)
+        except Exception as e:  # noqa: BLE001 — a bad redo must not 500 the app
+            raise HTTPException(502, core._model_error_text(e))
+        if not res.get("ok"):
+            raise HTTPException(400, res.get("error", "the redo failed"))
+        return res
