@@ -106,6 +106,25 @@ def _as_list(v) -> list:
     return v if isinstance(v, list) else []
 
 
+def _join_bounded(parts: list[str], sep: str = ", ",
+                  limit: int = REL_LIMIT) -> tuple[str, int]:
+    """Join `parts` under `limit` chars WITHOUT ever cutting one in half.
+    Returns (line, how many were dropped).
+
+    Slicing the joined string at a character count left half a slug in the
+    episode index: recall_entity then matched a phantom key ("ca") and missed
+    the real one, and every entry after the cut vanished with no trace. Whole
+    items only, and the caller logs what did not fit."""
+    out, used = [], 0
+    for p in parts:
+        cost = len(p) + (len(sep) if out else 0)
+        if used + cost > limit:
+            break
+        out.append(p)
+        used += cost
+    return sep.join(out), len(parts) - len(out)
+
+
 def _one_line(v) -> str:
     """Collapse an attr value to a single line.
 
@@ -221,9 +240,15 @@ class Summarizer:
             if rel_pairs:
                 # Bounded, but NOT at _one_line's per-value STR_LIMIT: this one
                 # attr holds every relationship a character has, and 200 chars is
-                # three of them. Each individual note is already trimmed above.
-                attrs["relationships"] = \
-                    " ".join("; ".join(rel_pairs).split())[:REL_LIMIT]
+                # three of them. Each individual note is already trimmed above,
+                # and the join stops at a pair boundary — slicing the joined
+                # string left half a note ("owes a debt f") on the last pair.
+                attrs["relationships"], cut = _join_bounded(
+                    [" ".join(r.split()) for r in rel_pairs], sep="; ")
+                if cut:
+                    self.store.log_degraded(
+                        "fold", f"{slug}: {cut} relationship(s) did not fit the "
+                                "entry and were dropped")
             # Causal chain for IMPORTANT events only (memory-rules v9): a
             # story-critical canon-event records why it happened and what it
             # changed, so the story stays coherent long after the raw turns fold
@@ -325,14 +350,22 @@ class Summarizer:
         cur_day = _as_day(tm.get("day"))
         fold_day = day if isinstance(day, int) and not isinstance(day, bool) \
             else None
-        if fold_day is not None:
-            # Magnitude-bounded. validator._valid_time caps the per-turn
-            # time_advance at 1 day (30 across a scene break); the fold is the
-            # one writer that sets `day` ABSOLUTELY, and it had no bound at all.
-            # A 4000-digit day rendered into the priority-1 "Time" section of
-            # every prompt and into the scene's `when:` attr, and the monotonic
-            # guard below made it permanent: nothing can ever move it back.
-            fold_day = min(fold_day, DAY_CAP)
+        # Magnitude-bounded. validator._valid_time caps the per-turn time_advance
+        # at 1 day (30 across a scene break); the fold is the one writer that
+        # sets `day` ABSOLUTELY, and it had no bound at all — a 4000-digit day
+        # rendered into the priority-1 "Time" section of every prompt and into
+        # the scene's `when:` attr.
+        #
+        # REJECTED, not clamped. Clamping is right for a relative advance, but
+        # here it turns a rejectable value into a permanent wrong one: the
+        # monotonic guard below means nothing can move the day back, so a single
+        # hallucinated 1e9 pinned the clock at the cap AND froze every later
+        # fold's phase/note, since none of them ever compare >= again.
+        if fold_day is not None and not 0 <= fold_day <= DAY_CAP:
+            self.store.log_degraded(
+                "fold-time", f"ignored an out-of-range day ({fold_day!s:.40}); "
+                             f"the clock stays at day {cur_day}")
+            fold_day = None
         if fold_day is not None and fold_day >= cur_day:
             tm["day"], changed = fold_day, True
         current_or_later = fold_day is None or fold_day >= cur_day
@@ -445,15 +478,25 @@ class Summarizer:
             for key in ("characters", "locations", "quests"):
                 vals = obj.get(key)
                 if isinstance(vals, list) and vals:
-                    slugs = [_slugify(str(v)[:STR_LIMIT])
-                             for v in vals[:LIST_LIMIT] if str(v).strip()]
+                    slugs = [_slugify(v) for v in vals[:LIST_LIMIT]
+                             if str(v).strip()]
                     if slugs:
-                        attrs[key] = ", ".join(dict.fromkeys(slugs))[:REL_LIMIT]
+                        line, cut = _join_bounded(list(dict.fromkeys(slugs)))
+                        attrs[key] = line
+                        if cut:
+                            self.store.log_degraded(
+                                "fold", f"scene {scene_no}: {cut} {key} left out "
+                                        "of the episode index (too many to fit)")
             changes = obj.get("state_changes")
             if isinstance(changes, list) and changes:
-                attrs["state_changes"] = "; ".join(
-                    " ".join(str(c).split())[:STR_LIMIT]
-                    for c in changes[:LIST_LIMIT] if str(c).strip())[:REL_LIMIT]
+                line, cut = _join_bounded(
+                    [" ".join(str(c).split())[:STR_LIMIT]
+                     for c in changes[:LIST_LIMIT] if str(c).strip()], sep="; ")
+                attrs["state_changes"] = line
+                if cut:
+                    self.store.log_degraded(
+                        "fold", f"scene {scene_no}: {cut} state change(s) did "
+                                "not fit the episode index")
             day = self.store.world_state().get("time", {}).get("day")
             if isinstance(day, int) and not isinstance(day, bool):
                 attrs["day"] = str(day)
@@ -686,7 +729,18 @@ class Summarizer:
 
 
 def _slugify(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+    """Slugify fold output, bounded to match validator._slug EXACTLY.
+
+    Same order as that function — strip, truncate, then slugify — because the
+    two are the read and write ends of one boundary and disagreeing is worse
+    than either bound alone. The fold had no cap at all, so a 243-char slug
+    (well within what a model emits for a descriptive one) landed in threads.md
+    while every delta channel truncated the same name to 200 before looking it
+    up: quest_update, reveal and event_fired all answered "no such thread" about
+    a thread sitting on disk, and a fold is one-way, so it stayed unreachable
+    for the life of the save."""
+    s = re.sub(r"[^a-z0-9]+", "-", str(s or "").strip()[:STR_LIMIT].lower())
+    return s.strip("-")
 
 
 def _clamp_int(v, lo: int = 1, hi: int = 5) -> int:

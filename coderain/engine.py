@@ -330,8 +330,20 @@ class Engine:
         # ledger would then disagree by a whole envelope, permanently, and a
         # branch (which rebuilds from the ledger) would quietly produce
         # different gold/flags than the save it came from.
+        # By COUNT, not turn number. The index is ambiguous: a second
+        # consecutive undo deliberately does NOT truncate (nothing was rolled
+        # back), so a record can survive at an index a later turn then reuses —
+        # and the next undo deleted BOTH while rolling back one. `_pre_turn_log`
+        # is the ledger length when this exchange began, so dropping back to it
+        # removes exactly what this exchange logged, whatever index it claims.
+        # (_abort_turn was moved off the turn number for the same reason.)
         if rolled_back:
-            self.store.truncate_event_log(len(self.store.turns()))
+            count = getattr(self, "_pre_turn_log", None)
+            if count is None:
+                self.store.truncate_event_log(len(self.store.turns()))
+            else:
+                self.store.drop_event_log_after(count)
+            self._pre_turn_log = None
 
     def _begin_turn(self) -> tuple:
         """Open an exchange's undo record. Returns the PREVIOUS one so an
@@ -340,7 +352,9 @@ class Engine:
                  list(getattr(self, "_pre_turn_reveals", [])),
                  list(getattr(self, "_pre_turn_canon", [])),
                  list(getattr(self, "_pre_turn_events", [])),
-                 self.store.event_log_count())
+                 getattr(self, "_pre_turn_log", None),
+                 list(getattr(self, "_rpg_events", [])))
+        self._pre_turn_log = self.store.event_log_count()
         self._rpg_events = []
         self._pre_turn_rpg = self._snapshot_rpg()
         self._pre_turn_reveals = []
@@ -370,16 +384,20 @@ class Engine:
         the Writer yields nothing, that envelope belongs to a turn nobody will
         ever see. Call AFTER dropping the orphan player turn, so the ledger
         truncation measures the transcript the save is really left with."""
+        # Read the ledger length THIS exchange opened with before rolling back —
+        # restore_pre_turn_rpg consumes and clears it.
+        opened_at = getattr(self, "_pre_turn_log", None)
         if getattr(self, "_pre_turn_rpg", None) is not None:
             self.restore_pre_turn_rpg()
-        (self._pre_turn_rpg, self._pre_turn_reveals,
-         self._pre_turn_canon, self._pre_turn_events, log_count) = prior
-        # By COUNT, not turn index. restore_pre_turn_rpg truncates the ledger at
-        # a turn NUMBER, and an exchange that stores no turn logs its envelope
-        # against the previous turn's index — so its record sits at a number the
-        # truncation is supposed to keep, and survived a rollback that undid the
-        # state it describes. Both directions of that split are invariant 3.
-        self.store.drop_event_log_after(log_count)
+        (self._pre_turn_rpg, self._pre_turn_reveals, self._pre_turn_canon,
+         self._pre_turn_events, prior_log, prior_events) = prior
+        if opened_at is not None:
+            self.store.drop_event_log_after(opened_at)
+        self._pre_turn_log = prior_log
+        # The rolled-back deltas must leave the UI event list as well, or the
+        # done frame credits the reader with mechanics that no longer exist —
+        # while the sheet and clock in the same frame read the real state.
+        self._rpg_events = prior_events
 
     def opening(self, on_stage=None) -> Iterator[str]:
         prior = self._begin_turn()
@@ -398,13 +416,18 @@ class Engine:
             return
         messages = self._messages(
             [], "Begin the story. Set the opening scene and place me in it.")
-        stored = False
+        before = len(self.store.turns())
         try:
-            stored = yield from self._generate_and_store(messages, on_stage)
+            yield from self._generate_and_store(messages, on_stage)
         finally:
-            # Same reason as `turn`: an opening that produced nothing must not
-            # leave its snapshot live for the next undo to consume.
-            if not stored:
+            # Transcript growth, not `stored` — same reason as continue_story.
+            # `stored` is `bool(narration) or applied`, and an opening has no
+            # player turn to anchor either: a prose-less opening left an empty
+            # transcript holding the deltas, with the envelope logged at turn 0
+            # where it collides with the genesis record, survives every
+            # truncation, is unreachable by undo (empty transcript) and is
+            # filtered out by branch(). state kept flags the branch did not.
+            if len(self.store.turns()) == before:
                 self._abort_turn(prior)
 
     def turn(self, player_input: str, on_stage=None) -> Iterator[str]:
@@ -508,7 +531,20 @@ class Engine:
             self.restore_pre_turn_rpg()
             self.store.trim_folds_to_transcript()
             gen = self.continue_story(on_stage=on_stage)
-        yield from gen
+        try:
+            yield from gen
+        finally:
+            # A `finally`, not straight-line code after the yield. Stop closing
+            # this generator mid-stream — which is exactly what
+            # srv/core.py's `finally: it.close()` does — skipped the cleanup
+            # entirely, so _swipes survived pointing at an exchange the swipe
+            # had already deleted. Two of the three failure modes the comment
+            # below names were still corrupting the transcript.
+            self._settle_swipe(sw, n)
+
+    def _settle_swipe(self, sw: dict, n: int) -> None:
+        """Adopt the regenerated turn as a new variant, or drop the swipe state
+        when the regeneration produced nothing."""
         tail = self.store.turns()
         # `n`, not just "the tail is a narrator turn". A regeneration that
         # produced nothing (empty output, a model error, or Stop closing the
@@ -615,10 +651,18 @@ class Engine:
 
     def regenerate(self, player_input: str | None, on_stage=None):
         """The generator that pairs with `rollback_for_retry`'s return."""
-        if player_input is None:
-            return self.continue_story(on_stage=on_stage)
+        # Empty transcript FIRST. Retrying the opening rolls back to zero turns
+        # and returns player_input=None, so the old order sent it to
+        # continue_story — "carry on from where it left off", with nothing to
+        # carry on from — and the `not turns()` guard below was dead for the one
+        # case it was written for. Worse, continue_story never consults
+        # opening_override(), so retrying the first turn of a save with an
+        # authored `## Opening` replaced that greeting with model prose.
+        # swipe_generate already routes n==1 to opening(); retry now agrees.
         if not self.store.turns():
             return self.opening(on_stage=on_stage)
+        if player_input is None:
+            return self.continue_story(on_stage=on_stage)
         return self.turn(player_input, on_stage=on_stage)
 
     def maybe_fold(self) -> list[str]:
@@ -953,7 +997,9 @@ class Engine:
         with llm_stage(self.llm, "talk"):
             for piece in self.llm.stream(messages):
                 chunks.append(piece)
-            yield piece
+                yield piece          # inside the loop: this streamed the LAST
+                                     # chunk only, and raised UnboundLocalError
+                                     # when the model yielded nothing at all
         reply = "".join(chunks).strip()
         if reply:
             self.store.append_companion_chat(slug, user_text, reply)

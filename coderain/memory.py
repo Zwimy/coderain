@@ -729,6 +729,13 @@ class MemoryStore:
         more than the instruction ever asks for."""
         have = {f.lower() for f in self.facts()}
         added: list[str] = []
+        if len(new) > 24:
+            # Loudly. Every other bound in this pipeline either produces a
+            # `validator: dropped ...` line the player sees or a health entry;
+            # this one silently discarded the tail, and a fold is one-way, so
+            # those facts had no second chance to be established.
+            self.log_degraded("fold", f"{len(new) - 24} fact(s) beyond the "
+                                      "per-fold limit of 24 were not recorded")
         for f in new[:24]:
             # Collapse whitespace INCLUDING newlines — an embedded "\n- " would
             # write extra bullets and break the dedupe round-trip.
