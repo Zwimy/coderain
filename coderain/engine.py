@@ -333,12 +333,49 @@ class Engine:
         if rolled_back:
             self.store.truncate_event_log(len(self.store.turns()))
 
-    def opening(self, on_stage=None) -> Iterator[str]:
+    def _begin_turn(self) -> tuple:
+        """Open an exchange's undo record. Returns the PREVIOUS one so an
+        aborted turn can put it back — see _abort_turn."""
+        prior = (getattr(self, "_pre_turn_rpg", None),
+                 list(getattr(self, "_pre_turn_reveals", [])),
+                 list(getattr(self, "_pre_turn_canon", [])),
+                 list(getattr(self, "_pre_turn_events", [])))
         self._rpg_events = []
         self._pre_turn_rpg = self._snapshot_rpg()
         self._pre_turn_reveals = []
         self._pre_turn_canon = []
         self._pre_turn_events = []
+        return prior
+
+    def _abort_turn(self, prior: tuple) -> None:
+        """Make an exchange that stored nothing TRANSPARENT: undo whatever it
+        applied, then hand the previous exchange's undo record back.
+
+        Both halves were missing. The undo record is a single slot opened at the
+        top of every entry point, so a generation that produced nothing — a model
+        error, the client's Stop closing the generator mid-stream, empty output —
+        both (a) left its own snapshot live for the NEXT undo to consume against
+        a different exchange, and (b) destroyed the previous exchange's snapshot
+        by overwriting it.
+
+        (a) was the corruption: `restore_pre_turn_rpg` reported rolled_back=True
+        and truncated the event log for deltas still applied in state.json. The
+        save and the ledger then disagreed by a whole envelope, permanently, and
+        a branch rebuilt different gold than the save it came from — invariant 3,
+        and exactly the hole that guard exists to close (DECISIONS.md D-002).
+
+        Rolling back rather than merely dropping the snapshot also covers the
+        quad path, which applies and logs its envelope BEFORE the Writer runs: if
+        the Writer yields nothing, that envelope belongs to a turn nobody will
+        ever see. Call AFTER dropping the orphan player turn, so the ledger
+        truncation measures the transcript the save is really left with."""
+        if getattr(self, "_pre_turn_rpg", None) is not None:
+            self.restore_pre_turn_rpg()
+        (self._pre_turn_rpg, self._pre_turn_reveals,
+         self._pre_turn_canon, self._pre_turn_events) = prior
+
+    def opening(self, on_stage=None) -> Iterator[str]:
+        prior = self._begin_turn()
         # Wave 4: an authored '## Opening' in premise.md is used VERBATIM as the
         # first scene — no model call (FictionLab's greeting message).
         override = self.store.opening_override()
@@ -354,14 +391,17 @@ class Engine:
             return
         messages = self._messages(
             [], "Begin the story. Set the opening scene and place me in it.")
-        yield from self._generate_and_store(messages, on_stage)
+        stored = False
+        try:
+            stored = yield from self._generate_and_store(messages, on_stage)
+        finally:
+            # Same reason as `turn`: an opening that produced nothing must not
+            # leave its snapshot live for the next undo to consume.
+            if not stored:
+                self._abort_turn(prior)
 
     def turn(self, player_input: str, on_stage=None) -> Iterator[str]:
-        self._rpg_events = []
-        self._pre_turn_rpg = self._snapshot_rpg()
-        self._pre_turn_reveals = []
-        self._pre_turn_canon = []
-        self._pre_turn_events = []
+        prior = self._begin_turn()
         self.store.append_turn("player", player_input)
         history = self.store.recent_turns(self.short_term)[:-1]
         messages = self._messages(history, player_input)
@@ -380,24 +420,28 @@ class Engine:
                 tail = self.store.turns()
                 if tail and tail[-1]["role"] == "player":
                     self.store.drop_last_turns(1)
+                self._abort_turn(prior)
 
     def continue_story(self, on_stage=None) -> Iterator[str]:
         """Carry the prose forward with NO player action — the 'Continue' button.
         Unlike `turn`, nothing is appended to the transcript as a player line; the
         model simply extends the last scene, so the pipeline is otherwise identical
         (Director plan → validate → Writer)."""
-        self._rpg_events = []
-        self._pre_turn_rpg = self._snapshot_rpg()
-        self._pre_turn_reveals = []
-        self._pre_turn_canon = []
-        self._pre_turn_events = []
+        prior = self._begin_turn()
         history = self.store.recent_turns(self.short_term)
         messages = self._messages(
             history,
             "Continue the narration from exactly where it left off. Do not "
             "repeat what was already written and do not summarize — push the "
             "current scene forward with fresh action or detail.")
-        yield from self._generate_and_store(messages, on_stage)
+        stored = False
+        try:
+            stored = yield from self._generate_and_store(messages, on_stage)
+        finally:
+            # A Continue appends no player turn, so there is nothing to drop —
+            # but the stale snapshot is the same hazard. See _abort_turn.
+            if not stored:
+                self._abort_turn(prior)
 
     def _ensure_swipes(self) -> dict | None:
         """Swipe state for the LAST narrator turn (ST-02). Seeds from the current

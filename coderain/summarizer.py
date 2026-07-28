@@ -87,9 +87,15 @@ STR_LIMIT = 200      # free-text from a fold, mirroring validator.STR_CAP
 # legitimate while still stopping a runaway generation from becoming permanent
 # context — a fold is one-way, and an oversized body is re-sent every turn after.
 BODY_LIMIT = 4000
-# The relationships attr is one line holding MANY values, so it gets its own
-# bound — STR_LIMIT would fit about three of them.
+# An attr line holding MANY values (relationships, the episode indexes) gets its
+# own bound — STR_LIMIT would fit about three of them.
 REL_LIMIT = 800
+# Items per model-supplied list in a fold. Mirrors validator.LIST_CAP: the
+# validator bounds the per-turn channel, and this is the fold's.
+LIST_LIMIT = 32
+# Highest in-world day a fold may set. ~27,000 years of story is not a real
+# ceiling for anyone; a bound that keeps the number short in every prompt is.
+DAY_CAP = 10_000_000
 
 
 def _as_list(v) -> list:
@@ -241,6 +247,12 @@ class Summarizer:
                 # maybe_fold, aborting the fold AFTER earlier promotions in the
                 # same object had already been written to disk.
                 aliases = []
+            # Each alias was already trimmed by _one_line; the LIST had no bound,
+            # and aliases are the most expensive unbounded thing here — every one
+            # is scanned against the story text by _entry_activates on every
+            # turn, and the whole entry is re-rendered into every later fold
+            # prompt. Nothing needs more than a handful of names.
+            aliases = aliases[:LIST_LIMIT]
             entry = Entry(title=title, slug=slug,
                           # aliases render as one comma-joined line, so a newline
                           # breaks the header and a comma splits one alias in two.
@@ -309,6 +321,14 @@ class Summarizer:
         cur_day = _as_day(tm.get("day"))
         fold_day = day if isinstance(day, int) and not isinstance(day, bool) \
             else None
+        if fold_day is not None:
+            # Magnitude-bounded. validator._valid_time caps the per-turn
+            # time_advance at 1 day (30 across a scene break); the fold is the
+            # one writer that sets `day` ABSOLUTELY, and it had no bound at all.
+            # A 4000-digit day rendered into the priority-1 "Time" section of
+            # every prompt and into the scene's `when:` attr, and the monotonic
+            # guard below made it permanent: nothing can ever move it back.
+            fold_day = min(fold_day, DAY_CAP)
         if fold_day is not None and fold_day >= cur_day:
             tm["day"], changed = fold_day, True
         current_or_later = fold_day is None or fold_day >= cur_day
@@ -411,16 +431,25 @@ class Summarizer:
         # folds as prose (a fold NEVER blocks on metadata); the entity/quest
         # indexes simply skip this episode.
         if obj:
+            # Bounded on all three axes (list length, per-value length, joined
+            # length) like every other model-derived value. These were the last
+            # ones with none of the three, and they are the worst place to
+            # miss it: Entry.render emits attrs BEFORE the body, so an oversized
+            # attr line pushes its own scene summary past the budget cut — the
+            # fold destroyed the raw turns and its replacement can then never
+            # reach the model. A fold is one-way, so it never comes back.
             for key in ("characters", "locations", "quests"):
                 vals = obj.get(key)
                 if isinstance(vals, list) and vals:
-                    slugs = [_slugify(str(v)) for v in vals if str(v).strip()]
+                    slugs = [_slugify(str(v)[:STR_LIMIT])
+                             for v in vals[:LIST_LIMIT] if str(v).strip()]
                     if slugs:
-                        attrs[key] = ", ".join(dict.fromkeys(slugs))
+                        attrs[key] = ", ".join(dict.fromkeys(slugs))[:REL_LIMIT]
             changes = obj.get("state_changes")
             if isinstance(changes, list) and changes:
                 attrs["state_changes"] = "; ".join(
-                    " ".join(str(c).split()) for c in changes if str(c).strip())
+                    " ".join(str(c).split())[:STR_LIMIT]
+                    for c in changes[:LIST_LIMIT] if str(c).strip())[:REL_LIMIT]
             day = self.store.world_state().get("time", {}).get("day")
             if isinstance(day, int) and not isinstance(day, bool):
                 attrs["day"] = str(day)
@@ -607,7 +636,16 @@ class Summarizer:
 
         scenes = self.store.entries("memory/scenes.md")
         folded_sc = int(state.get("folded_scenes", 0))
-        while len(scenes) - folded_sc > self.long_after:
+        # Holding the pointer on a failed arc fold (below) leaves this loop's
+        # condition true, and maybe_fold runs after EVERY turn — so without a
+        # stall marker a persistently failing arc call re-ran every single turn:
+        # a model call and a full story snapshot each time, and the snapshot
+        # retention pool evicted every real restore point within a few turns.
+        # The payload doesn't shrink between attempts either, so a size-driven
+        # failure never recovers on its own. Retry once per NEW scene instead —
+        # the same cadence it had back when it advanced the pointer.
+        while len(scenes) - folded_sc > self.long_after \
+                and state.get("arc_fold_stalled_at") != len(scenes):
             if not snapped:
                 self.store.snapshot(keep=self.snapshot_keep)
                 snapped = True
@@ -620,11 +658,13 @@ class Summarizer:
                 # the synopsis had not changed at all: they left context the
                 # moment they passed scenes_tail and nothing anywhere recorded
                 # that they were never summarized. Leave the pointer where it is
-                # so the next fold cycle retries, and BREAK rather than continue
-                # — the loop condition is still true, so continuing would spin.
+                # so a later cycle retries, and BREAK rather than continue —
+                # the loop condition is still true, so continuing would spin.
+                state["arc_fold_stalled_at"] = len(scenes)
+                self.store.write_state(state)
                 self.store.log_degraded(
                     "arc-fold", f"{len(chunk)} scene(s) produced no synopsis; "
-                                "pointer held, will retry on the next fold")
+                                "pointer held, will retry when a new scene folds")
                 break
             events += arc_events
             # By the ACTUAL chunk length, never the configured size — the scene
@@ -635,6 +675,7 @@ class Summarizer:
             # context the moment it passed scenes_tail.
             folded_sc += len(chunk)
             state["folded_scenes"] = folded_sc
+            state.pop("arc_fold_stalled_at", None)   # it worked; clear the stall
             self.store.write_state(state)
 
         return events

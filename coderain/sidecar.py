@@ -131,8 +131,8 @@ def parse_sidecar(text: str) -> dict | None:
         return None
     try:
         obj = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
+    except ValueError:      # see llm.extract_json: an integer literal past
+        return None         # Python's digit limit raises a BARE ValueError
     return obj if isinstance(obj, dict) else None
 
 
