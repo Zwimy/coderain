@@ -96,3 +96,40 @@ snapshots (a storage and migration cost), the asymmetry is kept and made safe:
 
 Multi-level mechanics undo would need persisted per-turn snapshots. That is a
 feature, not a bug fix, and it is not scheduled.
+
+---
+
+## D-003 — Budget packing skips and carries on, and is not monotone at the margin
+
+**Decided:** 2026-07-28. **Code:** `MemoryStore._pack_budget` (memory.py).
+**Test:** `wave2_test.py` §3/§3b, `sweep2_regress_test.py` §9.
+
+Sections are ranked by priority, then packed greedily. When one does not fit,
+packing **skips it and carries on** with the rest rather than stopping.
+
+The consequence is a known non-monotonicity: there are narrow budget bands where
+*raising* the budget promotes a big section into the prompt and evicts several
+smaller ones that had moved in behind it. Measured at roughly five tokens wide.
+
+### The alternative, and why it was not taken
+
+A strict prefix — stop at the first section that does not fit — is monotone, and
+it was implemented twice. Both times it was reverted, because it lets one fat
+high-priority section starve every tier below it: at a 220-token budget it put
+**no lore at all** in front of the model, where skip-and-continue still delivered
+the important entries.
+
+Graceful degradation at a tight budget matters more than smoothness at a five-
+token seam. A prompt missing one mid-sized section is still a working turn; a
+prompt with no lore is a story that forgot its own world.
+
+### What would change the answer
+
+A packer that is both monotone and degrades gracefully — best-fit-decreasing
+within a priority tier, or a proper knapsack over (priority, size). That is a
+rewrite of `_pack_budget`, not a flip of one branch, and it needs the same
+tight-budget evidence: at 220 tokens it must still deliver the important lore.
+
+Priority 0 is exempt from all of this. `pinned:` / `weight: critical` entries are
+always in context (invariant 4) — they are placed before the competition starts
+and only ever truncated, never dropped. See D-001.
