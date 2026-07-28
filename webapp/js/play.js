@@ -428,26 +428,35 @@ export async function renderPlay(slug) {
     setBusy(true); stage.textContent = "Thinking…";
     const body = bodyOf(d); body.textContent = ""; d.classList.add("pending");
     transcript.querySelectorAll(".swipebar").forEach(b => b.remove());
-    // Only a generation that actually produced prose becomes a variant. On an
-    // empty/failed swipe-gen the server stores nothing, so counting it anyway
-    // enabled a ◄ that pointed at a variant which does not exist.
-    let produced = false;
+    // Only a COMPLETED generation becomes a variant. The `done` frame is the
+    // signal, not the first chunk: Stop mid-stream leaves prose on screen that
+    // the server never stored, and counting that enabled a ◄ pointing at a
+    // variant which does not exist — which then wrote it over a real turn.
+    let settled = false;
     try {
       await sse(`/api/saves/${slug}/swipe-gen`, undefined, {
         stage: m => { stage.textContent = m.text; },
-        chunk: m => { produced = true;
-                      d.classList.remove("pending"); body.textContent += m.text;
+        chunk: m => { d.classList.remove("pending"); body.textContent += m.text;
                       transcript.scrollTop = transcript.scrollHeight; },
-        done: m => { setEvents(m.events); setSheet(m.sheet || []);
+        done: m => { settled = true;
+                     setEvents(m.events); setSheet(m.sheet || []);
                      $(".clock").textContent = m.clock || "";
                      if (m.text != null) body._settle = m.text; stage.textContent = ""; },
         error: m => { stage.textContent = "error: " + m.text; },
       });
     } catch (e) { stage.textContent = "error: " + e.message; }
     d.classList.remove("pending");
+    if (!settled) {
+      // Repaint from server truth, exactly like run()'s error path. A cancelled
+      // or failed swipe leaves the transcript one exchange shorter than what is
+      // on screen.
+      setBusy(false);
+      await resync();
+      return;
+    }
     if (body._settle && body.textContent) body.textContent = body._settle;
     paint(d, body.textContent);
-    if (produced) swipe = {count: swipe.count + 1, idx: swipe.count};
+    swipe = {count: swipe.count + 1, idx: swipe.count};
     setBusy(false); renderSwipeBar();
   };
   const setSheet = lines => {

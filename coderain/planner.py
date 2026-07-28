@@ -244,8 +244,18 @@ class ChapterPlanner:
 
     # --- storage ------------------------------------------------------------
     def _write_chapter(self, n: int, title, goal, status: str) -> Entry:
-        title = str(title or f"Chapter {n}").strip()
-        goal = str(goal or "").strip()
+        # One line, bounded. Entry.render writes the title into the
+        # `## {title}  {#ch-N}` header, so a newline splits the heading: the
+        # anchor and the `status:`/`importance:` lines fall into the BODY, the
+        # entry re-parses under a truncated slug, and two chapters whose titles
+        # share a first line collide on it — the next upsert then deleted one of
+        # them outright. Reachable from the model (seed/_generate_next) and from
+        # the outline panel's PUT, which is why it is bounded here rather than at
+        # either caller. summarizer._apply_promotions guards its titles the same
+        # way and says why; this path had neither guard.
+        title = " ".join(str(title or f"Chapter {n}").split())[:200] \
+            or f"Chapter {n}"
+        goal = " ".join(str(goal or "").split())[:2000]
         entry = Entry(title=title, slug=f"ch-{n}", importance=3,
                       attrs={"status": status}, body=goal)
         self.store.upsert_entry(OUTLINE, entry)
