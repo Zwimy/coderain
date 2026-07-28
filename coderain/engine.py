@@ -881,6 +881,18 @@ class Engine:
                 self.store.append_turn("narrator", narration)
             else:
                 narration = ""
+                self.store.log_degraded(
+                    "writer", "an output-regex rule emptied the turn; "
+                              "nothing was stored")
+        elif not (sidecar or trinity_events):
+            # Nothing at all: no prose, no sidecar, no quad events. On a Continue
+            # this was completely invisible — no turn, no stage line, no toast,
+            # no event bar, and no health entry either, so the reader clicked a
+            # button and nothing whatsoever happened. Invariant 2 is about
+            # exactly this: degrading is fine, degrading in silence is not.
+            self.store.log_degraded(
+                "writer", "the model returned no prose at all (empty or "
+                          "think-only output); nothing was stored")
         # Apply mechanics even when the model emitted ONLY a sidecar (no visible
         # prose) — otherwise a terse mechanical turn would silently lose its check
         # and deltas. A turn counts as "stored" if it produced prose OR mechanics,
