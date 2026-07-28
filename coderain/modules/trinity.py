@@ -336,7 +336,12 @@ class TrinityBrain:
         # The writer is told not to emit a sidecar; strip one defensively anyway so a
         # stray block never leaks into the prose. Mechanics come from the Director.
         raw = self.writer_llm.stream(writer_msgs, **overrides)
-        stream = rpg_mod.filter_sidecar(raw, hidden) if rpg_on else raw
+        # Filter in EVERY mode, exactly like the single-brain path. This is leak
+        # PREVENTION, not mechanics: gating it on rpg_on meant that with RPG off
+        # a stray ```rpg fence was streamed to the reader verbatim AND stored in
+        # transcript.md, where it poisons every later context window and the
+        # summarizer. The comment above already claimed this happened.
+        stream = rpg_mod.filter_sidecar(raw, hidden)
         for piece in stream:
             out_chunks.append(piece)
             yield piece

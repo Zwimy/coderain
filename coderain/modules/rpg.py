@@ -135,7 +135,11 @@ def _as_int(v, default=0) -> int:
         if isinstance(v, bool):
             return default
         return int(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError matters: json.loads accepts the bare token `Infinity`,
+        # and int(float('inf')) raises it. Without this the exception escaped
+        # mid-apply, after state was committed but before the event log was
+        # written. The validator now rejects those upstream; this is the net.
         return default
 
 

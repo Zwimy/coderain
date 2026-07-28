@@ -81,6 +81,20 @@ def _as_day(v) -> int:
     return v
 
 
+def _one_line(v) -> str:
+    """Collapse an attr value to a single line.
+
+    Entry headers are `key: value` lines, and parse_entries stops at the first
+    line that is not one. So a newline inside ANY attr value silently swallowed
+    every attr after it: a promotion carrying status="wounded
+hiding" lost the
+    character's wants and motivation entirely, and because the rewrite path only
+    re-attaches values that survived the parse, the very next fold that did not
+    restate them made the loss permanent.
+    """
+    return " ".join(str(v or "").split())
+
+
 def _turns_text(turns: list[dict]) -> str:
     out = []
     for t in turns:
@@ -133,24 +147,24 @@ class Summarizer:
                 continue
             attrs = {}
             if p.get("status"):
-                attrs["status"] = str(p["status"]).strip()
+                attrs["status"] = _one_line(p["status"])
             if p.get("when"):
-                attrs["when"] = str(p["when"]).strip()
+                attrs["when"] = _one_line(p["when"])
             # Live goals/motivations (memory-rules v10). Blank means "no change",
             # so a fold that doesn't mention them never wipes what's already there;
             # the rewrite path below re-attaches the previous values in that case.
             if kind == "character":
                 for key in ("wants", "motivation"):
-                    val = str(p.get(key, "") or "").strip()
+                    val = _one_line(p.get(key, ""))
                     if val:
                         attrs[key] = val
             rel_pairs = []
             for r in p.get("relationships", []) or []:
                 if isinstance(r, dict) and r.get("with"):
                     rel_pairs.append(f"{_slugify(str(r['with']))}: "
-                                     f"{str(r.get('note', '')).strip()}")
+                                     f"{_one_line(r.get('note', ''))}")
             if rel_pairs:
-                attrs["relationships"] = "; ".join(rel_pairs)
+                attrs["relationships"] = _one_line("; ".join(rel_pairs))
             # Causal chain for IMPORTANT events only (memory-rules v9): a
             # story-critical canon-event records why it happened and what it
             # changed, so the story stays coherent long after the raw turns fold
@@ -173,6 +187,11 @@ class Summarizer:
                 # A bare string would iterate CHARACTER by character — every
                 # one-letter alias then triggers on everything.
                 aliases = [aliases]
+            elif not isinstance(aliases, list):
+                # A number or any other scalar raised TypeError straight out of
+                # maybe_fold, aborting the fold AFTER earlier promotions in the
+                # same object had already been written to disk.
+                aliases = []
             entry = Entry(title=title, slug=slug,
                           aliases=[str(a).strip() for a in aliases
                                    if a and str(a).strip()],
@@ -377,10 +396,15 @@ class Summarizer:
                     "error": "this scene has no source-turn range to rebuild from"}
         start, end = int(m.group(1)), int(m.group(2))
         turns = self.store.turns()[start - 1:end]        # attrs are 1-based
-        if not turns:
-            return {"ok": False, "error": f"turns {rng} are no longer in the "
+        # The WHOLE range or nothing. A partial slice still summarizes, and the
+        # result would replace a correct full summary with one built from the
+        # surviving fragment — while attrs["turns"] and the [T..] timeline tag
+        # keep claiming the original range, so recall points at turns the summary
+        # no longer covers.
+        if len(turns) != end - start + 1:
+            return {"ok": False, "error": f"turns {rng} are no longer all in the "
                                           "transcript (branched or undone)"}
-        self.store.snapshot(keep=self.snapshot_keep)
+        self.store.snapshot(keep=self.snapshot_keep, reason="refold")
         payload = self._existing_context(turns) + "\n\nTURNS:\n" + _turns_text(turns)
         obj = self._emit_json(SCENE_INSTRUCTION, payload)
         summary = str((obj or {}).get("scene_summary", "")).strip()
@@ -441,9 +465,27 @@ class Summarizer:
         if obj and str(obj.get("arc", "")).strip():
             self.store.write("memory/arc.md",
                              "# Arc synopsis (long-term)\n\n"
-                             + str(obj["arc"]).strip() + "\n")
+                             + str(obj["arc"]).strip() + "\n"
+                             + self._arc_tail())
             return ["memory: updated arc"]
         return []
+
+    def _arc_tail(self) -> str:
+        """Authored sections of arc.md that the synopsis rewrite must not eat.
+
+        `## Beats` lives in this same file and is AUTHORED, not generated:
+        store.beats() reads it, it drives the per-turn "Beat n/m" block, and the
+        beat_advance delta validates against it. Rewriting arc.md as just the
+        synopsis deleted it on the first arc fold, and from then on the engine
+        reported "no beat structure defined" as if none had ever been written.
+        """
+        lines = self.store.read("memory/arc.md").splitlines()
+        for i, ln in enumerate(lines):
+            # The synopsis is the first section; everything from the next
+            # top-level heading onward is the author's and is preserved verbatim.
+            if i and ln.startswith("## "):
+                return "\n" + "\n".join(lines[i:]).rstrip("\n") + "\n"
+        return ""
 
     def maybe_fold(self) -> list[str]:
         """Run any due folds; returns human-readable event strings."""
@@ -479,8 +521,16 @@ class Summarizer:
                 self.store.snapshot(keep=self.snapshot_keep)
                 snapped = True
             chunk = scenes[folded_sc:folded_sc + self.long_size]
+            if not chunk:
+                break              # nothing left to fold; never spin on an empty slice
             events += self._fold_arc(chunk)
-            folded_sc += self.long_size
+            # By the ACTUAL chunk length, never the configured size — the scene
+            # loop above says exactly this in a comment, and this loop did the
+            # thing that comment warns about. With long_fold_size > long_fold_after
+            # (both accepted by Settings) the counter overshot the scenes that
+            # exist, and everything in the gap was never arc-folded: gone from
+            # context the moment it passed scenes_tail.
+            folded_sc += len(chunk)
             state["folded_scenes"] = folded_sc
             self.store.write_state(state)
 
