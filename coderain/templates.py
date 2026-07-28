@@ -527,8 +527,33 @@ DEFAULT_PREMISE = (
 
 
 def slugify(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return s or "story"
+    """Turn a name into an identifier. Returns "" when nothing usable survives.
+
+    Two things this function used to get wrong, both of which made DISTINCT
+    names collide on one key:
+
+    - It ended in `or "story"`. That fallback exists for a save FOLDER, which
+      must always have a name — but this is also the slug function for every
+      entity identifier, so an item called "меч" and one called "щит" both
+      became `story`: one inventory row for two objects, `location: "Тверь"`
+      written into every prompt as "Current location: story", and the
+      empty-argument guards in recall_entity / _valid_location left dead,
+      because a non-empty input could never slug to "". The folder callers
+      supply their own fallback now (_unique_slug).
+    - It kept only [a-z0-9], so every non-Latin script slugged to nothing at
+      all. Unicode alphanumerics are kept — ASCII behaviour is byte-identical
+      (an underscore still becomes "-", which `\\w` would have changed), so no
+      existing slug moves.
+    """
+    out = [ch if ("a" <= ch <= "z") or ch.isdigit()
+           or (not ch.isascii() and ch.isalnum()) else "-"
+           for ch in text.lower()]
+    return re.sub(r"-+", "-", "".join(out)).strip("-")
+
+
+def slugify_name(text: str) -> str:
+    """Slug for something that MUST have a name (a save or scenario folder)."""
+    return slugify(text) or "story"
 
 
 def _write(path: Path, content: str) -> None:
@@ -863,7 +888,18 @@ def new_save(save_dir: Path, scen_dir: Path | None, title: str,
                 if not re.search(r"[A-Za-z0-9]", base):
                     continue                       # slugify would invent a name
                 name = slugify(base) + ".md"
-                if name in custom or name in SCENARIO_FILES or name in PLAY_FILES:
+                # RULE_FILES too. This guard was re-implemented here instead of
+                # sharing memory._RESERVED_MD (which does include them), so a
+                # scenario declaring custom_files ["writer-rules","memory-rules"]
+                # got SAVE-LAYER overrides of the governing rule files — either
+                # the archive's own text injected verbatim into the system and
+                # fold prompts, or, when the archive omitted the file, a
+                # three-line stub that deletes the writer rules and the whole
+                # memory policy. Reachable from any imported world zip, and
+                # invisible: store.custom_files() filters the name back out, so
+                # no UI ever showed the override existed.
+                if name in custom or name in SCENARIO_FILES \
+                        or name in PLAY_FILES or name in RULE_FILES:
                     continue                       # never shadow a built-in file
                 custom.append(name)
                 src = scen_dir / name

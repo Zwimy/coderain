@@ -214,6 +214,14 @@ class Summarizer:
             title = _one_line(p.get("title", "")) or slug
             detail = str(p.get("detail", "")).strip()[:BODY_LIMIT]
             if not rel or not slug or not detail:
+                # Loudly. A promotion the fold meant to make and the engine
+                # cannot is exactly the silent one-way loss invariant 2 is
+                # about — and this branch also catches an unusable `kind`,
+                # which an author reading health.jsonl can actually fix.
+                self.store.log_degraded(
+                    "fold", "dropped a promotion: "
+                            f"kind={kind!r:.40} slug={str(p.get('slug'))!r:.40} "
+                            f"{'(no detail)' if not detail else ''}")
                 continue
             attrs = {}
             if p.get("status"):
@@ -738,9 +746,10 @@ def _slugify(s: str) -> str:
     while every delta channel truncated the same name to 200 before looking it
     up: quest_update, reveal and event_fired all answered "no such thread" about
     a thread sitting on disk, and a fold is one-way, so it stayed unreachable
-    for the life of the save."""
-    s = re.sub(r"[^a-z0-9]+", "-", str(s or "").strip()[:STR_LIMIT].lower())
-    return s.strip("-")
+    for the life of the save. Delegates rather than re-implementing: a second
+    copy of the rule is how the two drifted apart in the first place."""
+    from .templates import slugify
+    return slugify(str(s or "").strip()[:STR_LIMIT])
 
 
 def _clamp_int(v, lo: int = 1, hi: int = 5) -> int:

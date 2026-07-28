@@ -432,13 +432,14 @@ export async function renderPlay(slug) {
     // signal, not the first chunk: Stop mid-stream leaves prose on screen that
     // the server never stored, and counting that enabled a ◄ pointing at a
     // variant which does not exist — which then wrote it over a real turn.
-    let settled = false;
+    let serverTurns = null;
+    const before = domTurns();
     try {
       await sse(`/api/saves/${slug}/swipe-gen`, undefined, {
         stage: m => { stage.textContent = m.text; },
         chunk: m => { d.classList.remove("pending"); body.textContent += m.text;
                       transcript.scrollTop = transcript.scrollHeight; },
-        done: m => { settled = true;
+        done: m => { serverTurns = m.turns;
                      setEvents(m.events); setSheet(m.sheet || []);
                      $(".clock").textContent = m.clock || "";
                      if (m.text != null) body._settle = m.text; stage.textContent = ""; },
@@ -446,10 +447,13 @@ export async function renderPlay(slug) {
       });
     } catch (e) { stage.textContent = "error: " + e.message; }
     d.classList.remove("pending");
-    if (!settled) {
-      // Repaint from server truth, exactly like run()'s error path. A cancelled
-      // or failed swipe leaves the transcript one exchange shorter than what is
-      // on screen.
+    // The store's turn COUNT decides, not the arrival of a `done` frame. `done`
+    // also fires when the regeneration produced nothing: the server has already
+    // deleted the exchange and dropped its swipe state, so counting a variant
+    // there left a ghost bubble reading "Version 2 of 2" over a transcript two
+    // turns shorter, and the next ◄ painted the previous exchange's prose into
+    // it — the same text twice on screen, and ✎ addressing turns that are gone.
+    if (serverTurns !== before) {
       setBusy(false);
       await resync();
       return;
@@ -496,6 +500,24 @@ export async function renderPlay(slug) {
   /* Repaint the transcript from the server's truth. After a failed turn the DOM
      and the store can disagree, and turn indices are derived from DOM position —
      so an edit would PUT to the wrong index and rewrite a different turn. */
+  /* How many turns the DOM currently shows. Turn indices are DOM POSITION, so
+     this must equal the store's count or ✎ edits and swipes address the wrong
+     turn. Call it only once the in-flight bubbles have settled (an empty one is
+     removed, a real one painted), which is when both are stored turns. */
+  const domTurns = () => transcript.querySelectorAll(".turn").length;
+
+  /* The `done` frame carries the store's authoritative turn count. Believing the
+     stream instead was the bug: a generation that COMPLETES but stores nothing —
+     prose-less output, deltas all rejected, or an ST-31 rule that empties the
+     turn — sends `done`, not `error`, so the optimistic player bubble survived
+     and the DOM went one turn ahead of the store. The next ✎ then PUT the edit
+     to a neighbouring index and rewrote a different turn on disk, silently. */
+  const reconcile = async (serverTurns) => {
+    if (typeof serverTurns !== "number" || serverTurns === domTurns()) return false;
+    await resync();
+    return true;
+  };
+
   const resync = async () => {
     try {
       const fresh = await api(`/api/saves/${slug}`);
@@ -561,7 +583,8 @@ export async function renderPlay(slug) {
     const liveBody = bodyOf(live);
     live.classList.add("pending");   // blinking caret until prose streams in
     live.setAttribute("aria-busy", "true");
-    let settled = null;              // ST-31: the regex-cleaned stored text
+    let settled = null;                  // ST-31: the regex-cleaned stored text
+    let serverTurns = null;              // the store's authoritative turn count
     let failed = null;
     try {
       await sse(path, body, {
@@ -571,6 +594,7 @@ export async function renderPlay(slug) {
                       transcript.scrollTop = transcript.scrollHeight; },
         done: m => { setEvents(m.events); setSheet(m.sheet || []);
                      $(".clock").textContent = m.clock || "";
+                     serverTurns = m.turns;
                      if (m.text != null) settled = m.text; },
         error: m => { failed = m; },
       }, aborter.signal);
@@ -603,6 +627,10 @@ export async function renderPlay(slug) {
       if (playerText !== undefined && !$("#action").value) {
         $("#action").value = playerText;      // never lose what they typed
       }
+    } else if (await reconcile(serverTurns)) {
+      // The stream said `done` but the store kept fewer turns than the screen
+      // shows — the turn was rolled back server-side. resync() has repainted.
+      toast("That turn produced nothing and was discarded.", "info");
     }
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
     renderSwipeBar();

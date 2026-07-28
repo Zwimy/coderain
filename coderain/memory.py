@@ -1155,7 +1155,15 @@ class MemoryStore:
         s = ", ".join(parts)
         if t.get("note"):
             s = f"{s} — {t['note']}".strip(" —")
-        return s
+        # ONE LINE, bounded, at the point every reader shares. The fold sanitises
+        # the values IT writes into state["time"], but two other writers do not —
+        # the Memory editor (state.json is editable and only validated as JSON)
+        # and new_save's start_time. A newline reaching here ends up in a scene's
+        # `when:` attr, which renders BEFORE the episode index, so parse_entries
+        # stops there and characters/locations/quests become body prose:
+        # recall_entity and recall_quest go dead for every scene folded while the
+        # note is set, silently, and a fold is one-way.
+        return " ".join(s.split())[:200]
 
     # --- events log (Wave 1; SPEC-V2 §1.4) ---
     def append_event_log(self, record: dict) -> None:
@@ -1795,6 +1803,17 @@ class MemoryStore:
         # (weighted) before the budget competition.
         candidates = self._collapse_groups(candidates, seed, turn_index,
                                            always_slug=current_loc_slug)
+        # Hidden hits get the SAME treatment. They are diverted into their own
+        # list above, before this line, so they were skipping the lottery
+        # entirely: three `hidden: true, group: twist` variants of one secret all
+        # shipped in the same Secrets block, contradicting each other — which is
+        # the exact harm `group:` exists to prevent. D-001 exempts PINNED members
+        # from the lottery and says nothing about hidden ones; _collapse_groups
+        # applies that exemption itself, so routing through it keeps the decision
+        # and closes the hole.
+        hidden_hits = [c[2] for c in self._collapse_groups(
+            [(e.weight_factor() * e.importance, "", e) for e in hidden_hits],
+            seed, turn_index, always_slug=current_loc_slug)]
         candidates.sort(key=lambda c: c[0], reverse=True)
         lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
         picked: dict[str, list[Entry]] = {}
@@ -1870,7 +1889,13 @@ class MemoryStore:
                                if 0 <= j < len(all_scenes)
                                and all_scenes[j].slug not in tail_slugs]
             if wanted:
-                keep = sorted(dict.fromkeys(wanted))[:4]
+                # The LATEST four matches, then sorted back into reading order.
+                # Slicing the sorted list took the four LOWEST indices, so this
+                # section was permanently anchored to the story's opening: a
+                # character who appears in scenes 1-3 and again in 10-12 could
+                # only ever be recalled through 1-3, and the longer the story
+                # ran the more entrenched that got.
+                keep = sorted(sorted(dict.fromkeys(wanted))[-4:])
                 sections.append((3, "Related past scenes (entities now present)",
                                  "\n\n".join(all_scenes[j].render()
                                              for j in keep)))
@@ -2119,7 +2144,11 @@ def _recent_paragraphs(text: str, n: int) -> str:
 
 
 def _unique_slug(root: Path, base: str) -> str:
-    slug, n = base, 2
+    # A folder must have a name even when the title slugs to nothing (a
+    # title made only of punctuation, or of a script slugify cannot use).
+    # templates.slugify used to supply this fallback itself, which is how
+    # every unslugabble ENTITY name ended up sharing one key.
+    slug, n = base or "story", 2
     while (root / slug).exists():
         slug, n = f"{base}-{n}", n + 1
     return slug

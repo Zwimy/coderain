@@ -344,6 +344,16 @@ class Engine:
             else:
                 self.store.drop_event_log_after(count)
             self._pre_turn_log = None
+        # Whether or not anything was rolled back, no record may be left pointing
+        # PAST the transcript's end. When nothing was (a second consecutive undo,
+        # or an Engine rebuilt mid-story by a settings save so it holds no
+        # snapshot at all), the deltas stay applied — correct, per D-002 — but
+        # their record sat at an index the shortened transcript no longer
+        # reaches, and branch() filters on `snap_turns < turn <= turn_n`, so it
+        # neither replayed them nor kept them: a branch with different flags from
+        # the save it came from, which is the exact failure that guard prevents.
+        # Pulling the record onto the last real turn keeps both halves true.
+        self.store.clamp_event_log_to_transcript()
 
     def _begin_turn(self) -> tuple:
         """Open an exchange's undo record. Returns the PREVIOUS one so an
@@ -405,13 +415,32 @@ class Engine:
         # first scene — no model call (FictionLab's greeting message).
         override = self.store.opening_override()
         if override:
-            # A card's first_mes can carry a ```rpg block; drop it so it never
-            # reaches the reader (the live-gen path already strips it).
-            override, _ = sidecar_mod.strip_sidecar(override)
+            # A card's first_mes can carry a ```rpg block; strip it so it never
+            # reaches the reader, and APPLY it — the live-gen path does both,
+            # and throwing an authored envelope away is a silent loss of the
+            # opening state the author set up.
+            override, side = sidecar_mod.strip_sidecar(override)
             override = self._expand_authored(override)   # ST-20 macros in greeting
             if on_stage:
                 on_stage("Opening: authored greeting (no generation)")
+            # Nothing left after the strip means the greeting was ONLY a sidecar.
+            # Storing it anyway put an empty narrator turn on disk: the SPA
+            # deletes an empty bubble, so the DOM started one turn behind the
+            # store from turn one, and every later ✎ edit hit the wrong index.
+            # The live path already refuses to store a turn a rule emptied.
+            if not override.strip():
+                self.store.log_degraded(
+                    "opening", "the authored '## Opening' had no prose once its "
+                               "sidecar was stripped; nothing was stored")
+                self._abort_turn(prior)
+                return
             self.store.append_turn("narrator", override)
+            # Applied AFTER the turn is stored, so the envelope's ledger record
+            # gets the index of a turn that really exists. Dropping it was a
+            # silent loss of the opening state the author set up.
+            if side:
+                self._rpg_events += self.apply_envelope(
+                    side, self.store.rpg_enabled())
             yield override
             return
         messages = self._messages(

@@ -60,7 +60,35 @@ def write_save_file(slug: str, rel: str, body: dict):
             raise HTTPException(400, f"not valid JSON: {e}")
     with _exclusive():                   # the engine re-reads these every turn
         store.write(rel, text)
+        # A hand edit to the transcript or the world state invalidates whatever
+        # the live engine is holding ABOUT that exchange. Only PUT /turns/{i}
+        # cleared it, so after deleting the last exchange in "Transcript (raw)"
+        # a ◄ wrote the deleted exchange's prose over a different exchange's
+        # turn (invariant 7), and after editing state.json an Undo silently
+        # discarded the edit by writing the pre-turn snapshot back over it.
+        if rel in ("transcript.md", "state.json"):
+            _forget_exchange(slug)
     return {"ok": True, "layer": store.layer_of(rel)}
+
+
+def _forget_exchange(slug: str) -> None:
+    """Drop the cached engine's per-exchange undo/swipe state for `slug`.
+
+    Best-effort: no live engine (or a build without the play router) simply
+    means there is nothing cached to invalidate."""
+    try:
+        from .core import _engines
+    except ImportError:                  # pragma: no cover - trimmed build
+        return
+    eng = _engines.get(slug)
+    if eng is None:
+        return
+    eng._swipes = None
+    eng._pre_turn_rpg = None
+    eng._pre_turn_log = None
+    eng._pre_turn_reveals = []
+    eng._pre_turn_canon = []
+    eng._pre_turn_events = []
 
 
 @router.post("/api/saves/{slug}/rules/{rel}/override")
