@@ -361,13 +361,22 @@ class Entry:
         return _attr_true(self.attrs.get("recurse"))
 
     def render(self) -> str:
-        lines = [f"## {self.title}  {{#{self.slug}}}"]
+        # One line each, HERE and not only in __post_init__. The constructor
+        # cannot see an attrs dict that is filled in afterwards, and
+        # generator._character_entry does exactly that — so the guard added for
+        # that producer was bypassed by that producer: a generated character
+        # kept `wants` up to its newline and lost `motivation` entirely, the
+        # remainder becoming body prose. This is the only place attrs become
+        # `key: value` lines, so it is the one place the rule cannot be dodged.
+        one = lambda v: " ".join(str(v).split())          # noqa: E731
+        lines = [f"## {one(self.title)}  {{#{self.slug}}}"]
         if self.aliases:
-            lines.append("aliases: " + ", ".join(self.aliases))
+            lines.append("aliases: " + ", ".join(
+                one(a).replace(",", " ") for a in self.aliases if one(a)))
         lines.append(f"importance: {self.importance}")
         for k, v in self.attrs.items():
             if v:
-                lines.append(f"{k}: {v}")
+                lines.append(f"{k}: {one(v)}")
         # A '## ' line inside a body would re-parse as a NEW entry and truncate
         # this one (registry sections are ## headings) — demote to '###' so
         # user markdown sub-headers survive the save/parse round-trip.

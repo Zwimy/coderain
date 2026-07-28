@@ -105,7 +105,14 @@ export async function renderLibrary() {
       if (act === "delete") {
         ev.stopPropagation();
         if (!await confirmModal("Delete this save for good?")) return;
-        await api(`/api/saves/${slug}`, {method: "DELETE"});
+        // guard(), like every other 409-capable call. Deleting a story whose
+        // turn is still generating answers "a turn is generating — try again
+        // in a moment", and unguarded that became an uncaught rejection: the
+        // modal closed, the card stayed, the save stayed, and nothing said why.
+        const done = await guard(
+          () => api(`/api/saves/${slug}`, {method: "DELETE"}),
+          "Couldn't delete this save");
+        if (done === undefined) return;      // guard() toasted; leave the card
         render();
       } else if (act === "branch") {
         ev.stopPropagation();
