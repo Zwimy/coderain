@@ -129,7 +129,13 @@ def _one_line(v) -> str:
 
 
 def _reject(rejected: list, key: str, value, reason: str) -> None:
-    rejected.append({"delta": key, "value": value, "reason": reason})
+    """Record a dropped delta. The label is bounded HERE rather than at the ~20
+    call sites that build it, because most of them interpolate raw model text
+    (`f"quest_update:{raw}"`) and only some remembered to cap it. `rejection_text`
+    feeds these labels straight back to the Director as the corrective re-ask, so
+    an uncapped one turns a 200k-char delta name into a 200k-char prompt."""
+    rejected.append({"delta": _one_line(key)[:STR_CAP],
+                     "value": value, "reason": _one_line(reason)[:STR_CAP]})
 
 
 def _as_int(v):
@@ -409,8 +415,13 @@ def _repair_delta_keys(d: dict, rejected: list | None = None) -> dict:
 
 
 def _slug(value) -> str:
+    """Slugify a model-supplied identifier, bounded. The cap lives here because
+    slugs become dict KEYS in state.json and get rendered into every later
+    prompt, and most callers passed raw envelope text straight in — only
+    `_valid_items` and `location` remembered to trim first. Nothing legitimate
+    is a 200-character identifier."""
     from .templates import slugify
-    s = str(value or "").strip()
+    s = str(value or "").strip()[:STR_CAP]
     return slugify(s) if s else ""
 
 
@@ -553,14 +564,21 @@ def _valid_equip(key: str, value, state: dict, deltas: dict,
     adds = deltas.get("inventory_add") if isinstance(deltas, dict) else None
     added = set()
     if isinstance(adds, list):
-        for raw in adds:
+        # [:LIST_CAP] mirrors _valid_items exactly. Reading the RAW list instead
+        # let an equip cite item #500 of a 500-item add: the validator saw it in
+        # `added` and passed the equip, but rpg.apply only ever added the first
+        # 32, so the turn equipped something the player does not hold.
+        for raw in adds[:LIST_CAP]:
             name = (raw.get("name") or raw.get("slug", "")) \
                 if isinstance(raw, dict) else raw
             s = _slug(name)
             if s:
                 added.add(s)
     out = []
-    for raw in value:
+    if len(value) > LIST_CAP:
+        _reject(rejected, key, f"{len(value)} items",
+                f"at most {LIST_CAP} per turn (kept the first {LIST_CAP})")
+    for raw in value[:LIST_CAP]:
         slug = _slug(raw)
         entry = inv.get(slug) if isinstance(inv, dict) else None
         if not slug:
@@ -582,9 +600,12 @@ def _valid_quests(value, store, state: dict, rejected: list) -> dict:
     threads = {e.slug for e in store.entries("threads.md")}
     quests = state.get("quests") if isinstance(state.get("quests"), dict) else {}
     out = {}
-    for raw, new in value.items():
+    if len(value) > LIST_CAP:
+        _reject(rejected, "quest_update", f"{len(value)} entries",
+                f"at most {LIST_CAP} per turn (kept the first {LIST_CAP})")
+    for raw, new in list(value.items())[:LIST_CAP]:
         slug = _slug(raw)
-        new = str(new or "").strip().lower()
+        new = str(new or "").strip().lower()[:STR_CAP]
         cur = str(quests.get(slug, "inactive")).lower()
         if slug not in threads:
             _reject(rejected, f"quest_update:{raw}", new,

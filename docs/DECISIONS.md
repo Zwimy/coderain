@@ -8,8 +8,12 @@ evidence would change the answer.
 
 ## D-001 — A pinned entry does not consume its inclusion group's winner
 
-**Decided:** 2026-07-06. **Reaffirmed:** 2026-07-28.
-**Code:** `MemoryStore._collapse_groups` (memory.py). **Test:** `tier2_test.py` §11.
+**Decided:** 2026-07-06. **Reaffirmed:** 2026-07-28, twice — the second time by
+the repo owner directly, settling it: *"if 2 are pinned, they should not fight
+each other, and both be included, regardless of weight. Anything pinned shouldn't
+even have to roll."* That is the exemption, and it is now the owner's call rather
+than an inherited default. **Code:** `MemoryStore._collapse_groups` (memory.py).
+**Test:** `tier2_test.py` §11.
 
 An entry can carry `group: <name>`. Members of a group are mutually exclusive:
 the lottery (seeded by story seed + turn + group name) elects one winner and the
@@ -53,6 +57,23 @@ exclusion — i.e. a real scenario where two members contradict each other in a
 shipped prompt. If that shows up, the fix is not to flip the exemption but to
 **warn at authoring time**: a lint in the world builder saying "this entry is
 pinned AND grouped; the group will emit two entries."
+
+### The related bug this decision does NOT excuse
+
+Exempting pinned entries from the lottery is only half of "always in context".
+The other half is the budget, and there the promise was being broken: hidden
+entries are diverted into the Secrets block before the pinned/critical split, and
+that block sat at priority 2 with ordinary lore — so a `hidden` + `critical`
+entry could be cut while its visible sibling survived. Fixed 2026-07-28: the
+always-on hidden entries go in at priority 0 and the rest keep competing at 2
+(`wave2_test.py` §3b pins it, at the exact budget where the old code dropped it).
+
+The reason it stayed open for a round is worth recording: honouring the invariant
+costs ordinary lore at tight budgets, and the first attempt was reverted because
+`wave2_test` §3 went red. §3 was measuring the wrong thing by then — it asserted
+an `important` entry survived a budget that no longer had room for any priority-2
+section at all. The invariant wins; the test moved to a budget where it still
+discriminates between `minor` and `important`.
 
 ---
 

@@ -15,6 +15,8 @@ bends to the real story.
 """
 from __future__ import annotations
 
+import re
+
 from .llm import emit_json
 from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore
@@ -117,12 +119,16 @@ class ChapterPlanner:
         for c in self.chapters():
             self.store.remove_entry(OUTLINE, c.slug)
         n = 0
-        for i, ch in enumerate(chapters[:self.horizon], start=1):
+        for ch in chapters[:self.horizon]:
             if not isinstance(ch, dict):
                 continue
-            self._write_chapter(i, ch.get("title"), ch.get("goal"),
-                                 "active" if i == 1 else "planned")
+            # Number by what is actually WRITTEN, not by position in the model's
+            # list. Numbering by position left a hole (ch-1, ch-3) whenever an
+            # element wasn't an object, and _generate_next then reused ch-3 and
+            # overwrote a real chapter.
             n += 1
+            self._write_chapter(n, ch.get("title"), ch.get("goal"),
+                                "active" if n == 1 else "planned")
         return [f"outline: planned {n} chapters"] if n else []
 
     def complete_active(self) -> list[str]:
@@ -187,8 +193,24 @@ class ChapterPlanner:
             obj = emit_json(self.llm, NEXT_INSTRUCTION, payload)
         if not isinstance(obj, dict) or not str(obj.get("title", "")).strip():
             return None
-        return self._write_chapter(len(chapters) + 1, obj.get("title"),
+        return self._write_chapter(self._next_number(), obj.get("title"),
                                    obj.get("goal"), "planned")
+
+    def _next_number(self) -> int:
+        """One past the HIGHEST chapter number on file, not the chapter COUNT.
+
+        The two differ whenever the outline has a hole — a hand-deleted chapter,
+        or a seed that skipped a malformed element. With `len(chapters) + 1` the
+        new chapter reused an existing slug, `upsert_entry` overwrote that
+        chapter, and the outline never grew: `_reconcile` then re-ran its
+        top-up loop until the guard stopped it, spending horizon+2 model calls
+        on every chapter completion to end up exactly where it started."""
+        highest = 0
+        for c in self.chapters():
+            m = re.fullmatch(r"ch-(\d+)", c.slug or "")
+            if m:
+                highest = max(highest, int(m.group(1)))
+        return highest + 1
 
     # --- manual editing (the book-plan panel) -------------------------------
     def replace_all(self, items: list[dict]) -> None:

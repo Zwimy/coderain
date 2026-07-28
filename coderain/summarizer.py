@@ -82,6 +82,14 @@ def _as_day(v) -> int:
 
 
 STR_LIMIT = 200      # free-text from a fold, mirroring validator.STR_CAP
+# Prose from a fold: a scene summary, a promotion body, the arc synopsis. The
+# instructions ask for 150-200 WORDS, so ~4k chars is far past anything
+# legitimate while still stopping a runaway generation from becoming permanent
+# context — a fold is one-way, and an oversized body is re-sent every turn after.
+BODY_LIMIT = 4000
+# The relationships attr is one line holding MANY values, so it gets its own
+# bound — STR_LIMIT would fit about three of them.
+REL_LIMIT = 800
 
 
 def _as_list(v) -> list:
@@ -102,8 +110,12 @@ hiding" lost the
     character's wants and motivation entirely, and because the rewrite path only
     re-attaches values that survived the parse, the very next fold that did not
     restate them made the loss permanent.
+
+    Length is bounded here rather than at the call sites: every caller writes an
+    attr line, only two of them remembered to trim, and an attr is re-rendered
+    into context on every turn the entry activates.
     """
-    return " ".join(str(v or "").split())
+    return " ".join(str(v or "").split())[:STR_LIMIT]
 
 
 def _turns_text(turns: list[dict]) -> str:
@@ -143,6 +155,25 @@ class Summarizer:
         with llm_stage(self.llm, "fold"):
             return emit_json(self.llm, rules + "\n\n" + instruction, payload)
 
+    def _hold_resolved(self, slug: str, attrs: dict) -> bool:
+        """Keep a resolved thread resolved. Returns whether it had to intervene.
+
+        `resolved_threads` is the only door that closes a thread and there is no
+        door that reopens one, so any fold output that would move a thread back to
+        open is a mistake, not an authored transition. Two ways in, both real:
+        a `status: open` from the model, and — with rewrite=True — a promotion
+        that simply omits `status`, since merge_entry treats the managed keys as
+        authoritative and a missing one as a deliberate clear. Either way the
+        thread comes back into the open-threads block that rides every turn.
+        Matches assemble()'s test exactly: only "resolved" counts as closed."""
+        was = {e.slug: e for e in self.store.entries("threads.md")}.get(slug)
+        if was is None or was.attrs.get("status", "open").lower() != "resolved":
+            return False
+        if attrs.get("status", "").lower() == "resolved":
+            return False
+        attrs["status"] = "resolved"
+        return True
+
     # --- apply validated promotions ---
     def _apply_promotions(self, obj: dict) -> list[str]:
         events: list[str] = []
@@ -156,7 +187,7 @@ class Summarizer:
             # `## {title}  {{#slug}}` header, so a newline there splits the entry
             # and the next promotion of the same slug creates a DUPLICATE.
             title = _one_line(p.get("title", "")) or slug
-            detail = str(p.get("detail", "")).strip()
+            detail = str(p.get("detail", "")).strip()[:BODY_LIMIT]
             if not rel or not slug or not detail:
                 continue
             attrs = {}
@@ -178,7 +209,11 @@ class Summarizer:
                     rel_pairs.append(f"{_slugify(str(r['with']))}: "
                                      f"{_one_line(r.get('note', ''))}")
             if rel_pairs:
-                attrs["relationships"] = _one_line("; ".join(rel_pairs))
+                # Bounded, but NOT at _one_line's per-value STR_LIMIT: this one
+                # attr holds every relationship a character has, and 200 chars is
+                # three of them. Each individual note is already trimmed above.
+                attrs["relationships"] = \
+                    " ".join("; ".join(rel_pairs).split())[:REL_LIMIT]
             # Causal chain for IMPORTANT events only (memory-rules v9): a
             # story-critical canon-event records why it happened and what it
             # changed, so the story stays coherent long after the raw turns fold
@@ -213,6 +248,9 @@ class Summarizer:
                                    if a and _one_line(a)],
                           importance=importance,
                           attrs=attrs, body=detail)
+            if rel == "threads.md" and self._hold_resolved(slug, entry.attrs):
+                events.append(f"memory: [[thread:{slug}]] is resolved — the "
+                              "promotion was not allowed to reopen it")
             # rewrite=True: the model was shown the current entry and returns the
             # full rewritten body, so replace (not append) it.
             self.store.merge_entry(rel, entry, rewrite=True)
@@ -222,7 +260,7 @@ class Summarizer:
             if not isinstance(t, dict):
                 continue
             slug = _slugify(str(t.get("slug", "")))
-            detail = str(t.get("detail", "")).strip()
+            detail = str(t.get("detail", "")).strip()[:BODY_LIMIT]
             if not slug or not detail:
                 continue
             # Only OPEN a thread that isn't already on file. merge_entry does
@@ -232,6 +270,10 @@ class Summarizer:
             # that rides every turn.
             known = {e.slug: e for e in self.store.entries("threads.md")}
             attrs = {} if slug in known else {"status": "open"}
+            # No _hold_resolved call here on purpose: this door merges WITHOUT
+            # rewrite, so a known thread contributes no status at all and the
+            # existing one survives. The promotions door needs the guard because
+            # rewrite=True makes a missing status an intentional clear.
             self.store.merge_entry("threads.md", Entry(
                 title=_one_line(t.get("title", "")) or slug, slug=slug,
                 importance=_clamp_int(t.get("importance", 3)),
@@ -277,9 +319,9 @@ class Summarizer:
         # characters/locations/quests index becomes body prose and recall_entity
         # goes dead for that scene. A fold is one-way, so it never comes back.
         if t.get("phase") and current_or_later:
-            tm["phase"], changed = _one_line(t["phase"])[:STR_LIMIT], True
+            tm["phase"], changed = _one_line(t["phase"]), True
         if "note" in t and current_or_later:
-            note = _one_line(t.get("note", ""))[:STR_LIMIT]
+            note = _one_line(t.get("note", ""))
             if note != tm.get("note", ""):
                 tm["note"], changed = note, True
         if not changed:
@@ -345,7 +387,7 @@ class Summarizer:
         summary = ""
         shorthand = ""
         if obj:
-            summary = str(obj.get("scene_summary", "")).strip()
+            summary = str(obj.get("scene_summary", "")).strip()[:BODY_LIMIT]
             shorthand = str(obj.get("timeline", "")).strip()
             events += self._apply_promotions(obj)
             events += self._apply_time(obj)  # update clock before stamping the scene
@@ -436,7 +478,7 @@ class Summarizer:
         self.store.snapshot(keep=self.snapshot_keep, reason="refold")
         payload = self._existing_context(turns) + "\n\nTURNS:\n" + _turns_text(turns)
         obj = self._emit_json(SCENE_INSTRUCTION, payload)
-        summary = str((obj or {}).get("scene_summary", "")).strip()
+        summary = str((obj or {}).get("scene_summary", "")).strip()[:BODY_LIMIT]
         if not summary:
             self.store.log_degraded("refold", f"{scene_slug} produced no summary")
             return {"ok": False, "error": "the model returned no summary — "
@@ -487,17 +529,37 @@ class Summarizer:
         self.store.write("memory/timeline.md",
                          existing.rstrip("\n") + f"\n- [T{start}-{end}] {stamp}{line}\n")
 
-    def _fold_arc(self, scenes: list[Entry]) -> list[str]:
+    def _next_scene_no(self) -> int:
+        """One past the HIGHEST scene number on file, not the scene COUNT.
+
+        `len(scenes) + 1` collides the moment the file has a hole — a scene
+        deleted by hand (memory/scenes.md is an editable file) or by a branch
+        that dropped a middle range. The new scene reused `scene-N`,
+        upsert_entry overwrote the old one, and a fold is one-way: that
+        summary was the only remaining record of its turns."""
+        highest = 0
+        for sc in self.store.entries("memory/scenes.md"):
+            m = re.fullmatch(r"scene-(\d+)", sc.slug or "")
+            if m:
+                highest = max(highest, int(m.group(1)))
+        return highest + 1
+
+    def _fold_arc(self, scenes: list[Entry]) -> list[str] | None:
+        """Rewrite the arc synopsis to absorb `scenes`. Returns None when the
+        model gave nothing usable — the caller must NOT advance the pointer on a
+        None, or those scenes are marked absorbed by a synopsis that never
+        mentions them. Unlike a scene fold there is nothing destructive here, so
+        a failure can simply be retried on the next fold cycle."""
         payload = "CURRENT ARC:\n" + (self.store.read("memory/arc.md")) \
             + "\n\nOLDER SCENES:\n" + "\n\n".join(e.render() for e in scenes)
         obj = self._emit_json(ARC_INSTRUCTION, payload)
         if obj and str(obj.get("arc", "")).strip():
             self.store.write("memory/arc.md",
                              "# Arc synopsis (long-term)\n\n"
-                             + str(obj["arc"]).strip() + "\n"
+                             + str(obj["arc"]).strip()[:BODY_LIMIT] + "\n"
                              + self._arc_tail())
             return ["memory: updated arc"]
-        return []
+        return None
 
     def _arc_tail(self) -> str:
         """Authored sections of arc.md that the synopsis rewrite must not eat.
@@ -534,7 +596,7 @@ class Summarizer:
             if self.planner is not None:
                 events += self.planner.ensure_seeded()
             chunk = turns[folded:folded + self.medium_size]
-            scene_no = len(self.store.entries("memory/scenes.md")) + 1
+            scene_no = self._next_scene_no()
             events += self._fold_scene(chunk, scene_no, folded + 1)  # 1-based start
             # Advance by the ACTUAL chunk length, never the configured size — a
             # short tail chunk (or a hand-edited size > after) must not overshoot
@@ -552,7 +614,19 @@ class Summarizer:
             chunk = scenes[folded_sc:folded_sc + self.long_size]
             if not chunk:
                 break              # nothing left to fold; never spin on an empty slice
-            events += self._fold_arc(chunk)
+            arc_events = self._fold_arc(chunk)
+            if arc_events is None:
+                # Advancing here marked these scenes "absorbed into the arc" when
+                # the synopsis had not changed at all: they left context the
+                # moment they passed scenes_tail and nothing anywhere recorded
+                # that they were never summarized. Leave the pointer where it is
+                # so the next fold cycle retries, and BREAK rather than continue
+                # — the loop condition is still true, so continuing would spin.
+                self.store.log_degraded(
+                    "arc-fold", f"{len(chunk)} scene(s) produced no synopsis; "
+                                "pointer held, will retry on the next fold")
+                break
+            events += arc_events
             # By the ACTUAL chunk length, never the configured size — the scene
             # loop above says exactly this in a comment, and this loop did the
             # thing that comment warns about. With long_fold_size > long_fold_after

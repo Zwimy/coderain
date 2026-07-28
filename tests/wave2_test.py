@@ -56,11 +56,30 @@ assert "the-patron" not in normal
 print("2) assemble: trigger activation + pinned always-in + Secrets framing")
 
 # ---- 3) weight ranking under a tight budget: minor drops first ----
-msgs = store.assemble([], "the dust mote and the ciphers", budget_tokens=220)
+# 280, not the 220 this used to pass at. The Patron is `hidden` AND `critical`,
+# and until 2026-07-28 the Secrets block ignored that and sat at priority 2 with
+# ordinary lore, so a critical secret could be cut — a straight violation of the
+# "always in context" invariant. Honouring it moves ~220 chars into priority 0,
+# and at 220 tokens that left no room for ANY priority-2 section, so this check
+# stopped discriminating: Mara dropped for lack of budget, not for lack of
+# weight. The larger budget restores the comparison the assertions are about —
+# `minor` still loses to `important`, which is the thing under test.
+msgs = store.assemble([], "the dust mote and the ciphers", budget_tokens=280)
 sysmsg = msgs[0]["content"]
 assert "Mara" in sysmsg, "important entry should survive the tight budget"
 assert "utterly forgettable" not in sysmsg, "minor entry should be cut first"
 print("3) tight budget cuts minor lore before important lore")
+
+# ---- 3b) a critical SECRET is always in, even when ordinary lore is not ----
+# 220 is chosen so the old priority-2 Secrets block does not fit: it is the
+# budget at which the visible Characters section survives and the secret was
+# silently dropped. If this passes at a budget where both fit it is testing
+# nothing, so do not raise it.
+msgs = store.assemble([], "the dust mote and the ciphers", budget_tokens=220)
+sysmsg = msgs[0]["content"]
+assert "own father" in sysmsg, "critical secret must survive ANY budget"
+assert "Secrets you know" in sysmsg, "the secret must keep its framing"
+print("3b) hidden + critical honours 'always in context' at a tight budget")
 
 # ---- 4) links surface as one-liners when their owner activates ----
 store.upsert_entry("factions.md", Entry(
