@@ -133,3 +133,71 @@ tight-budget evidence: at 220 tokens it must still deliver the important lore.
 Priority 0 is exempt from all of this. `pinned:` / `weight: critical` entries are
 always in context (invariant 4) — they are placed before the competition starts
 and only ever truncated, never dropped. See D-001.
+
+---
+
+## D-004 — `recall_entity` / `recall_quest` resolve a slug, not a title or alias
+
+**Decided:** 2026-07-28 (accepted, not fixed). **Code:** `MemoryStore.recall_entity`,
+`MemoryStore.recall_quest` (memory.py). **Tool schema:** `engine.py` `LOOKUP_TOOL`.
+
+Both tools do `slug = templates.slugify(name)` and then look that slug up
+directly. They never consult `e.title` or `e.aliases` — unlike
+`resolve_location`, which checks all three.
+
+The tool descriptions handed to the model say "character/location name or slug"
+and "quest/thread name or slug". For any entry whose anchor is not
+`slugify(title)` — `## The Static Quarter {#static-quarter}` is the shipped
+example — asking by name misses, and the model is told the entity does not exist.
+
+### Why it is not being fixed now
+
+It is a one-line change to try title and alias after the slug, and that is
+exactly the shape of change that has gone wrong repeatedly here: this repo's
+measured rate is roughly one new defect per four fixes, and the failures cluster
+in "I widened what a lookup accepts". Widening `recall_*` changes which entries
+the memory tool returns mid-generation, which changes prompts, which is the
+hardest class to test.
+
+The cost of leaving it is bounded and visible: a failed recall returns "No entity
+or episode matches X" and the turn continues. The cost of getting the fix wrong
+is a recall that returns the WRONG entity, which is silent.
+
+### What would change the answer
+
+A user reporting that the memory tool cannot find a character it plainly should,
+or the same fix being needed for another reason. If it is done, it must be done
+with a test that pins the miss AND the near-miss (two entries whose titles slug
+to overlapping values), because the risk is over-matching, not under-matching.
+
+---
+
+## D-005 — No bound on an entry's alias / triggers list
+
+**Decided:** 2026-07-28 (accepted, not fixed). **Code:** `parse_entries`,
+`Entry.triggers` (memory.py).
+
+`parse_entries` caps neither the alias list nor the `triggers:` attr, and
+`Entry.triggers()` returns title + slug + aliases + triggers as one flat list
+that `_entry_activates` walks with a fresh `re.search` per token, for every gated
+entry, on every turn. Measured: 20,000 keys turns a 0.024 s assemble into 1.47 s.
+
+The WRITE side is bounded — `summarizer._apply_promotions` caps a promotion's
+alias list at `LIST_LIMIT` (32). This is about what a hand-edited or imported
+file may contain.
+
+### Why it is not being fixed now
+
+The failure mode is slowness the user can see and attribute (their own file, one
+they edited), not silent corruption. Every other unbounded value in this engine
+was dangerous because it became *permanent and invisible*; this one is neither.
+
+Capping at parse time also silently discards authored content on read, which is
+a worse property than being slow — the file would stop round-tripping, and
+invariant 7 violations are how the last two "safe" bounds turned into defects.
+
+### What would change the answer
+
+A real save that is slow for this reason. The fix then is not a parse-time cap
+but a per-entry warning at load plus a bound applied on WRITE, so the user's file
+is never silently truncated by reading it.

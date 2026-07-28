@@ -594,12 +594,17 @@ export async function renderPlay(slug) {
     $("#stop").classList.remove("hidden");
     $("#stop").disabled = false;      // was disabled after a prior Stop click
 
+    // BEFORE the optimistic bubbles go in. Taken after them, this counted the
+    // in-flight nodes as stored turns, so `serverTurns < storeBefore` fired on
+    // every SUCCESSFUL retry — the exact case the comment below claimed it had
+    // stopped. Four commits have now touched this branch and the arithmetic is
+    // the part that keeps going wrong, so it is measured where its name is true.
+    const storeBefore = domTurns();
     const optimistic = playerText !== undefined ? addTurn("player", playerText) : null;
     const live = addTurn("narrator", "");
     const liveBody = bodyOf(live);
     live.classList.add("pending");   // blinking caret until prose streams in
     live.setAttribute("aria-busy", "true");
-    const startTurns = domTurns();       // what the store held before this run
     let settled = null;                  // ST-31: the regex-cleaned stored text
     let serverTurns = null;              // the store's authoritative turn count
     let failed = null;
@@ -662,17 +667,19 @@ export async function renderPlay(slug) {
       if (playerText !== undefined && action && !action.value) {
         action.value = playerText;            // never lose what they typed
       }
-    } else if (typeof serverTurns === "number" && serverTurns < startTurns) {
-      // The story got SHORTER than it was before this run — the turn was
-      // rolled back server-side. Keyed on that, not on a DOM mismatch: retry
-      // legitimately ends one bubble ahead (it leaves the old exchange on
-      // screen while regenerating), so the DOM test both toasted on a
-      // SUCCESSFUL retry and stayed silent when retry ate an exchange, which
-      // is the one destructive path that most needed to speak up.
+    } else if (typeof serverTurns === "number" && serverTurns < storeBefore) {
+      // The story is SHORTER than before this run — turns were rolled back and
+      // not replaced. This branch exists for retry, which owns its repaint and
+      // is therefore skipped by the one below: a retry whose regeneration came
+      // back empty deleted the exchange in silence, and that is the one
+      // destructive path that most needs to speak up.
       await resync();
       toast("That turn produced nothing and was discarded.", "info");
-    } else if (!ownsRepaint) {
-      await reconcile(serverTurns);
+    } else if (!ownsRepaint && await reconcile(serverTurns)) {
+      // Same length, but the screen is ahead of the store — the turn produced
+      // nothing and its optimistic bubble has to go. Retry is exempt: it
+      // legitimately ends one bubble ahead while it regenerates.
+      toast("That turn produced nothing and was discarded.", "info");
     }
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
     renderSwipeBar();
