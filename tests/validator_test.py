@@ -86,7 +86,15 @@ ev = V.apply_world(store, c9)
 st = store.world_state()
 assert st["time"]["day"] == 2 and st["time"]["weather"] == "rain"
 assert st["flags"]["bridge_out"] is True
-assert st["player"]["location"] == "blackwood-tavern"          # slugified
+# NOT slugified. This asserted "blackwood-tavern" until 2026-07-28, which is
+# what apply_world stored — and that was the bug: it hands the value to
+# resolve_location, which matches on slug OR title OR alias, and a slugified
+# multi-word name matches none of the last two. So "The Static Quarter" (the
+# exact form the rules tell the model to use) resolved to nothing, its entry was
+# never force-activated, and every prompt read "Current location:
+# the-static-quarter". Unknown names pass through as free text by design; this
+# store has no locations.md entry, so the canonical name is what is kept.
+assert st["player"]["location"] == "Blackwood Tavern"
 assert any(e.startswith("time →") for e in ev)
 assert any(e.startswith("location →") for e in ev)
 assert "rain" in store.clock_str()

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 
 ENVELOPE_VERSION = 1
 
@@ -310,10 +311,20 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
             if got:
                 out[key] = got
         elif key == "location":
-            # Bounded before slugify (which has no cap of its own): the location
-            # is written into state.json and then into "Current location: ..." on
-            # every assembled prompt, and into the sheet panel.
-            loc = _slug(str(value)[:STR_CAP])
+            # Bounded, but NOT slugified. apply_world hands this to
+            # resolve_location, which matches on slug OR title OR alias — and a
+            # slugified value can match none of the last two. The rules tell the
+            # model to "use the exact name of an established place", so the
+            # normal case was the broken one: "The Static Quarter" became
+            # "the-static-quarter", matched no entry (its anchor is
+            # `static-quarter`), and so the place the player is standing in was
+            # never force-activated and every prompt read "Current location:
+            # the-static-quarter". Every multi-word alias was dead for the same
+            # reason. resolve_location slugifies its own input; an unmatched
+            # name passes through as free text by design.
+            loc = _one_line(value)[:STR_CAP]
+            if not re.search(r"[^\W_]", loc, re.UNICODE):
+                loc = ""            # punctuation-only is not a place name
             if loc:
                 out[key] = loc
             else:
@@ -662,7 +673,15 @@ def _valid_grants(key: str, value, deltas: dict, state: dict,
     # The last list delta without the bounds every other one got: an ability or
     # title is mirrored into player.md AND rendered by render_sheet into the
     # system prompt of every subsequent turn, so an unbounded one is permanent.
-    names = [_one_line(x)[:STR_CAP] for x in value[:LIST_CAP] if _one_line(x)]
+    # Commas out, like aliases (summarizer._apply_promotions does the same and
+    # says why): _write_player_grants stores these as a `", ".join(...)` attr
+    # line, and _sync_player_stats re-splits that line on commas on the next
+    # open. "Blade of the Sun, Herald of Dawn" came back as TWO abilities —
+    # permanently, since Markdown wins — each listed in every later prompt and
+    # each counted by skill_mod as a separately trained skill.
+    names = [_one_line(x).replace(",", " ")[:STR_CAP]
+             for x in value[:LIST_CAP] if _one_line(x)]
+    names = [" ".join(n.split()) for n in names if n.strip()]
     if len(value) > LIST_CAP:
         _reject(rejected, key, f"{len(value)} entries",
                 f"at most {LIST_CAP} per turn")

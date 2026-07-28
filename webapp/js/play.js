@@ -599,6 +599,7 @@ export async function renderPlay(slug) {
     const liveBody = bodyOf(live);
     live.classList.add("pending");   // blinking caret until prose streams in
     live.setAttribute("aria-busy", "true");
+    const startTurns = domTurns();       // what the store held before this run
     let settled = null;                  // ST-31: the regex-cleaned stored text
     let serverTurns = null;              // the store's authoritative turn count
     let failed = null;
@@ -609,7 +610,13 @@ export async function renderPlay(slug) {
                       liveBody.textContent += m.text;
                       transcript.scrollTop = transcript.scrollHeight; },
         done: m => { setEvents(m.events); setSheet(m.sheet || []);
-                     $(".clock").textContent = m.clock || "";
+                     // Optional chaining on EVERY document-wide lookup in this
+                     // function, not just #stop. With the play view detached a
+                     // null deref here throws inside the SSE callback, sse()
+                     // rejects, and the failure path below then derefs #action
+                     // — uncaught, so run() never reaches setBusy(false) and
+                     // the app-wide busy flag stays latched for the session.
+                     const clk = $(".clock"); if (clk) clk.textContent = m.clock || "";
                      serverTurns = m.turns;
                      if (m.text != null) settled = m.text; },
         error: m => { failed = m; },
@@ -641,15 +648,31 @@ export async function renderPlay(slug) {
       // Repaint from server truth BEFORE showing the card — resync() rebuilds
       // the transcript, so a card appended first would be wiped out again.
       await resync();
-      showTurnError(failed, playerText !== undefined
-        ? () => run(path, body, playerText) : () => run(path, body));
-      if (playerText !== undefined && !$("#action").value) {
-        $("#action").value = playerText;      // never lose what they typed
+      // NO "Try again" for a destructive path. /retry rolls the last exchange
+      // back before it regenerates, so re-issuing it hits whatever exchange is
+      // now last: after a failed retry the button destroyed a DIFFERENT,
+      // healthy exchange, and on a one-exchange story it replaced the whole
+      // story with a fresh opening. The retry hotkey is still there when the
+      // reader actually wants that.
+      const destructive = /\/(retry|swipe-gen)$/.test(path);
+      showTurnError(failed, destructive ? null
+        : playerText !== undefined ? () => run(path, body, playerText)
+        : () => run(path, body));
+      const action = $("#action");
+      if (playerText !== undefined && action && !action.value) {
+        action.value = playerText;            // never lose what they typed
       }
-    } else if (!ownsRepaint && await reconcile(serverTurns)) {
-      // The stream said `done` but the store kept fewer turns than the screen
-      // shows — the turn was rolled back server-side. resync() has repainted.
+    } else if (typeof serverTurns === "number" && serverTurns < startTurns) {
+      // The story got SHORTER than it was before this run — the turn was
+      // rolled back server-side. Keyed on that, not on a DOM mismatch: retry
+      // legitimately ends one bubble ahead (it leaves the old exchange on
+      // screen while regenerating), so the DOM test both toasted on a
+      // SUCCESSFUL retry and stayed silent when retry ate an exchange, which
+      // is the one destructive path that most needed to speak up.
+      await resync();
       toast("That turn produced nothing and was discarded.", "info");
+    } else if (!ownsRepaint) {
+      await reconcile(serverTurns);
     }
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
     renderSwipeBar();
@@ -675,11 +698,16 @@ export async function renderPlay(slug) {
     if (busy) return;
     const b = $("#suggest"); b.disabled = true; const was = b.textContent;
     b.textContent = "…";
+    // Capture THIS view's composer, and check it is still on screen when the
+    // model answers. $("#action") is a document-wide lookup resolved after a
+    // round-trip, so opening another story mid-suggest wrote story A's action
+    // into story B's composer — one Enter away from committing it to B.
+    const composer = $("#action");
     try {
       const out = await api(`/api/saves/${slug}/impersonate`, {method: "POST"});
-      $("#action").value = out.text; $("#action").focus();
+      if (composer.isConnected) { composer.value = out.text; composer.focus(); }
     } catch (e) { toast(e.message); }
-    b.disabled = false; b.textContent = was;
+    if (b.isConnected) { b.disabled = false; b.textContent = was; }
   });
 
   const send = async () => {
