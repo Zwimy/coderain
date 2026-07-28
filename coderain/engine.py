@@ -339,7 +339,8 @@ class Engine:
         prior = (getattr(self, "_pre_turn_rpg", None),
                  list(getattr(self, "_pre_turn_reveals", [])),
                  list(getattr(self, "_pre_turn_canon", [])),
-                 list(getattr(self, "_pre_turn_events", [])))
+                 list(getattr(self, "_pre_turn_events", [])),
+                 self.store.event_log_count())
         self._rpg_events = []
         self._pre_turn_rpg = self._snapshot_rpg()
         self._pre_turn_reveals = []
@@ -372,7 +373,13 @@ class Engine:
         if getattr(self, "_pre_turn_rpg", None) is not None:
             self.restore_pre_turn_rpg()
         (self._pre_turn_rpg, self._pre_turn_reveals,
-         self._pre_turn_canon, self._pre_turn_events) = prior
+         self._pre_turn_canon, self._pre_turn_events, log_count) = prior
+        # By COUNT, not turn index. restore_pre_turn_rpg truncates the ledger at
+        # a turn NUMBER, and an exchange that stores no turn logs its envelope
+        # against the previous turn's index — so its record sits at a number the
+        # truncation is supposed to keep, and survived a rollback that undid the
+        # state it describes. Both directions of that split are invariant 3.
+        self.store.drop_event_log_after(log_count)
 
     def opening(self, on_stage=None) -> Iterator[str]:
         prior = self._begin_turn()
@@ -434,13 +441,25 @@ class Engine:
             "Continue the narration from exactly where it left off. Do not "
             "repeat what was already written and do not summarize — push the "
             "current scene forward with fresh action or detail.")
-        stored = False
+        before = len(self.store.turns())
         try:
-            stored = yield from self._generate_and_store(messages, on_stage)
+            yield from self._generate_and_store(messages, on_stage)
         finally:
-            # A Continue appends no player turn, so there is nothing to drop —
-            # but the stale snapshot is the same hazard. See _abort_turn.
-            if not stored:
+            # The test is "did the transcript grow", NOT _generate_and_store's
+            # `stored` — which is `bool(narration) or applied`. That `or applied`
+            # exists so `turn()` keeps a player action that had a mechanical
+            # effect even with no prose; a Continue has no player turn to keep,
+            # and taking it here was a permanent state/ledger split. The
+            # envelope gets logged at len(turns()), which for a Continue that
+            # stored nothing is the PREVIOUS narrator turn's index — two records
+            # collide on one turn, and the next undo truncates both while
+            # restore_pre_turn_rpg rolls back only one. state.json then kept a
+            # flag no ledger record described, and a branch rebuilt without it
+            # (invariant 3, and D-002's stated guarantee).
+            #
+            # A Continue is "carry the prose forward". No prose means it failed,
+            # and rolling it back whole is also what the reader sees.
+            if len(self.store.turns()) == before:
                 self._abort_turn(prior)
 
     def _ensure_swipes(self) -> dict | None:
@@ -491,9 +510,22 @@ class Engine:
             gen = self.continue_story(on_stage=on_stage)
         yield from gen
         tail = self.store.turns()
-        if tail and tail[-1]["role"] == "narrator":
+        # `n`, not just "the tail is a narrator turn". A regeneration that
+        # produced nothing (empty output, a model error, or Stop closing the
+        # generator mid-stream) leaves the exchange DELETED — the entry point's
+        # own cleanup drops the orphan player turn — so tail[-1] is the PREVIOUS
+        # exchange's narration. Accepting that as a variant of the swiped turn
+        # meant the next ◄ wrote one exchange's prose over another one's turn,
+        # in transcript.md, which is the source of truth (invariant 7).
+        if len(tail) == n and tail[-1]["role"] == "narrator":
             sw["variants"].append(tail[-1]["text"])
             sw["idx"] = len(sw["variants"]) - 1
+        else:
+            # The exchange this swipe state describes is gone. Keeping the
+            # variants would let the next ◄ write the deleted exchange's prose
+            # over whatever turn now sits at the tail — a different exchange's
+            # turn, in transcript.md, which is the source of truth.
+            self._swipes = None
 
     def impersonate(self) -> str:
         """Draft the PLAYER's next action in first person (ST 'Impersonate',
