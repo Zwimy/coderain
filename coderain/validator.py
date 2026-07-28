@@ -123,6 +123,11 @@ _ITEM_LISTS = {"inventory_add", "inventory_remove"}
 _QUEST_FLOW = {"inactive": {"active"}, "active": {"completed", "failed"}}
 
 
+def _one_line(v) -> str:
+    """Collapse free text from the model to a single bounded line."""
+    return " ".join(str(v or "").split())
+
+
 def _reject(rejected: list, key: str, value, reason: str) -> None:
     rejected.append({"delta": key, "value": value, "reason": reason})
 
@@ -234,7 +239,13 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
         elif chk.get("dc") is not None and _as_int(chk.get("dc")) is None:
             _reject(rejected, "check", chk, "check 'dc' must be a number")
         else:
-            clean["check"] = chk
+            # Whitelisted, not forwarded. `enemies` was the round-1 version of
+            # this mistake; `check` is persisted into rpg["last_check"] and
+            # written verbatim into events.jsonl, so an unbounded `skill`
+            # (or any junk key the model invents) lands in both.
+            clean["check"] = {k: (v[:STR_CAP] if isinstance(v, str) else v)
+                              for k, v in chk.items()
+                              if k in ("stat", "dc", "skill", "actor")}
 
     # --- deltas ---
     d = env.get("deltas")
@@ -623,7 +634,13 @@ def _valid_grants(key: str, value, deltas: dict, state: dict,
         return []
     rpg = state.get("rpg") if isinstance(state.get("rpg"), dict) else {}
     pending = _as_int(rpg.get("pending_grant")) or 0
-    names = [str(x).strip() for x in value if str(x).strip()]
+    # The last list delta without the bounds every other one got: an ability or
+    # title is mirrored into player.md AND rendered by render_sheet into the
+    # system prompt of every subsequent turn, so an unbounded one is permanent.
+    names = [_one_line(x)[:STR_CAP] for x in value[:LIST_CAP] if _one_line(x)]
+    if len(value) > LIST_CAP:
+        _reject(rejected, key, f"{len(value)} entries",
+                f"at most {LIST_CAP} per turn")
     if not names:
         return []
     if pending <= 0:

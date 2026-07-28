@@ -347,19 +347,12 @@ def main():
                 print("Nothing to undo yet.")
             continue
         if cmd == "/retry":
-            turns = store.turns()
-            if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2:
-                last = turns[-2]["text"]
-                store.drop_last_turns(2)
-            elif turns and turns[-1]["role"] == "player":
-                last = turns[-1]["text"]
-                store.drop_last_turns(1)
-            else:
+            ok, last = engine.rollback_for_retry()
+            if not ok:
                 print("Nothing to retry yet.")
                 continue
-            engine.restore_pre_turn_rpg()  # roll back the retried turn's mechanics
             print("(retrying...)\n")
-            _stream(engine.turn(last, on_stage=_stage))
+            _stream(engine.regenerate(last, on_stage=_stage))
             for event in engine.maybe_fold():
                 print(f"· {event}")
             continue

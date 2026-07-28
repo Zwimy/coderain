@@ -116,18 +116,10 @@ def retry(slug: str):
     def run(e, notes):
         # The destructive rollback runs UNDER the generation lock (inside the
         # stream) so it can't truncate the transcript of an in-flight turn.
-        t = e.store.turns()
-        if t and t[-1]["role"] == "narrator" and len(t) >= 2:
-            last_player = t[-2]["text"]
-            e.store.drop_last_turns(2)
-        elif t and t[-1]["role"] == "player":
-            last_player = t[-1]["text"]
-            e.store.drop_last_turns(1)
-        else:
+        ok, last_player = e.rollback_for_retry()
+        if not ok:
             return iter(())               # nothing to retry (raced away)
-        e.restore_pre_turn_rpg()
-        e._swipes = None
-        return e.turn(last_player, on_stage=notes.append)
+        return e.regenerate(last_player, on_stage=notes.append)
 
     return _stream_generation(slug, run)
 

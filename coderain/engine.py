@@ -503,6 +503,48 @@ class Engine:
         self.store.trim_folds_to_transcript()
         return True
 
+    def rollback_for_retry(self) -> tuple[bool, str | None]:
+        """Roll the last exchange back so the caller can regenerate it.
+
+        ONE implementation, because there were three (web, CLI, Tk) and all
+        three had the same defect: they dropped two turns whenever the last was
+        narration, without checking a player turn was actually behind it. After
+        a Continue that destroyed the PREVIOUS exchange's narration, re-fed the
+        narrator's own prose to the model as the player's action, and truncated
+        the replay ledger two records deep while rolling state back one — so the
+        save and the ledger disagreed and a branch produced a different story.
+
+        Returns (ok, player_input). `player_input` is None when the last turn
+        was a Continue: there is no player action to replay, so regenerate with
+        `continue_story()`.
+        """
+        turns = self.store.turns()
+        if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2 \
+                and turns[-2]["role"] == "player":
+            player_input = turns[-2]["text"]
+            self.store.drop_last_turns(2)
+        elif turns and turns[-1]["role"] == "narrator":
+            player_input = None               # a Continue owns only its narration
+            self.store.drop_last_turns(1)
+        elif turns and turns[-1]["role"] == "player":
+            # orphan player turn (the previous generation produced nothing)
+            player_input = turns[-1]["text"]
+            self.store.drop_last_turns(1)
+        else:
+            return False, None
+        self.restore_pre_turn_rpg()
+        self.store.trim_folds_to_transcript()
+        self._swipes = None
+        return True, player_input
+
+    def regenerate(self, player_input: str | None, on_stage=None):
+        """The generator that pairs with `rollback_for_retry`'s return."""
+        if player_input is None:
+            return self.continue_story(on_stage=on_stage)
+        if not self.store.turns():
+            return self.opening(on_stage=on_stage)
+        return self.turn(player_input, on_stage=on_stage)
+
     def maybe_fold(self) -> list[str]:
         """Run due memory folds after a turn. Returns event strings for the UI —
         RPG mechanics events (from this turn's sidecar) first, then fold events."""
