@@ -189,6 +189,12 @@ def _range_from_ref(ref: str, timeline_text: str,
     return None
 
 
+def _unhide(text: str) -> str:
+    """Undo Entry.render's '<!--' neutralization, so the round-trip is exact.
+    The transcript pair (_render_turn / turns()) does the same thing."""
+    return text.replace("<" + _ZW + "!--", "<!--")
+
+
 def _strip_comments(text: str) -> str:
     """Blank out HTML-comment regions, preserving newlines so line indices stay
     aligned. An unterminated '<!--' hides to end of text. Used by BOTH parse_entries
@@ -368,7 +374,15 @@ class Entry:
         # kept `wants` up to its newline and lost `motivation` entirely, the
         # remainder becoming body prose. This is the only place attrs become
         # `key: value` lines, so it is the one place the rule cannot be dodged.
-        one = lambda v: " ".join(str(v).split())          # noqa: E731
+        # Neutralize '<!--' in everything model- or user-supplied, EXACTLY as
+        # _render_turn does for the transcript, and reversed in parse_entries.
+        # parse_entries runs _strip_comments first, and an UNTERMINATED '<!--'
+        # hides to end of text — so a single one of those in a body or an attr
+        # deleted every entry written after it in that file: gone from
+        # entries(), from the index, and from the prompt, including a `pinned:`
+        # one (invariants 4 and 7). A model can emit it in ordinary prose.
+        safe = lambda v: str(v).replace("<!--", "<" + _ZW + "!--")   # noqa: E731
+        one = lambda v: safe(" ".join(str(v).split()))     # noqa: E731
         lines = [f"## {one(self.title)}  {{#{self.slug}}}"]
         if self.aliases:
             lines.append("aliases: " + ", ".join(
@@ -380,7 +394,16 @@ class Entry:
         # A '## ' line inside a body would re-parse as a NEW entry and truncate
         # this one (registry sections are ## headings) — demote to '###' so
         # user markdown sub-headers survive the save/parse round-trip.
-        body = re.sub(r"(?m)^##(?=\s)", "###", self.body.strip())
+        #
+        # Split on splitlines(), not on a `(?m)^` regex. Python's `^` matches
+        # only at the start and after '\n', while parse_entries and
+        # _real_headings both use str.splitlines(), which ALSO breaks on \v \f
+        # \x1c \x1d \x1e \r, NEL, U+2028 and U+2029. A body carrying any of
+        # those before '## ' therefore slipped past this demotion and forged a
+        # second entry — with any slug and any attrs it chose.
+        body = "\n".join(
+            ("###" + ln[2:]) if re.match(r"##(?=\s)", ln) else ln
+            for ln in safe(self.body.strip()).splitlines())
         return "\n".join(lines) + "\n\n" + body + "\n"
 
     def oneline(self) -> str:
@@ -458,7 +481,7 @@ def parse_entries(text: str) -> list[Entry]:
         if not m:
             i += 1
             continue
-        title = m.group(1).strip()
+        title = _unhide(m.group(1).strip())
         slug = m.group(2) or templates.slugify(title)
         aliases: list[str] = []
         importance = 3
@@ -470,7 +493,7 @@ def parse_entries(text: str) -> list[Entry]:
             am = _ATTR_RE.match(lines[i])
             if not am:
                 break
-            key, val = am.group(1), am.group(2).strip()
+            key, val = am.group(1), _unhide(am.group(2).strip())
             if key == "aliases":
                 aliases = [a.strip() for a in val.split(",") if a.strip()]
             elif key == "importance":
@@ -486,7 +509,7 @@ def parse_entries(text: str) -> list[Entry]:
             body_lines.append(lines[i])
             i += 1
         entries.append(Entry(title, slug, aliases, importance, attrs,
-                             "\n".join(body_lines).strip()))
+                             _unhide("\n".join(body_lines).strip())))
     return entries
 
 
