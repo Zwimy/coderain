@@ -1323,6 +1323,32 @@ class MemoryStore:
         path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n"
                                 for r in kept), encoding="utf-8")
 
+    def event_log_count(self) -> int:
+        """How many records the ledger holds right now."""
+        path = self.dir / "memory" / "events.jsonl"
+        if not path.exists():
+            return 0
+        return sum(1 for ln in path.read_text(encoding="utf-8").splitlines()
+                   if ln.strip())
+
+    def drop_event_log_after(self, count: int) -> None:
+        """Keep only the first `count` records.
+
+        Counting, not turn indexes: an exchange that stores no turn logs its
+        envelope against the PREVIOUS turn's index, so two records collide there
+        and `truncate_event_log` — which keeps everything at or below a turn
+        number — cannot separate them. An aborted exchange knows exactly how many
+        records existed before it started, and that is unambiguous."""
+        path = self.dir / "memory" / "events.jsonl"
+        if not path.exists():
+            return
+        lines = [ln for ln in path.read_text(encoding="utf-8").splitlines()
+                 if ln.strip()]
+        if len(lines) <= count:
+            return
+        path.write_text("".join(ln + "\n" for ln in lines[:count]),
+                        encoding="utf-8")
+
     def clamp_event_log_to_transcript(self) -> bool:
         """Pull any record whose turn index points PAST the transcript's end back
         onto the last real turn. Returns whether anything moved.

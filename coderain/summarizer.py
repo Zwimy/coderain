@@ -210,9 +210,13 @@ class Summarizer:
                     if val:
                         attrs[key] = val
             rel_pairs = []
-            for r in _as_list(p.get("relationships")):
+            # [:LIST_LIMIT] and [:STR_LIMIT], not just the joined cap below.
+            # _slugify had no per-value bound, so ONE 3000-char `with` filled
+            # the whole 800-char line and every real relationship after it was
+            # dropped — silently, and a fold is one-way.
+            for r in _as_list(p.get("relationships"))[:LIST_LIMIT]:
                 if isinstance(r, dict) and r.get("with"):
-                    rel_pairs.append(f"{_slugify(str(r['with']))}: "
+                    rel_pairs.append(f"{_slugify(str(r['with'])[:STR_LIMIT])}: "
                                      f"{_one_line(r.get('note', ''))}")
             if rel_pairs:
                 # Bounded, but NOT at _one_line's per-value STR_LIMIT: this one

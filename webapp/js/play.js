@@ -428,10 +428,15 @@ export async function renderPlay(slug) {
     setBusy(true); stage.textContent = "Thinking…";
     const body = bodyOf(d); body.textContent = ""; d.classList.add("pending");
     transcript.querySelectorAll(".swipebar").forEach(b => b.remove());
+    // Only a generation that actually produced prose becomes a variant. On an
+    // empty/failed swipe-gen the server stores nothing, so counting it anyway
+    // enabled a ◄ that pointed at a variant which does not exist.
+    let produced = false;
     try {
       await sse(`/api/saves/${slug}/swipe-gen`, undefined, {
         stage: m => { stage.textContent = m.text; },
-        chunk: m => { d.classList.remove("pending"); body.textContent += m.text;
+        chunk: m => { produced = true;
+                      d.classList.remove("pending"); body.textContent += m.text;
                       transcript.scrollTop = transcript.scrollHeight; },
         done: m => { setEvents(m.events); setSheet(m.sheet || []);
                      $(".clock").textContent = m.clock || "";
@@ -442,7 +447,7 @@ export async function renderPlay(slug) {
     d.classList.remove("pending");
     if (body._settle && body.textContent) body.textContent = body._settle;
     paint(d, body.textContent);
-    swipe = {count: swipe.count + 1, idx: swipe.count};
+    if (produced) swipe = {count: swipe.count + 1, idx: swipe.count};
     setBusy(false); renderSwipeBar();
   };
   const setSheet = lines => {
