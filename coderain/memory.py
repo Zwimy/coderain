@@ -782,7 +782,10 @@ class MemoryStore:
         idx = chapters.index(active)
         done = sum(1 for c in chapters if status(c) == "done")
         upcoming = [c.title for c in chapters[idx + 1:idx + 3]]
-        lines = [f"You are in Chapter {done + 1}: {active.title}."]
+        # Numbered by POSITION. `done + 1` agrees only while every done
+        # chapter precedes the active one, and outline.md is documented as
+        # hand-editable and read here without a reconcile.
+        lines = [f"You are in Chapter {idx + 1}: {active.title}."]
         if active.body.strip():
             lines.append("Chapter goal — steer the story toward this; do not rush "
                          f"or skip past it: {active.body.strip()}")
@@ -1391,7 +1394,12 @@ class MemoryStore:
             return False
         # ST-13 secondary keys: ALL of triggers_all must also hit...
         reqs = e.triggers_all()
-        if reqs and not all(trigger_hit(tok, gates) for tok in reqs):
+        # triggers_all is an INCLUSION gate, so it judges the same text the entry
+        # fired on. Only the suppression gate below uses `gates`. Routing both
+        # through it made ST-14 unsatisfiable: in the recursion pass the primary
+        # key matched the fuel while the AND-key was required in the story, which
+        # is exactly the case recursion exists to serve.
+        if reqs and not all(trigger_hit(tok, haystack) for tok in reqs):
             return False
         # ...and NONE of triggers_not may be present.
         if any(trigger_hit(tok, gates) for tok in e.triggers_not()):
@@ -1689,8 +1697,15 @@ class MemoryStore:
             # at all: ST-17 fired or not depending on unrelated entries.
             eligible = {s for s, (_r, e) in by_slug.items()
                         if e.semantic() and not e.hidden()}
+            # Everything the index can return, minus what may be promoted. The
+            # vector index embeds threads.md and memory/scenes.md too, and those
+            # slugs are not in by_slug — so they still consumed the top-K slots,
+            # which on a mature save is mostly scene summaries (long narrative
+            # prose, the highest-similarity rows there are).
+            everything = (set(a.idx.entries)
+                          | {e.slug for e in self.entries("memory/scenes.md")})
             exclude = ({e.slug for e in player} | already
-                       | (set(by_slug) - eligible))
+                       | (everything | set(by_slug)) - eligible)
             for e in retriever(haystack, exclude):
                 if not (e.semantic() and not e.hidden() and e.slug in by_slug):
                     continue
@@ -1836,6 +1851,7 @@ class MemoryStore:
         ranked = sorted(enumerate(sections),
                         key=lambda it: (it[1][0], len(it[1][2])))
         mark = "\n…(truncated)"
+        skipped: list[tuple[int, int, str, str]] = []
         for pos, (pr, title, body) in ranked:
             head = f"## {title}\n"
             seg = head + body
@@ -1847,20 +1863,30 @@ class MemoryStore:
             # name of is worth more than a few extra characters of its body.
             room = budget - used
             if len(seg) > room:
-                keep = room - len(head) - len(mark)
                 if pr == 0:
+                    keep = room - len(head) - len(mark)
                     seg = head + body[:keep] + mark if keep > 0 else f"## {title}"
-                elif len(seg) > budget and keep > 0:
-                    # Bigger than the entire budget: the old code trimmed to
-                    # `budget`, which left it `len(mark)` OVER, so the keep test
-                    # below could never pass and an over-large world-bible was
-                    # dropped whole instead of trimmed.
-                    seg = head + body[:keep] + mark
                 else:
-                    continue          # won't fit; a smaller section still might
+                    # Skip for now so a smaller section still gets its chance,
+                    # but remember it: the leftover room goes to the best skipped
+                    # one below. Trimming greedily here instead made packing
+                    # NON-MONOTONIC — a section that fitted-and-trimmed at a small
+                    # budget was dropped whole at a slightly larger one, because
+                    # only sections bigger than the WHOLE budget were trimmed.
+                    skipped.append((pos, pr, head, body))
+                    continue
             if pr == 0 or used + len(seg) <= budget:
                 kept.append((pos, seg))
                 used += len(seg)
+        # One trimmed section fills whatever is left, highest priority first
+        # (ties: the one that came first in the ranked order, i.e. the smallest).
+        room = budget - used
+        for pos, _pr, head, body in sorted(skipped, key=lambda s: s[1]):
+            keep = room - len(head) - len(mark)
+            if keep > 0:
+                kept.append((pos, head + body[:keep] + mark))
+                used += room
+            break
         chosen = [seg for _pos, seg in sorted(kept)]
 
         system = a.writer_rules
@@ -2532,13 +2558,38 @@ def _reconcile_fold_state(store: MemoryStore) -> None:
     that no scene covers — those turns would silently never fold again."""
     scenes = store.entries("memory/scenes.md")
     folded = 0
+    unreadable = False
     for sc in scenes:
-        folded = max(folded, _fold_end(sc.attrs.get("turns", "")))
+        end = _fold_end(sc.attrs.get("turns", ""))
+        # A scene with no parseable `turns:` is not evidence that those turns are
+        # unfolded — it is evidence of nothing. Counting it as 0 rewound the
+        # pointer and re-folded turns already folded: duplicate scenes, duplicate
+        # [T..] timeline lines so recall resolves ambiguously, and old promotions
+        # re-applied with rewrite=True over entities corrected since. Reachable on
+        # a pre-Wave-2 save, a hand-edit (scenes.md is editable), or a rangeless
+        # scene. Keep the existing pointer for those.
+        if end <= 0:
+            unreadable = True
+        folded = max(folded, end)
     st = store.state()
     # Never claim more turns are folded than the transcript still has: a pointer
     # past the end means the turns that replace the dropped ones fall inside the
     # "already folded" region and are never summarized at all.
-    st["folded_turns"] = min(folded, len(store.turns()))
+    # CLAMP DOWN ONLY, never recompute upward or downward from the scenes alone.
+    # A scene whose `turns:` attr is missing or unparseable (a pre-Wave-2 save, a
+    # hand-edit — memory/scenes.md is an editable file — or the rangeless kind
+    # refold refuses) contributes 0, and rewinding the pointer to that re-folds
+    # turns that were already folded: duplicate scenes, duplicate [T..] timeline
+    # lines so recall resolves ambiguously, and old promotions re-applied with
+    # rewrite=True over entities that have since been corrected.
+    try:
+        prior_turns = int(st.get("folded_turns", 0) or 0)
+    except (TypeError, ValueError):
+        prior_turns = 0
+    cap = len(store.turns())
+    if unreadable:
+        folded = max(folded, min(prior_turns, cap))
+    st["folded_turns"] = min(folded, cap)
     # `folded_scenes` counts scenes already folded INTO THE ARC, and nothing here
     # is evidence of that — arc.md may cover only the first few. Assuming all of
     # them (the old `len(scenes)`) put every remaining scene in the arc's blind

@@ -17,6 +17,7 @@ RPG is off, exactly as before).
 from __future__ import annotations
 
 import copy
+import math
 
 ENVELOPE_VERSION = 1
 
@@ -173,8 +174,10 @@ def _valid_enemies(value, rejected: list) -> dict:
                         "must be an integer")
                 continue
             clean[k] = max(-NUM_CAP, min(NUM_CAP, iv))
-        if clean:
-            out[name] = clean
+        # Keep an EMPTY spec too: `{"goblin": {}}` means "spawn at defaults",
+        # which rpg.apply handles (10 HP). Dropping it because no integer field
+        # survived made a legitimate spawn vanish with no rejection to explain it.
+        out[name] = clean
     if len(value) > LIST_CAP:
         _reject(rejected, "enemies", f"{len(value)} entries",
                 f"at most {LIST_CAP} per turn")
@@ -290,7 +293,10 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
             if got:
                 out[key] = got
         elif key == "location":
-            loc = _slug(value)
+            # Bounded before slugify (which has no cap of its own): the location
+            # is written into state.json and then into "Current location: ..." on
+            # every assembled prompt, and into the sheet panel.
+            loc = _slug(str(value)[:STR_CAP])
             if loc:
                 out[key] = loc
             else:
@@ -398,13 +404,18 @@ def _slug(value) -> str:
 
 
 def _valid_trust(value, rejected: list) -> dict:
+    # LIST_CAP applies here too: 500 companions in one envelope all land in
+    # rpg['companions'] and then in the sheet that rides every later turn.
     if not isinstance(value, dict):
         _reject(rejected, "trust", value, "must be {slug: delta}")
         return {}
     out = {}
-    for slug, delta in value.items():
+    if len(value) > LIST_CAP:
+        _reject(rejected, "trust", f"{len(value)} companions",
+                f"at most {LIST_CAP} per turn")
+    for slug, delta in list(value.items())[:LIST_CAP]:
         iv = _as_int(delta)
-        s = _slug(slug)
+        s = _slug(str(slug)[:STR_CAP])
         if not s or iv is None:
             _reject(rejected, f"trust:{slug}", delta, "must be {slug: integer delta}")
             continue
@@ -452,6 +463,13 @@ def _valid_flags(value, state: dict, rejected: list) -> dict:
             val = val[:STR_CAP]
         if not isinstance(val, (bool, int, float, str)) or val is None:
             _reject(rejected, f"flag_set:{name}", val, "flag values must be scalars")
+            continue
+        # NaN/Infinity ARE floats, and json.loads accepts the bare tokens — the
+        # same door _as_int already guards. Written through, they make state.json
+        # invalid JSON, which then breaks every response that serialises it.
+        if isinstance(val, float) and not math.isfinite(val):
+            _reject(rejected, f"flag_set:{name}", str(val),
+                    "flag values must be finite numbers")
             continue
         # Type stability: once a flag exists, its type never changes (a rule that
         # checked a bool must not silently start seeing a string).
@@ -574,15 +592,20 @@ def _valid_npc_state(value, rejected: list) -> dict:
         _reject(rejected, "npc_state", value, "must be {slug: {mood, disposition}}")
         return {}
     out = {}
-    for raw, spec in value.items():
-        slug = _slug(raw)
+    if len(value) > LIST_CAP:
+        _reject(rejected, "npc_state", f"{len(value)} entries",
+                f"at most {LIST_CAP} per turn")
+    for raw, spec in list(value.items())[:LIST_CAP]:
+        slug = _slug(str(raw)[:STR_CAP])
         if not slug or not isinstance(spec, dict):
             _reject(rejected, f"npc_state:{raw}", spec,
                     "must be {slug: {mood, disposition}}")
             continue
         got = {}
         for k in ("mood", "disposition"):
-            s = str(spec.get(k, "") or "").strip()
+            # Bounded: every companion's mood is rendered into the sheet that
+            # rides EVERY later turn, so an unbounded one is a permanent tax.
+            s = " ".join(str(spec.get(k, "") or "").split())[:STR_CAP]
             if s:
                 got[k] = s
         if got:
@@ -627,7 +650,14 @@ def _beats(store) -> list[str]:
 def _valid_events(value, store, rejected: list) -> list[str]:
     """event_fired legality: the rule must exist in events.md and not already
     be consumed (a once-rule can never fire twice)."""
+    # Bounded BEFORE the loop: every bad slug produces a rejection record, and
+    # rejection_text() is sent to the Director as the corrective re-ask. 5,000
+    # hallucinated slugs made that payload ~190k chars and blew its context.
     slugs = value if isinstance(value, list) else [value]
+    if isinstance(slugs, list) and len(slugs) > LIST_CAP:
+        _reject(rejected, "reveal/event_fired", f"{len(slugs)} slugs",
+                f"at most {LIST_CAP} per turn")
+        slugs = slugs[:LIST_CAP]
     try:
         rules = {e.slug: e for e in store.event_rules(include_consumed=True)}
     except AttributeError:
@@ -649,7 +679,14 @@ def _valid_events(value, store, rejected: list) -> list[str]:
 def _valid_reveal(value, store, rejected: list) -> list[str]:
     """Legality for `reveal`: each slug must exist in a registry AND currently be
     hidden — anything else is a hallucinated or double reveal."""
+    # Bounded BEFORE the loop: every bad slug produces a rejection record, and
+    # rejection_text() is sent to the Director as the corrective re-ask. 5,000
+    # hallucinated slugs made that payload ~190k chars and blew its context.
     slugs = value if isinstance(value, list) else [value]
+    if isinstance(slugs, list) and len(slugs) > LIST_CAP:
+        _reject(rejected, "reveal/event_fired", f"{len(slugs)} slugs",
+                f"at most {LIST_CAP} per turn")
+        slugs = slugs[:LIST_CAP]
     known: dict[str, bool] = {}
     # threads.md joins the gated registries here: a hidden quest thread is
     # revealable lore too (set_hidden covers it the same way).

@@ -272,6 +272,14 @@ class Retriever:
         bad moment meant no recall until the app restarted — the Settings
         check built a throwaway Embedder and never touched the live one."""
         self._fails, self._fail_turn, self._failed = 0, -1, False
+        # The index has its OWN one-shot latch for "embedding failed", and it
+        # guards the health-log line. Leaving it set meant the next outage after
+        # a re-arm tripped the breaker with no trace — the invisible degradation
+        # the logging exists to catch.
+        try:
+            self.index._embed_failed = False
+        except AttributeError:
+            pass
 
     def __call__(self, query: str, exclude: set[str]) -> list[Entry]:
         # Circuit breaker: an unreachable embedder fails on EVERY turn, and even

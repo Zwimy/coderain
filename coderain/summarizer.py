@@ -81,6 +81,14 @@ def _as_day(v) -> int:
     return v
 
 
+def _as_list(v) -> list:
+    """Model-supplied lists, defensively. A scalar where a list belongs raised
+    TypeError straight out of maybe_fold — leaving earlier promotions from the
+    same object already on disk, the fold pointer unmoved, and the identical
+    chunk re-folding (and re-crashing) on every following turn."""
+    return v if isinstance(v, list) else []
+
+
 def _one_line(v) -> str:
     """Collapse an attr value to a single line.
 
@@ -135,13 +143,16 @@ class Summarizer:
     # --- apply validated promotions ---
     def _apply_promotions(self, obj: dict) -> list[str]:
         events: list[str] = []
-        for p in obj.get("promotions", []) or []:
+        for p in _as_list(obj.get("promotions")):
             if not isinstance(p, dict):
                 continue
             kind = str(p.get("kind", "")).strip().lower()
             rel = KIND_FILE.get(kind)
             slug = _slugify(str(p.get("slug", "")))
-            title = str(p.get("title", "")).strip() or slug
+            # Through _one_line as well: Entry.render writes the title into the
+            # `## {title}  {{#slug}}` header, so a newline there splits the entry
+            # and the next promotion of the same slug creates a DUPLICATE.
+            title = _one_line(p.get("title", "")) or slug
             detail = str(p.get("detail", "")).strip()
             if not rel or not slug or not detail:
                 continue
@@ -159,7 +170,7 @@ class Summarizer:
                     if val:
                         attrs[key] = val
             rel_pairs = []
-            for r in p.get("relationships", []) or []:
+            for r in _as_list(p.get("relationships")):
                 if isinstance(r, dict) and r.get("with"):
                     rel_pairs.append(f"{_slugify(str(r['with']))}: "
                                      f"{_one_line(r.get('note', ''))}")
@@ -193,8 +204,10 @@ class Summarizer:
                 # same object had already been written to disk.
                 aliases = []
             entry = Entry(title=title, slug=slug,
-                          aliases=[str(a).strip() for a in aliases
-                                   if a and str(a).strip()],
+                          # aliases render as one comma-joined line, so a newline
+                          # breaks the header and a comma splits one alias in two.
+                          aliases=[_one_line(a).replace(",", " ") for a in aliases
+                                   if a and _one_line(a)],
                           importance=importance,
                           attrs=attrs, body=detail)
             # rewrite=True: the model was shown the current entry and returns the
@@ -202,20 +215,27 @@ class Summarizer:
             self.store.merge_entry(rel, entry, rewrite=True)
             events.append(f"memory: promoted [[{kind}:{slug}]]")
 
-        for t in obj.get("new_threads", []) or []:
+        for t in _as_list(obj.get("new_threads")):
             if not isinstance(t, dict):
                 continue
             slug = _slugify(str(t.get("slug", "")))
             detail = str(t.get("detail", "")).strip()
             if not slug or not detail:
                 continue
+            # Only OPEN a thread that isn't already on file. merge_entry does
+            # {**existing.attrs, **new.attrs}, so a hardcoded "open" overwrote
+            # status: resolved — a fold that merely re-mentions a closed quest
+            # silently reopened it, and it returned to the open-threads block
+            # that rides every turn.
+            known = {e.slug: e for e in self.store.entries("threads.md")}
+            attrs = {} if slug in known else {"status": "open"}
             self.store.merge_entry("threads.md", Entry(
-                title=str(t.get("title", "")).strip() or slug, slug=slug,
+                title=_one_line(t.get("title", "")) or slug, slug=slug,
                 importance=_clamp_int(t.get("importance", 3)),
-                attrs={"status": "open"}, body=detail))
+                attrs=attrs, body=detail))
             events.append(f"memory: new thread [[thread:{slug}]]")
 
-        for slug in obj.get("resolved_threads", []) or []:
+        for slug in _as_list(obj.get("resolved_threads")):
             slug = _slugify(str(slug))
             existing = {e.slug: e for e in self.store.entries("threads.md")}
             if slug in existing:

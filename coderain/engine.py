@@ -433,14 +433,17 @@ class Engine:
             player_input = turns[-2]["text"]
             self.store.drop_last_turns(2)
             self.restore_pre_turn_rpg()
+            self.store.trim_folds_to_transcript()
             gen = self.turn(player_input, on_stage=on_stage)
         elif n == 1:
             self.store.drop_last_turns(1)
             self.restore_pre_turn_rpg()
+            self.store.trim_folds_to_transcript()
             gen = self.opening(on_stage=on_stage)
         else:
             self.store.drop_last_turns(1)
             self.restore_pre_turn_rpg()
+            self.store.trim_folds_to_transcript()
             gen = self.continue_story(on_stage=on_stage)
         yield from gen
         tail = self.store.turns()
@@ -482,8 +485,16 @@ class Engine:
         it enough and the transcript retreats past a fold boundary, so the folds
         are trimmed back to what the transcript still supports."""
         turns = self.store.turns()
-        if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2:
+        # Two turns only when there really IS a player turn behind the narration.
+        # `continue_story` appends a narrator turn with no player turn before it,
+        # so after a Continue this dropped a narration that was never part of this
+        # exchange, truncating the event log further than the state was rolled
+        # back — the divergence the `rolled_back` guard exists to prevent.
+        if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2 \
+                and turns[-2]["role"] == "player":
             self.store.drop_last_turns(2)
+        elif turns and turns[-1]["role"] == "narrator":
+            self.store.drop_last_turns(1)     # a Continue: narration only
         elif turns and turns[-1]["role"] == "player":
             self.store.drop_last_turns(1)  # orphan player turn (empty generation)
         else:
