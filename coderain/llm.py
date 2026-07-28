@@ -180,8 +180,8 @@ class LLM:
             for c in calls:
                 try:
                     args = json.loads(c.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
+                except ValueError:      # see extract_json: a huge int literal
+                    args = {}           # raises a bare ValueError, not a decode error
                 result = dispatch(c.function.name, args)
                 convo.append({"role": "tool", "tool_call_id": c.id,
                               "content": str(result)})
@@ -220,7 +220,13 @@ def extract_json(text: str) -> dict | None:
         return None
     try:
         obj = json.loads(m.group(0))
-    except json.JSONDecodeError:
+    except ValueError:
+        # ValueError, not JSONDecodeError: json.loads also raises a BARE
+        # ValueError for an integer literal past Python's 4300-digit conversion
+        # limit ({"day": 9999...}, the degenerate digit-repetition failure mode).
+        # That escaped this function and killed the turn with an uncaught
+        # exception and an EMPTY health log — invariant 2 both ways at once.
+        # JSONDecodeError is a ValueError subclass, so this still covers it.
         return None
     return obj if isinstance(obj, dict) else None
 

@@ -33,13 +33,26 @@ export async function render() {
       return;                          // hashchange re-runs render() for #library
     }
   }
+  // Every renderer awaits the server before it paints, so two navigations in
+  // quick succession race: the SLOWER one finishes last and writes its view over
+  // the newer one, leaving you on a page the URL disagrees with. Every path that
+  // paints has to ask this before it returns — including the Welcome gate below,
+  // which used to return without asking.
+  const stale = () => (location.hash || "#library") !== h;
   try {
     // First-run gate: land on the chooser instead of an empty library that
     // promises success and then fails on the first turn. Settings stays
     // reachable (that's where you fix it) and "Look around first" opts out.
     if (h === "#library" || h === "") {
       const st = await checkReady();
-      if (!st.ok && !st.skipped) { await renderWelcome(st); return; }
+      if (!st.ok && !st.skipped) {
+        await renderWelcome(st);
+        // checkReady() is an await, so the hash can move while it is in flight.
+        // Returning here unconditionally stranded a fresh install (no model
+        // configured yet) on the setup screen with a URL that said you were
+        // playing, and nothing ever corrected it.
+        return stale() ? render() : undefined;
+      }
     }
     if (h.startsWith("#play/")) await renderPlay(h.slice(6));
     else if (h.startsWith("#world/")) await renderBuilder(h.slice(7), "scenario");
@@ -48,14 +61,11 @@ export async function render() {
     else if (h === "#defaults") await renderDefaults();
     else if (h === "#settings") await renderSettings();
     else await renderLibrary();
-    // Every renderer awaits the server before it paints, so two navigations in
-    // quick succession race: the SLOWER one finishes last and writes its view
-    // over the newer one, leaving you on a page the URL disagrees with.
     // (Settings is the slow one — it fetches settings, models and profiles.)
     // If the hash moved on while we were fetching, the paint we just did is
     // stale, so render whatever the URL says now. Converges, because each pass
     // targets wherever the hash has got to by then.
-    if ((location.hash || "#library") !== h) return render();
+    if (stale()) return render();
   } catch (e) {
     // A missing item (deleted save, dead bookmark) shouldn't read as a crash —
     // offer a way back rather than a dead end.
