@@ -351,6 +351,77 @@ class Summarizer:
             events += self.planner.complete_active()
         return events
 
+    def refold_scene(self, scene_slug: str) -> dict:
+        """Re-summarise ONE already-folded scene from its original turns.
+
+        A fold is where a story quietly loses things: it rewrites ten turns into
+        a paragraph, and if that paragraph drops a thread you find out fifty
+        turns later. This is the second chance the pipeline never had.
+
+        Deliberately narrower than the original fold: it regenerates the summary
+        and the timeline line, and does NOT re-run promotions. By the time you
+        redo a fold, the entities it touched may have been edited by hand or by
+        later folds, and re-applying a stale promotion would undo that. Fixing
+        the summary is the job here; entities have their own editor.
+
+        Snapshots first, like every other fold, so the redo is itself undoable.
+        """
+        entry = next((e for e in self.store.entries("memory/scenes.md")
+                      if e.slug == scene_slug), None)
+        if entry is None:
+            return {"ok": False, "error": f"no such scene: {scene_slug}"}
+        rng = str(entry.attrs.get("turns", "")).strip()
+        m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", rng)
+        if not m:
+            return {"ok": False,
+                    "error": "this scene has no source-turn range to rebuild from"}
+        start, end = int(m.group(1)), int(m.group(2))
+        turns = self.store.turns()[start - 1:end]        # attrs are 1-based
+        if not turns:
+            return {"ok": False, "error": f"turns {rng} are no longer in the "
+                                          "transcript (branched or undone)"}
+        self.store.snapshot(keep=self.snapshot_keep)
+        payload = self._existing_context(turns) + "\n\nTURNS:\n" + _turns_text(turns)
+        obj = self._emit_json(SCENE_INSTRUCTION, payload)
+        summary = str((obj or {}).get("scene_summary", "")).strip()
+        if not summary:
+            self.store.log_degraded("refold", f"{scene_slug} produced no summary")
+            return {"ok": False, "error": "the model returned no summary — "
+                                          "the old one is untouched"}
+        entry.body = summary
+        self.store.upsert_entry("memory/scenes.md", entry)
+        shorthand = str((obj or {}).get("timeline", "")).strip()
+        self._replace_timeline(start, end, entry.attrs.get("when", ""),
+                               shorthand or summary)
+        return {"ok": True, "slug": scene_slug, "summary": summary}
+
+    def _timeline_line(self, start: int, end: int, when: str, text: str) -> str:
+        line = " ".join(str(text).split())          # collapse to a single line
+        if len(line) > 160:
+            line = line[:157].rstrip() + "…"
+        stamp = f"{when}: " if when else ""
+        return f"- [T{start}-{end}] {stamp}{line}"
+
+    def _replace_timeline(self, start: int, end: int, when: str, text: str) -> None:
+        """Swap the shorthand line for one turn range in place. A redo must not
+        append a second line for the same range: the timeline is an index, and
+        two entries for T6-10 make the recall pointer ambiguous."""
+        tag = f"- [T{start}-{end}]"
+        new = self._timeline_line(start, end, when, text)
+        lines = self.store.read("memory/timeline.md").splitlines()
+        out, replaced = [], False
+        for ln in lines:
+            if ln.lstrip().startswith(tag) and not replaced:
+                out.append(new)
+                replaced = True
+            elif ln.lstrip().startswith(tag):
+                continue                # drop any earlier duplicate for this range
+            else:
+                out.append(ln)
+        if not replaced:
+            out.append(new)
+        self.store.write("memory/timeline.md", "\n".join(out) + "\n")
+
     def _append_timeline(self, start: int, end: int, when: str, text: str) -> None:
         """Append one fold-aligned shorthand line, tagged with its source-turn range
         so `store.recall_turns` can fetch the exact turns on demand."""

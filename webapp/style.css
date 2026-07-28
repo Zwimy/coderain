@@ -56,6 +56,11 @@ main#view { flex: 1 1 auto; overflow-y: auto; }
 /* generic bits */
 h1 { font-family: var(--serif); font-weight: normal; font-size: 24px;
      margin: 0 0 14px; }
+/* Fold review: step between the scene summaries the folds wrote. */
+.fold-nav { display: flex; align-items: center; gap: 10px; margin: 10px 0 6px; }
+.fold-nav button { padding: 2px 10px; }
+.fold-nav .muted { margin-left: auto; font-size: 12px; }
+
 /* Build number beside a heading — quiet, but present so a bug report can carry it. */
 .ver { font-family: var(--mono); font-size: 12px; color: var(--muted);
        letter-spacing: 1px; vertical-align: 3px; margin-left: 8px; }
@@ -204,6 +209,10 @@ pre.table {
 /* validator drops are PROTECTIVE (the engine refused a malformed delta so it
    can't corrupt the save), not crashes — an amber note, not an alarming red. */
 .evt.warn { border-color: var(--player); color: var(--player); }
+/* A fold is the one event worth acting on, so it is a button, not a note. */
+button.evt.fold { background: none; font-family: inherit; cursor: pointer;
+                  letter-spacing: 0; text-transform: none; }
+button.evt.fold:hover { border-color: var(--accent); background: var(--panel2); }
 #composer {
   border-top: 1px solid var(--line); background: var(--panel);
   padding: 12px 20px;
