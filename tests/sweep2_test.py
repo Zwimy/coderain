@@ -203,7 +203,15 @@ b2_store.upsert_entry("memory/scenes.md", Entry(
     "Scene 1", "scene-1", attrs={"turns": "1-4"}, body="Stuff happened."))
 _reconcile_fold_state(b2_store)
 assert b2_store.state()["folded_turns"] == 4
-assert b2_store.state()["folded_scenes"] == 1
+# folded_SCENES counts scenes already folded into the ARC, and a scene's mere
+# presence is no evidence of that — this one was just created. It used to be set
+# to len(scenes), which declared every surviving scene arc-folded and so put the
+# ones the arc never saw into a permanent blind spot: never arc-folded, and out
+# of context the moment they passed scenes_tail. It is clamped, never invented.
+assert b2_store.state()["folded_scenes"] == 0, b2_store.state()
+b2_store.write_state({**b2_store.state(), "folded_scenes": 5})
+_reconcile_fold_state(b2_store)
+assert b2_store.state()["folded_scenes"] == 1, "must clamp DOWN to what survived"
 print("12) fold counter recomputed from the scenes actually present")
 
 # ---- 13) word-boundary triggers + newline-safe facts ----

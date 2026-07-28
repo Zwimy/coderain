@@ -32,6 +32,12 @@ DAY_CAP_SCENE_BREAK = 30
 NUM_CAP = 1000            # hp/mana/xp per envelope
 GOLD_CAP = 100_000        # gold per envelope
 QTY_CAP = 100             # per-item quantity
+# Magnitude caps alone left CARDINALITY and TEXT LENGTH unbounded, which is the
+# same failure by another route: a 500-item inventory_add, or a 200,000-char
+# `phase`, is accepted whole, written to state.json, and then rendered into the
+# sheet/clock that every later turn carries. Repeatable per turn, permanent.
+LIST_CAP = 32             # entries per list delta
+STR_CAP = 200             # chars per free-text value in a delta
 
 # Envelope keys that live NEXT TO the deltas (not inside them).
 _TOP_KEYS = {"v", "scene_break", "check", "deltas"}
@@ -132,6 +138,49 @@ def _as_int(v):
         return None
 
 
+_ENEMY_INTS = ("hp", "hp_max", "hp_delta")
+
+
+def _valid_enemies(value, rejected: list) -> dict:
+    """Strict per-enemy spec.
+
+    This was the ONE delta forwarded raw, on the reasoning that rpg.apply clamps
+    the shape. It does clamp magnitudes, but its `_as_int` catches only
+    TypeError/ValueError — and `int(float('inf'))` raises OverflowError. Since
+    json.loads accepts the bare token `Infinity`, a single hostile number escaped
+    as an exception AFTER apply_world had already committed and BEFORE the event
+    log was written, leaving the replay ledger describing a state the save no
+    longer had. Everything is validated here now, like every other delta.
+    """
+    if not isinstance(value, dict):
+        _reject(rejected, "enemies", value, "must be an object of enemy specs")
+        return {}
+    out: dict = {}
+    for slug, spec in list(value.items())[:LIST_CAP]:
+        name = str(slug).strip()[:STR_CAP]
+        if not name:
+            continue
+        if not isinstance(spec, dict):
+            _reject(rejected, f"enemies.{name}", spec, "must be an object")
+            continue
+        clean: dict = {}
+        for k in _ENEMY_INTS:
+            if k not in spec:
+                continue
+            iv = _as_int(spec[k])        # strict: rejects bools, NaN and Infinity
+            if iv is None:
+                _reject(rejected, f"enemies.{name}.{k}", spec[k],
+                        "must be an integer")
+                continue
+            clean[k] = max(-NUM_CAP, min(NUM_CAP, iv))
+        if clean:
+            out[name] = clean
+    if len(value) > LIST_CAP:
+        _reject(rejected, "enemies", f"{len(value)} entries",
+                f"at most {LIST_CAP} per turn")
+    return out
+
+
 def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dict]]:
     """Schema + legality pass over a proposed envelope. Returns
     ``(clean, rejected)`` — `clean` is safe to apply as-is; `rejected` lists every
@@ -154,7 +203,13 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
         return {}, rejected
 
     clean: dict = {"v": ENVELOPE_VERSION}
-    scene_break = bool(env.get("scene_break", False))
+    # NOT bool(): models routinely emit stringified booleans, and `"false"` is
+    # truthy — which lifted the 1-day-per-turn cap to 30 with zero rejections,
+    # via a value that literally says false. Same test the rest of the codebase
+    # uses for boolean-ish text (memory._attr_true, _valid_events).
+    _sb = env.get("scene_break", False)
+    scene_break = (_sb is True or (isinstance(_sb, str)
+                   and _sb.strip().lower() in ("true", "yes", "1", "on")))
     if scene_break:
         clean["scene_break"] = True
     for key in env:
@@ -192,7 +247,7 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
     # ("quests.the-hunt -> active"). Values still run through each delta's full
     # validation below, so this only rescues the model's intent and never relaxes
     # a rule. Same-target entries merge; a correctly-named key always wins.
-    d = _repair_delta_keys(d)
+    d = _repair_delta_keys(d, rejected)
     out: dict = {}
     for key, value in d.items():
         if key in _INT_DELTAS:
@@ -205,7 +260,11 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
             if not isinstance(value, list):
                 _reject(rejected, key, value, "must be a list of names")
                 continue
-            names = [str(x).strip() for x in value if str(x).strip()]
+            names = [str(x).strip()[:STR_CAP] for x in value if str(x).strip()]
+            if len(names) > LIST_CAP:
+                _reject(rejected, key, f"{len(names)} entries",
+                        f"at most {LIST_CAP} per turn (kept the first {LIST_CAP})")
+                names = names[:LIST_CAP]
             if names:
                 out[key] = names
         elif key in _ITEM_LISTS:
@@ -219,10 +278,9 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
             if got:
                 out[key] = got
         elif key == "enemies":
-            if isinstance(value, dict):
-                out[key] = value          # per-enemy shape is clamped in rpg.apply
-            else:
-                _reject(rejected, key, value, "must be an object of enemy specs")
+            got = _valid_enemies(value, rejected)
+            if got:
+                out[key] = got
         elif key == "time_advance":
             got = _valid_time(value, state, scene_break, rejected)
             if got:
@@ -290,7 +348,7 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
     return clean, rejected
 
 
-def _repair_delta_keys(d: dict) -> dict:
+def _repair_delta_keys(d: dict, rejected: list | None = None) -> dict:
     """Rewrite malformed delta keys to the canonical ones (see _DELTA_ALIASES and
     _unflatten). Correctly named keys are copied through untouched and always take
     precedence; repaired entries merge into dict-valued deltas rather than
@@ -321,7 +379,15 @@ def _repair_delta_keys(d: dict) -> dict:
         else:
             repaired[canon] = new_val
     for canon, value in repaired.items():
-        out.setdefault(canon, value)              # a real key the model sent wins
+        if canon in out:
+            # The explicit key wins on purpose, but dropping the repaired one
+            # in silence told neither the player nor the Director's re-ask that
+            # anything was discarded.
+            if rejected is not None:
+                _reject(rejected, canon, value,
+                        "duplicate shorthand (kept the explicit key)")
+            continue
+        out[canon] = value
     return out
 
 
@@ -361,7 +427,9 @@ def _valid_time(value, state: dict, scene_break: bool, rejected: list) -> dict:
         elif iv:
             out["days"] = min(iv, DAY_CAP_SCENE_BREAK if scene_break else DAY_CAP)
     for k in ("phase", "weather"):
-        s = str(value.get(k, "") or "").strip()
+        # Bounded: these are rendered into clock_str(), which rides EVERY turn's
+        # context. An unbounded phase string is a permanent per-turn tax.
+        s = " ".join(str(value.get(k, "") or "").split())[:STR_CAP]
         if s:
             out[k] = s
     return out
@@ -373,10 +441,15 @@ def _valid_flags(value, state: dict, rejected: list) -> dict:
         return {}
     flags = state.get("flags") if isinstance(state.get("flags"), dict) else {}
     out = {}
-    for name, val in value.items():
-        name = str(name).strip()
+    if len(value) > LIST_CAP:
+        _reject(rejected, "flag_set", f"{len(value)} flags",
+                f"at most {LIST_CAP} per turn")
+    for name, val in list(value.items())[:LIST_CAP]:
+        name = str(name).strip()[:STR_CAP]
         if not name:
             continue
+        if isinstance(val, str):
+            val = val[:STR_CAP]
         if not isinstance(val, (bool, int, float, str)) or val is None:
             _reject(rejected, f"flag_set:{name}", val, "flag values must be scalars")
             continue
@@ -398,13 +471,16 @@ def _valid_items(key: str, value, rejected: list) -> list[dict]:
         _reject(rejected, key, value, "must be a list of names or {slug, qty}")
         return []
     out = []
-    for raw in value:
+    if len(value) > LIST_CAP:
+        _reject(rejected, key, f"{len(value)} items",
+                f"at most {LIST_CAP} per turn (kept the first {LIST_CAP})")
+    for raw in value[:LIST_CAP]:
         if isinstance(raw, dict):
-            name = str(raw.get("name") or raw.get("slug") or "").strip()
+            name = str(raw.get("name") or raw.get("slug") or "").strip()[:STR_CAP]
             qty = _as_int(raw.get("qty", 1))
             qty = 1 if qty is None else min(QTY_CAP, max(1, qty))
         else:
-            name, qty = str(raw).strip(), 1
+            name, qty = str(raw).strip()[:STR_CAP], 1
         slug = _slug(name)
         if not slug:
             _reject(rejected, key, raw, "item needs a name/slug")

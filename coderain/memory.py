@@ -128,6 +128,7 @@ _ATTR_RE = re.compile(r"^([a-z][a-z0-9_-]{0,20}):\s?(.*)$")
 _LINK_RE = re.compile(r"\[\[(?:[a-z-]+:)?([a-z0-9-]+)\]\]")
 _ZW = "​"  # zero-width space used to neutralize turn delimiters in stored text
 # A timeline line's source-turn tag, e.g. "[T6-10]" -> (6, 10).
+_SNAP_NAME_RE = re.compile(r"\d{8}-\d{6}(?:-\d+)?")
 _TL_RANGE_RE = re.compile(r"\[T(\d+)-(\d+)\]")
 # An explicit range in a recall reference: "T6-10", "6 - 10", "6 to 10".
 _REF_RANGE_RE = re.compile(r"T?(\d+)\s*(?:-|–|to)\s*T?(\d+)", re.IGNORECASE)
@@ -147,7 +148,12 @@ def _range_from_ref(ref: str, timeline_text: str,
     """Resolve a recall reference to a 1-based inclusive turn range, trying in order:
     an explicit range, a timeline line matching the reference text, then a scene
     slug's `turns:` attr. Returns None if nothing resolves."""
-    m = _REF_RANGE_RE.search(ref)
+    # An explicit range only when the WHOLE reference is one. `search` matched any
+    # incidental pair of numbers, and it ran first: quoting a timeline line back —
+    # the natural thing for the model to do — turned "the siege lasted 2-3 days"
+    # into turns 2-3 and handed the story's opening to the writer as the siege,
+    # labelled verbatim. Text now goes to the timeline/scene lookups first.
+    m = _REF_RANGE_RE.fullmatch(ref.strip())
     if m:
         a, b = int(m.group(1)), int(m.group(2))
         return (min(a, b), max(a, b))
@@ -163,6 +169,11 @@ def _range_from_ref(ref: str, timeline_text: str,
             tm = re.match(r"\s*(\d+)-(\d+)", e.attrs.get("turns", ""))
             if tm:
                 return (int(tm.group(1)), int(tm.group(2)))
+    # Nothing named it. Only now fall back to a range embedded in the text.
+    m = _REF_RANGE_RE.search(ref)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        return (min(a, b), max(a, b))
     return None
 
 
@@ -877,13 +888,27 @@ class MemoryStore:
         self.write(".fold_state.json", json.dumps(state, indent=2))
 
     # --- snapshots (pre-fold safety / undo) ---
-    def snapshot(self, keep: int = 5) -> Path:
-        snaps = self.dir / ".snapshots"
-        snaps.mkdir(exist_ok=True)
+    # A snapshot dir is `YYYYmmdd-HHMMSS` with an optional `-NNN` de-dupe suffix.
+    # Anything else in .snapshots/ (the per-reason pools) is not a restore point.
+    def snapshot(self, keep: int = 5, reason: str = "fold") -> Path:
+        """Copy the story's Markdown + state under .snapshots/.
+
+        `reason` separates the retention pools. Pre-fold snapshots are the
+        restore points a branch reaches back through, so they must not be
+        evicted by on-demand ones (a few "redo this scene" clicks, all taken at
+        the CURRENT turn, used to flush every older restore point and jump the
+        earliest branchable turn forward by dozens).
+        """
+        root = self.dir / ".snapshots"
+        snaps = root if reason == "fold" else root / reason
+        snaps.mkdir(parents=True, exist_ok=True)
         base = time.strftime("%Y%m%d-%H%M%S")
+        # Zero-padded: `-10` sorts before `-2` as text, which inverted the
+        # retention order below and, past `keep` snapshots inside one second,
+        # deleted the NEWEST instead of the oldest.
         dest, n = snaps / base, 1
         while dest.exists():  # two folds in the same second must not collide
-            dest, n = snaps / f"{base}-{n}", n + 1
+            dest, n = snaps / f"{base}-{n:03d}", n + 1
         dest.mkdir(parents=True)
         extra = [self.path(".fold_state.json"), self.path("state.json")]
         for src in list(self.dir.rglob("*.md")) + extra:
@@ -892,7 +917,9 @@ class MemoryStore:
             rel = src.relative_to(self.dir)
             (dest / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest / rel)
-        existing = sorted(p for p in snaps.iterdir() if p.is_dir())
+        # Only timestamp dirs count for retention — never the sibling pools.
+        existing = sorted(p for p in snaps.iterdir()
+                          if p.is_dir() and _SNAP_NAME_RE.fullmatch(p.name))
         for old in existing[:-keep]:
             shutil.rmtree(old, ignore_errors=True)
         return dest
@@ -1254,6 +1281,20 @@ class MemoryStore:
                 "out": sum(int(r.get("out", 0)) for r in rows),
                 "calls": len(rows)}
 
+    def trim_folds_to_transcript(self) -> None:
+        """Drop folds describing turns the transcript no longer has, then
+        re-derive the fold pointers from what actually survived.
+
+        Undo shrinks the transcript on every press. Rolling back MECHANICS is
+        single-level by design, but the transcript keeps shrinking, and once it
+        shrinks past a fold boundary two things break silently: the fold pointer
+        sits beyond the end (so the turns that replace the dropped ones are never
+        summarized — they simply vanish from memory), and a scene summarizing the
+        retracted turns stays in context as canon. Branching already does this;
+        undo/retry must too."""
+        _filter_folds_after(self, len(self.turns()))
+        _reconcile_fold_state(self)
+
     def truncate_event_log(self, max_turn: int) -> None:
         """Drop records logged past the transcript's current end. Undo/retry
         truncate the transcript — a stale envelope surviving here would be
@@ -1317,7 +1358,7 @@ class MemoryStore:
     # --- context assembly (narrator prompt) ---
     def _entry_activates(self, e: "Entry", haystack: str, seed: int,
                          turn_index: int, recent: list[str],
-                         player_now: str) -> bool:
+                         player_now: str, gate_text: str | None = None) -> bool:
         """A non-forced entry's trigger decision, incl. the Tier-2 gates.
         (pinned/critical entries bypass this — they're always in.)
 
@@ -1325,6 +1366,12 @@ class MemoryStore:
         counters — so they stay replay-safe and survive retries. `recent` is the
         list of committed turn texts (lowercased); `player_now` is the pending
         action; `turn_index` is the committed message count."""
+        # The SUPPRESSION gates always judge what was actually said, never the
+        # text used to fire the entry. In the recursion pass `haystack` is the
+        # bodies of recurse:true entries, so `triggers_not: dead` was tested
+        # against that fuel instead of the story — and an entry the player had
+        # explicitly suppressed came back whenever a recursing entry mentioned it.
+        gates = gate_text if gate_text is not None else haystack
         toks = e.triggers()
         # ST-10 delay: dormant until at least N messages exist.
         delay = e.delay()
@@ -1344,10 +1391,10 @@ class MemoryStore:
             return False
         # ST-13 secondary keys: ALL of triggers_all must also hit...
         reqs = e.triggers_all()
-        if reqs and not all(trigger_hit(tok, haystack) for tok in reqs):
+        if reqs and not all(trigger_hit(tok, gates) for tok in reqs):
             return False
         # ...and NONE of triggers_not may be present.
-        if any(trigger_hit(tok, haystack) for tok in e.triggers_not()):
+        if any(trigger_hit(tok, gates) for tok in e.triggers_not()):
             return False
         # ST-10 cooldown: after firing, stay quiet for N messages unless the
         # player re-mentions it in the current action.
@@ -1367,7 +1414,8 @@ class MemoryStore:
                 return False
         return True
 
-    def _collapse_groups(self, candidates: list, seed: int, turn_index: int) -> list:
+    def _collapse_groups(self, candidates: list, seed: int, turn_index: int,
+                         always_slug: str | None = None) -> list:
         """ST-12: for each inclusion group among the activated candidates, keep a
         single winner chosen by seeded weighted random (weight = weight_factor x
         importance). Ungrouped candidates pass through untouched. Seeded by
@@ -1377,8 +1425,13 @@ class MemoryStore:
         for c in candidates:
             e = c[2]
             # pinned/critical are ALWAYS in — they never enter the group lottery,
-            # or an "always present" entry could lose it and vanish.
-            g = "" if (e.pinned() or e.weight() == "critical") else e.group()
+            # or an "always present" entry could lose it and vanish. The place the
+            # player is STANDING IN is force-activated on exactly the same footing,
+            # so it needs the same exemption: with several locations sharing a
+            # group, the current one could lose the lottery and the room the scene
+            # is set in would drop out of context entirely.
+            g = "" if (e.pinned() or e.weight() == "critical"
+                       or (always_slug and e.slug == always_slug)) else e.group()
             (groups.setdefault(g, []) if g else out).append(c)
         for name, members in groups.items():
             if len(members) == 1:
@@ -1393,7 +1446,8 @@ class MemoryStore:
 
     def _recursion_pass(self, picked: dict, matched_slugs: set, by_slug: dict,
                         seed: int, turn_index: int, recent: list[str],
-                        player_now: str, used_lore: int, lore_budget: int) -> int:
+                        player_now: str, used_lore: int, lore_budget: int,
+                        haystack: str = "") -> int:
         """ST-14: entries flagged `recurse: true` let their body activate further
         entries — exactly one extra pass. The newly-activated entries do NOT
         recurse (depth cap 1). Hidden/pinned/critical stay out of the pass. Extras
@@ -1407,7 +1461,11 @@ class MemoryStore:
             if slug in matched_slugs or e.hidden() or e.pinned() \
                     or e.weight() == "critical":
                 continue
-            if self._entry_activates(e, fuel, seed, turn_index, recent, player_now):
+            # Fire on the FUEL, but judge the suppression gates on the real story
+            # text — otherwise triggers_not is evaluated against the very bodies
+            # doing the recursing and never suppresses anything.
+            if self._entry_activates(e, fuel, seed, turn_index, recent,
+                                     player_now, gate_text=haystack):
                 extra.append((e.weight_factor() * e.importance, rel, e))
         extra.sort(key=lambda c: c[0], reverse=True)
         # ST-12 still holds through recursion: at most one member per inclusion
@@ -1624,7 +1682,15 @@ class MemoryStore:
         if retriever is not None and any(e.semantic()
                                          for _s, (_r, e) in by_slug.items()):
             already = {c[2].slug for c in candidates}
-            exclude = {e.slug for e in player} | already
+            # Exclude everything that can NEVER be promoted here, so the top-K
+            # slots go to entries that actually could be. The retriever ranks by
+            # global salience and knows nothing about the `semantic` flag, so a
+            # flagged entry outranked by K ordinary ones never reached this loop
+            # at all: ST-17 fired or not depending on unrelated entries.
+            eligible = {s for s, (_r, e) in by_slug.items()
+                        if e.semantic() and not e.hidden()}
+            exclude = ({e.slug for e in player} | already
+                       | (set(by_slug) - eligible))
             for e in retriever(haystack, exclude):
                 if not (e.semantic() and not e.hidden() and e.slug in by_slug):
                     continue
@@ -1640,7 +1706,8 @@ class MemoryStore:
                 already.add(e.slug)
         # ST-12: mutually-exclusive inclusion groups collapse to one winner each
         # (weighted) before the budget competition.
-        candidates = self._collapse_groups(candidates, seed, turn_index)
+        candidates = self._collapse_groups(candidates, seed, turn_index,
+                                           always_slug=current_loc_slug)
         candidates.sort(key=lambda c: c[0], reverse=True)
         lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
         picked: dict[str, list[Entry]] = {}
@@ -1658,17 +1725,26 @@ class MemoryStore:
         # further entries (hard depth cap of 1; the extras never recurse again).
         used_lore = self._recursion_pass(
             picked, matched_slugs, by_slug, seed, turn_index,
-            recent_texts, player_now, used_lore, lore_budget)
+            recent_texts, player_now, used_lore, lore_budget, haystack)
         for rel in self.gated_registries():
             if rel in picked:
                 label = rel.replace(".md", "").replace("-", " ").title()
-                # A section carrying pinned/critical lore outranks the bulky
-                # scene/timeline sections in the outer salience budget — the
-                # "always in context" contract must survive a tight budget.
-                pr = 1 if any(e.pinned() or e.weight() == "critical"
-                              for e in picked[rel]) else 2
-                sections.append((pr, label,
-                                 "\n\n".join(e.render() for e in picked[rel])))
+                # "Always in context" has to mean ALWAYS. Priority 1 still
+                # competes in the greedy fill, and the smallest-first tie-break
+                # pushes a fat lore section to the back of the queue, so at a
+                # tight budget a `pinned:` or `critical` entry was dropped whole,
+                # silently, while facts and scenes were kept. Split them: the
+                # always-on entries go in at priority 0 (the same tier as the
+                # premise and the player), the rest keep competing at 2.
+                always = [e for e in picked[rel]
+                          if e.pinned() or e.weight() == "critical"]
+                rest = [e for e in picked[rel] if e not in always]
+                if always:
+                    sections.append((0, label,
+                                     "\n\n".join(e.render() for e in always)))
+                if rest:
+                    sections.append((2, label + (" (more)" if always else ""),
+                                     "\n\n".join(e.render() for e in rest)))
         if hidden_hits:
             sections.append((
                 2, "Secrets you know (NOT yet revealed to the player — "
@@ -1720,7 +1796,14 @@ class MemoryStore:
         # Full exclude BEFORE the retriever's top-K slice so the K slots go to fresh
         # recalls; hidden entries never surface here (they belong only in Secrets).
         if a.retriever is not None:
-            exclude = set(matched_slugs) | set(ref_slugs) | {e.slug for e in player}
+            # Hidden entries belong ONLY in the Secrets block, so they must be in
+            # the exclude set the retriever sees; the comment above claimed this
+            # already happened. Filtering them after the top-K slice instead let
+            # them consume the slots: four high-scoring hidden entries with K=4
+            # produced no "Recalled" section at all, while eligible ones waited.
+            exclude = (set(matched_slugs) | set(ref_slugs)
+                       | {e.slug for e in player}
+                       | {s for s, (_r, e) in idx.entries.items() if e.hidden()})
             recalled = [e for e in a.retriever(haystack, exclude)
                         if e.slug not in exclude and not e.hidden()]
             if recalled:
@@ -1752,10 +1835,29 @@ class MemoryStore:
         kept: list[tuple[int, str]] = []        # (authored position, rendered text)
         ranked = sorted(enumerate(sections),
                         key=lambda it: (it[1][0], len(it[1][2])))
+        mark = "\n…(truncated)"
         for pos, (pr, title, body) in ranked:
-            seg = f"## {title}\n{body}"
-            if len(seg) > budget:
-                seg = seg[:budget] + "\n…(truncated)"
+            head = f"## {title}\n"
+            seg = head + body
+            # Trim against what is LEFT, not against the whole budget. Truncating
+            # every section to `budget` and then keeping each priority-0 one
+            # unconditionally meant N always-on sections could produce N times the
+            # budget: a long premise plus a long player entry measured at 2x.
+            # The heading always survives, because a section the model can see the
+            # name of is worth more than a few extra characters of its body.
+            room = budget - used
+            if len(seg) > room:
+                keep = room - len(head) - len(mark)
+                if pr == 0:
+                    seg = head + body[:keep] + mark if keep > 0 else f"## {title}"
+                elif len(seg) > budget and keep > 0:
+                    # Bigger than the entire budget: the old code trimmed to
+                    # `budget`, which left it `len(mark)` OVER, so the keep test
+                    # below could never pass and an over-large world-bible was
+                    # dropped whole instead of trimmed.
+                    seg = head + body[:keep] + mark
+                else:
+                    continue          # won't fit; a smaller section still might
             if pr == 0 or used + len(seg) <= budget:
                 kept.append((pos, seg))
                 used += len(seg)
@@ -2370,7 +2472,10 @@ def _nearest_snapshot(save_dir: Path, turn_n: int) -> Path | None:
     if not snaps.exists():
         return None
     best: tuple[int, Path] | None = None
-    for d in sorted(p for p in snaps.iterdir() if p.is_dir()):
+    # Timestamp dirs only: the per-reason pools (.snapshots/refold/) are their
+    # own retention space and are not branch restore points.
+    for d in sorted(p for p in snaps.iterdir()
+                    if p.is_dir() and _SNAP_NAME_RE.fullmatch(p.name)):
         try:
             count = len(MemoryStore(d).turns())
         except Exception:  # noqa: BLE001 — a corrupt snapshot never blocks
@@ -2430,8 +2535,19 @@ def _reconcile_fold_state(store: MemoryStore) -> None:
     for sc in scenes:
         folded = max(folded, _fold_end(sc.attrs.get("turns", "")))
     st = store.state()
-    st["folded_turns"] = folded
-    st["folded_scenes"] = len(scenes)
+    # Never claim more turns are folded than the transcript still has: a pointer
+    # past the end means the turns that replace the dropped ones fall inside the
+    # "already folded" region and are never summarized at all.
+    st["folded_turns"] = min(folded, len(store.turns()))
+    # `folded_scenes` counts scenes already folded INTO THE ARC, and nothing here
+    # is evidence of that — arc.md may cover only the first few. Assuming all of
+    # them (the old `len(scenes)`) put every remaining scene in the arc's blind
+    # spot: never arc-folded, and gone from context once past `scenes_tail`.
+    try:
+        prior = int(st.get("folded_scenes", 0) or 0)
+    except (TypeError, ValueError):
+        prior = 0
+    st["folded_scenes"] = max(0, min(prior, len(scenes)))
     store.write_state(st)
 
 

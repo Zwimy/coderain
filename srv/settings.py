@@ -52,8 +52,23 @@ def retrieval_check():
                           "recall is doing nothing. Point 'Embed with' at a "
                           "provider that serves embeddings (local Ollama with "
                           "nomic-embed-text is free)."}
+    # It works — so re-arm any live retriever whose breaker had tripped. Without
+    # this the check reported "live" while every loaded story kept returning
+    # nothing, because the breaker latched and only a restart cleared it.
+    revived = 0
+    for eng in core._engines.values():
+        r = getattr(eng, "retriever", None)
+        if r is not None and getattr(r, "_failed", False):
+            try:
+                r.reset()
+                revived += 1
+            except Exception:  # noqa: BLE001 — a check must not 500
+                pass
     return {"ok": True, "state": "working", "embedder": who,
-            "detail": f"Semantic recall is live (embedding on {who})."}
+            "detail": f"Semantic recall is live (embedding on {who})."
+                      + (f" Re-enabled it on {revived} open "
+                         f"{'story' if revived == 1 else 'stories'}."
+                         if revived else "")}
 
 
 @router.get("/api/ready")

@@ -262,15 +262,22 @@ class Retriever:
         self.store = store
         self.index = index
         self.cfg = cfg or {}
-        self._fails = 0             # consecutive failures; 2 trips the breaker
+        self._fails = 0             # failures on DISTINCT turns; 2 trips it
+        self._fail_turn = -1        # the turn the last failure was counted on
         self._failed = False        # log a dead embedder once, not every turn
         self.top_k = int(cfg_get(self.cfg, "top_k"))
+
+    def reset(self) -> None:
+        """Re-arm the breaker. Nothing used to clear `_failed`, so a single
+        bad moment meant no recall until the app restarted — the Settings
+        check built a throwaway Embedder and never touched the live one."""
+        self._fails, self._fail_turn, self._failed = 0, -1, False
 
     def __call__(self, query: str, exclude: set[str]) -> list[Entry]:
         # Circuit breaker: an unreachable embedder fails on EVERY turn, and even
         # a fail-fast timeout is seconds the player waits for nothing. Once it has
         # failed, stop asking for the rest of the session — the health log says
-        # why, and Settings > Check re-tests on demand.
+        # why, and Settings > Check clears it again (see `reset`).
         if self._failed:
             return []
         try:
@@ -288,7 +295,17 @@ class Retriever:
             # ...but never silent. Two CONSECUTIVE failures trip the breaker: one
             # blip should not disable recall for the session, a dead endpoint
             # should. Logged once, since a broken provider fails on every turn.
-            self._fails += 1
+            # Count at most ONE failure per turn. assemble() calls this TWICE in
+            # a turn whenever any entry is `semantic: true`, so a single blip
+            # produced two "consecutive" failures and disabled recall for the
+            # whole session — exactly what the two-strike rule exists to prevent.
+            try:
+                turn = len(self.store.turns())
+            except Exception:  # noqa: BLE001
+                turn = self._fail_turn + 1
+            if turn != self._fail_turn:
+                self._fails += 1
+                self._fail_turn = turn
             if self._fails >= 2 and not self._failed:
                 self._failed = True
                 try:

@@ -41,13 +41,24 @@ cfg.profile.base_url = "http://127.0.0.1:1/v1"          # nothing listening
 store = _story("Dead")
 eng = Engine(cfg, store)
 if eng.retriever is not None:
-    for q in ("one", "two", "three"):
+    # Two failures on the SAME turn must not trip the breaker: assemble() calls
+    # the retriever twice per turn whenever any entry is `semantic: true`, so
+    # counting raw calls meant a single blip disabled recall for the session.
+    assert eng.retriever("one", set()) == [], "a dead retriever must return []"
+    assert eng.retriever("one again", set()) == []
+    assert not [h for h in store.health() if h["stage"] == "semantic-recall"], \
+        "two failures inside ONE turn tripped the breaker"
+    for q in ("two", "three"):                    # now on later turns
+        store.append_turn("player", f"turn for {q}")
         assert eng.retriever(q, set()) == [], "a dead retriever must return []"
     rec = [h for h in store.health() if h["stage"] == "semantic-recall"]
     assert len(rec) == 1, f"expected exactly ONE log line, got {len(rec)}"
     assert "returning nothing" in rec[0]["reason"] \
         or "embedding failed" in rec[0]["reason"], rec
-    print("1) a dead embedder is logged once, not once per turn")
+    # ...and Settings > Check can re-arm it rather than needing a restart.
+    eng.retriever.reset()
+    assert not eng.retriever._failed and eng.retriever._fails == 0
+    print("1) a dead embedder is logged once, not once per turn; reset re-arms")
 
 # ---- 2) fold stub + unsafe regex are logged -------------------------------
 store2 = _story("Traces")

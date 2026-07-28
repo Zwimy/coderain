@@ -32,8 +32,17 @@ DEFAULT_CFG = {
 }
 
 SIDECAR_MARKER = "```rpg"
-_FENCE_RE = re.compile(r"```rpg\s*(\{.*?\})\s*```", re.DOTALL)
+# Case-INSENSITIVE throughout. A model that answers with ```RPG used to defeat
+# every check here at once: parse_sidecar returned None, strip_sidecar handed the
+# whole envelope back as visible prose, and filter_sidecar diverted nothing — so
+# the reader saw raw JSON and every delta in it was silently dropped.
+_FENCE_RE = re.compile(r"```rpg\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def find_marker(text: str, start: int = 0) -> int:
+    """Index of the sidecar fence, ignoring case. -1 when absent."""
+    return text.lower().find(SIDECAR_MARKER, start)
 
 
 def cfg_get(cfg: dict | None, key: str):
@@ -104,7 +113,7 @@ def parse_sidecar(text: str) -> dict | None:
     blocks = _FENCE_RE.findall(text)
     raw = blocks[-1] if blocks else None
     if raw is None:
-        idx = text.find(SIDECAR_MARKER)
+        idx = find_marker(text)
         if idx != -1:
             raw = _first_json_object(text[idx + len(SIDECAR_MARKER):])
     if raw is None:
@@ -119,15 +128,16 @@ def parse_sidecar(text: str) -> dict | None:
 def strip_sidecar(text: str) -> tuple[str, dict | None]:
     """Split full narrator text into (visible prose, sidecar dict|None)."""
     sidecar = parse_sidecar(text)
-    idx = text.find(SIDECAR_MARKER)
+    idx = find_marker(text)
     visible = text[:idx] if idx != -1 else text
     return visible.rstrip(), sidecar
 
 
 def _partial_tail(buffer: str, tag: str) -> int:
+    low = buffer.lower()
     tail = 0
     for t in range(1, len(tag)):
-        if buffer.endswith(tag[:t]):
+        if low.endswith(tag[:t]):
             tail = t
     return tail
 
@@ -145,7 +155,7 @@ def filter_sidecar(chunks, hidden_out: list[str]):
             hidden_out.append(piece)
             continue
         buffer += piece
-        idx = buffer.find(SIDECAR_MARKER)
+        idx = find_marker(buffer)
         if idx != -1:
             if buffer[:idx]:
                 yield buffer[:idx]

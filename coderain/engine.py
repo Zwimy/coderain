@@ -305,6 +305,7 @@ class Engine:
         landed AFTER the snapshot is reverted too — acceptable, since the per-turn
         time_advance delta (re-applied on retry) is the clock's driver now."""
         snap = getattr(self, "_pre_turn_rpg", None)
+        rolled_back = snap is not None
         if snap is not None:
             self.store.set_world_state(snap)
             # One snapshot covers ONE turn: a second consecutive undo must not
@@ -321,7 +322,16 @@ class Engine:
         self._pre_turn_events = []
         # The undone turn's envelope must leave the replay ledger too (callers
         # truncate the transcript first), or a later branch re-applies it.
-        self.store.truncate_event_log(len(self.store.turns()))
+        #
+        # ONLY when a snapshot was actually consumed. Mechanics rollback is
+        # single-level, so on a second consecutive undo there is nothing to
+        # rewind — dropping the log record anyway would delete the record of
+        # deltas that are STILL APPLIED in state.json. The save and the replay
+        # ledger would then disagree by a whole envelope, permanently, and a
+        # branch (which rebuilds from the ledger) would quietly produce
+        # different gold/flags than the save it came from.
+        if rolled_back:
+            self.store.truncate_event_log(len(self.store.turns()))
 
     def opening(self, on_stage=None) -> Iterator[str]:
         self._rpg_events = []
@@ -465,8 +475,12 @@ class Engine:
 
         Single-level within the session: `restore_pre_turn_rpg` holds one snapshot, so
         a second consecutive undo won't further rewind mechanics (multi-level undo
-        would need per-turn persisted snapshots). Only ever touches the retry-able tail
-        (turns not yet folded/timelined), so timeline pointers stay valid."""
+        would need per-turn persisted snapshots).
+
+        The TRANSCRIPT, however, shrinks on every press, and nothing limits how
+        often this is called — the UI offers it every turn, with a hotkey. Press
+        it enough and the transcript retreats past a fold boundary, so the folds
+        are trimmed back to what the transcript still supports."""
         turns = self.store.turns()
         if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2:
             self.store.drop_last_turns(2)
@@ -475,6 +489,7 @@ class Engine:
         else:
             return False
         self.restore_pre_turn_rpg()
+        self.store.trim_folds_to_transcript()
         return True
 
     def maybe_fold(self) -> list[str]:
