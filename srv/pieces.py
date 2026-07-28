@@ -124,8 +124,19 @@ def _declare_type_in(base_dir: Path, meta_name: str, name: str) -> str:
         raise HTTPException(404, "no such target")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     declared = meta.setdefault("custom_files", [])
+    # Clear the delete tombstone, or custom_files() keeps filtering the type
+    # back out: the re-add returned 200, wrote the file and declared the name,
+    # and the engine ignored it forever — never indexed, never activated, and
+    # 400 from every /world/pieces route. MemoryStore.add_custom_file already
+    # does this; the route the SPA actually calls did not.
+    tomb = [f for f in (meta.get("removed_files") or []) if f != fname]
+    changed = tomb != (meta.get("removed_files") or [])
+    if changed:
+        meta["removed_files"] = tomb
     if fname not in declared:
         declared.append(fname)
+        changed = True
+    if changed:
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     f = base_dir / fname
     if not f.exists():

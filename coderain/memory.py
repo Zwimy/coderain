@@ -211,6 +211,23 @@ def _strip_comments(text: str) -> str:
     return "".join(out)
 
 
+def _fallback_slug(slug, title) -> str:
+    """The slug an entry gets when it has none of its own.
+
+    ONE definition, used by Entry (which parse_entries builds) and by
+    _real_headings (which the textual upsert/remove index uses). When only Entry
+    had it the two disagreed: the parser saw `e-2d86c2a6` and the upsert index
+    saw "", so `upsert_entry` appended a second copy of the section instead of
+    replacing it, and `set_hidden` reported a successful reveal that changed
+    nothing the reader sees. A digest of the title is stable across runs and
+    keeps two differently-named entries apart."""
+    s = str(slug or "").strip()
+    if s:
+        return s
+    digest = hashlib.sha1(str(title or "").encode("utf-8")).hexdigest()[:8]
+    return f"e-{digest}"
+
+
 @dataclass
 class Entry:
     title: str
@@ -230,10 +247,30 @@ class Entry:
         # generator._entry_from returns None) and several do not — the card
         # importer and the character library among them. A digest of the title
         # is stable across runs and keeps distinct names distinct.
-        if not str(self.slug).strip():
-            digest = hashlib.sha1(
-                str(self.title).encode("utf-8")).hexdigest()[:8]
-            self.slug = f"e-{digest}"
+        self.slug = _fallback_slug(self.slug, self.title)
+        # The title and every attr VALUE must be one line, because render()
+        # writes them as `## {title}  {#slug}` and `key: value` and
+        # parse_entries stops at the first line that is not an attr. A newline
+        # anywhere in here silently swallows every attribute after it — a
+        # generated character kept `status` and lost skills, stats,
+        # relationships, wants and motivation; an imported card lost the whole
+        # `triggers:` line, so the lorebook keys it shipped never fired.
+        # summarizer._one_line and planner._write_chapter each guard their own
+        # writer and explain why; generator.py, srv/transfer.py and rpg.apply
+        # did not. One guard where every producer meets, rather than five.
+        self.title = " ".join(str(self.title or "").split())
+        self.aliases = [" ".join(str(a).split()) for a in self.aliases
+                        if str(a).strip()]
+        self.attrs = {k: " ".join(str(v).split()) for k, v in self.attrs.items()}
+        # Clamped here too: `importance` is multiplied into the activation score
+        # and +100 is the sentinel for pinned/critical/current-location, so a
+        # hand-edited or imported `importance: 100` scored as always-on, skipped
+        # the lore-budget cutoff, and starved every other entry out of the
+        # prompt. Every producer that could clamp does; the PARSER did not.
+        try:
+            self.importance = max(1, min(5, int(self.importance)))
+        except (TypeError, ValueError):
+            self.importance = 3
 
     def triggers(self) -> list[str]:
         """Activation keywords: title + slug + aliases + the optional `triggers:`
@@ -451,7 +488,9 @@ def _real_headings(text: str) -> list[tuple[int, str]]:
     for idx, line in enumerate(_strip_comments(text).splitlines()):
         m = _HEADING_RE.match(line)
         if m:
-            heads.append((idx, m.group(2) or templates.slugify(m.group(1).strip())))
+            title = m.group(1).strip()
+            heads.append((idx, _fallback_slug(
+                m.group(2) or templates.slugify(title), title)))
     return heads
 
 
@@ -1871,13 +1910,18 @@ class MemoryStore:
         # exclusion has to be decided across the whole group, not per list.
         # D-001's pinned/critical exemption lives inside _collapse_groups, so
         # routing everything through it keeps that decision intact.
-        hidden_by_slug = {e.slug for e in hidden_hits}
+        # Split back by IDENTITY, not by slug. Slugs are unique within a
+        # registry, not across them, so keying on the slug relabelled a public
+        # `locations.md` entry as an unrevealed secret whenever a hidden entry in
+        # another file happened to share its name: the Locations section
+        # disappeared and ordinary geography was handed to the Writer under
+        # "never state this outright". `e.hidden()` is the actual question.
         collapsed = self._collapse_groups(
             candidates + [(e.weight_factor() * e.importance, "", e)
                           for e in hidden_hits],
             seed, turn_index, always_slug=current_loc_slug)
-        candidates = [c for c in collapsed if c[2].slug not in hidden_by_slug]
-        hidden_hits = [c[2] for c in collapsed if c[2].slug in hidden_by_slug]
+        candidates = [c for c in collapsed if not c[2].hidden()]
+        hidden_hits = [c[2] for c in collapsed if c[2].hidden()]
         candidates.sort(key=lambda c: c[0], reverse=True)
         lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
         picked: dict[str, list[Entry]] = {}

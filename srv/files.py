@@ -59,6 +59,7 @@ def write_save_file(slug: str, rel: str, body: dict):
         except json.JSONDecodeError as e:
             raise HTTPException(400, f"not valid JSON: {e}")
     with _exclusive():                   # the engine re-reads these every turn
+        before = len(store.turns()) if rel == "transcript.md" else 0
         store.write(rel, text)
         # A hand edit to the transcript or the world state invalidates whatever
         # the live engine is holding ABOUT that exchange. Only PUT /turns/{i}
@@ -68,14 +69,24 @@ def write_save_file(slug: str, rel: str, body: dict):
         # discarded the edit by writing the pre-turn snapshot back over it.
         if rel in ("transcript.md", "state.json"):
             _forget_exchange(slug)
-        if rel == "transcript.md":
-            # A hand edit can SHORTEN the transcript, which is undo's problem
-            # exactly: records left past the new end that no branch point can
-            # reach while state.json keeps their deltas (invariant 3), and a
-            # fold pointer claiming turns that are gone, so the turns replacing
-            # them fall inside the "already folded" region and are never
-            # summarised at all (invariant 6). undo_last calls both of these;
-            # this writer reached the same state and called neither.
+        # ONLY when the edit actually shortened the transcript. A hand edit
+        # that does reaches undo's problem exactly: ledger records past the new
+        # end that no branch point can reach while state.json keeps their
+        # deltas (invariant 3), and a fold pointer claiming turns that are gone
+        # (invariant 6). But running the reconciliation on EVERY write was
+        # lossy and irreversible: re-stamping a record's turn index cannot be
+        # undone, so cutting an exchange and pasting it straight back left two
+        # envelopes sharing one index forever, and a later branch replayed
+        # deltas from turns after its own branch point. A byte-identical
+        # rewrite must be a no-op.
+        if rel == "transcript.md" and len(store.turns()) < before:
+            # Snapshot first. trim_folds_to_transcript DELETES any scene whose
+            # range reaches past the new end — cutting one exchange can drop a
+            # fold covering five turns that still exist. branch() gets away
+            # with the same call because it restores memory files from a
+            # pre-fold snapshot first; this writer restores nothing, so the
+            # snapshot is the only way back.
+            store.snapshot(keep=8, reason="transcript-edit")
             store.clamp_event_log_to_transcript()
             store.trim_folds_to_transcript()
     return {"ok": True, "layer": store.layer_of(rel)}

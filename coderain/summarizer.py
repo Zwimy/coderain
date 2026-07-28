@@ -638,9 +638,17 @@ class Summarizer:
             + "\n\nOLDER SCENES:\n" + "\n\n".join(e.render() for e in scenes)
         obj = self._emit_json(ARC_INSTRUCTION, payload)
         if obj and str(obj.get("arc", "")).strip():
+            # Demote any `## ` the model put INSIDE its synopsis. _arc_tail
+            # preserves everything from the second top-level heading onward as
+            # the author's, so a heading in the generated text was mistaken for
+            # authored content and re-appended on every later arc fold: the file
+            # grew by one stale copy per fold, unbounded, and rode every prompt
+            # at priority 1. Entry.render demotes body headings for exactly this
+            # reason; the arc writer is the other place it matters.
+            arc = re.sub(r"(?m)^##(?=\s)", "###",
+                         str(obj["arc"]).strip())[:BODY_LIMIT]
             self.store.write("memory/arc.md",
-                             "# Arc synopsis (long-term)\n\n"
-                             + str(obj["arc"]).strip()[:BODY_LIMIT] + "\n"
+                             "# Arc synopsis (long-term)\n\n" + arc + "\n"
                              + self._arc_tail())
             return ["memory: updated arc"]
         return None

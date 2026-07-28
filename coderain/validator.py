@@ -516,11 +516,15 @@ def _valid_items(key: str, value, rejected: list) -> list[dict]:
                 f"at most {LIST_CAP} per turn (kept the first {LIST_CAP})")
     for raw in value[:LIST_CAP]:
         if isinstance(raw, dict):
-            name = str(raw.get("name") or raw.get("slug") or "").strip()[:STR_CAP]
+            # _one_line, not .strip(): the NAME becomes an entry title, and a
+            # newline in a title breaks the `## {title}  {#slug}` header, so the
+            # entry re-parses under a truncated slug. rpg.apply then appends a
+            # fresh items.md stub on every pickup and can never remove one.
+            name = _one_line(raw.get("name") or raw.get("slug") or "")[:STR_CAP]
             qty = _as_int(raw.get("qty", 1))
             qty = 1 if qty is None else min(QTY_CAP, max(1, qty))
         else:
-            name, qty = str(raw).strip()[:STR_CAP], 1
+            name, qty = _one_line(raw)[:STR_CAP], 1
         slug = _slug(name)
         if not slug:
             _reject(rejected, key, raw, "item needs a name/slug")

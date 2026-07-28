@@ -45,8 +45,16 @@ def turn(slug: str, body: dict):
 def edit_turn(slug: str, i: int, body: dict):
     """In-place message edit (ST-03)."""
     eng = _engine(slug)
+    text = str(body.get("text", ""))
+    # Two different failures used to share one message, so the message was a lie
+    # for one of them: blanking a turn is refused (it would delete the turn and
+    # shift every later index), and the user was told the turn they were looking
+    # at did not exist.
+    if not text.strip():
+        raise HTTPException(400, "a turn can't be blank — edit the text, or "
+                                 "use Undo to remove the exchange")
     with _exclusive():                       # don't rewrite the transcript mid-turn
-        if not eng.store.update_turn(i, str(body.get("text", ""))):
+        if not eng.store.update_turn(i, text):
             raise HTTPException(400, f"no turn at index {i}")
         eng._swipes = None
     return {"ok": True}

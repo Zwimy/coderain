@@ -494,10 +494,14 @@ export async function renderPlay(slug) {
   };
 
   const setBusy = on => {
-    // If the user navigated away mid-stream this view's nodes are detached, and
-    // the still-pending run must not toggle the NEW page's controls.
-    if (!document.body.contains(transcript)) return;
+    // The FLAG is app-wide and must always be written, even for a detached
+    // view. Returning early here latched `busy` on forever when the user left
+    // the play view mid-stream: every control looked enabled and did nothing
+    // for the rest of the session, with no error, and only a reload recovered.
     busy = on;
+    // The NODES, though, belong to a page that may no longer be on screen — a
+    // still-pending run must not toggle the new page's controls.
+    if (!document.body.contains(transcript)) return;
     ["send", "continue", "undo", "retry", "branch", "suggest"].forEach(id => {
       const b = $("#" + id); if (b) b.disabled = on;
     });
@@ -617,7 +621,10 @@ export async function renderPlay(slug) {
     }
     clearInterval(ticker);
     stage.textContent = "";
-    $("#stop").classList.add("hidden");
+    // Optional chaining: when the stream ends while the user is on another
+    // view, #stop is gone and this threw a TypeError that killed run() before
+    // its terminal setBusy(false) — the second route to a permanently locked UI.
+    $("#stop")?.classList.add("hidden");
     aborter = null;
     live.classList.remove("pending");
     live.removeAttribute("aria-busy");
@@ -647,6 +654,7 @@ export async function renderPlay(slug) {
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
     renderSwipeBar();
     setBusy(false);
+    return !failed;                 // callers must not repaint over the error card
   };
 
   $("#stop").addEventListener("click", () => {
@@ -800,8 +808,13 @@ export async function renderPlay(slug) {
     // (409, model down) the transcript would be two turns shorter than the
     // store, and turn indices come from DOM position — a later edit would
     // rewrite the wrong turn. run() repaints from server truth instead.
-    await run(`/api/saves/${slug}/retry`, undefined, undefined, true);
-    await resync();
+    // Only on SUCCESS. run()'s failure path resyncs and then appends the
+    // "That turn didn't go through / Try again" card; resyncing again here
+    // wiped it (resync rebuilds the transcript from scratch), so a retry whose
+    // model call failed destroyed the last exchange and said nothing at all.
+    if (await run(`/api/saves/${slug}/retry`, undefined, undefined, true)) {
+      await resync();
+    }
   });
   // The true turn count lives on the server; .turn divs in the DOM can be out of
   // step with it (error cards, mid-stream nodes), so ask rather than count.
