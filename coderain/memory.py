@@ -719,13 +719,20 @@ class MemoryStore:
 
     def add_facts(self, new: list[str]) -> int:
         """Append timeless world facts as bullets, deduped case-insensitively.
-        Returns how many were actually added."""
+        Returns how many were actually added.
+
+        Bounded on both axes because facts.md is the most permanent thing a fold
+        can write: every fact rides EVERY later prompt, and nothing ever prunes
+        the file. One fold emitting a wall of text, or a hundred "facts", would
+        be paid for on every turn from then on. 240 chars is well past any real
+        one-line world truth ("The capital is Asterhold"), and 24 per fold is
+        more than the instruction ever asks for."""
         have = {f.lower() for f in self.facts()}
         added: list[str] = []
-        for f in new:
+        for f in new[:24]:
             # Collapse whitespace INCLUDING newlines — an embedded "\n- " would
             # write extra bullets and break the dedupe round-trip.
-            t = " ".join(str(f).split()) if f else ""
+            t = " ".join(str(f).split())[:240] if f else ""
             if t and t.lower() not in have:
                 have.add(t.lower())      # also dedupes within the batch itself
                 added.append(t)
@@ -1295,8 +1302,8 @@ class MemoryStore:
         summarized — they simply vanish from memory), and a scene summarizing the
         retracted turns stays in context as canon. Branching already does this;
         undo/retry must too."""
-        _filter_folds_after(self, len(self.turns()))
-        _reconcile_fold_state(self)
+        uncovered = _filter_folds_after(self, len(self.turns()))
+        _reconcile_fold_state(self, uncovered)
 
     def truncate_event_log(self, max_turn: int) -> None:
         """Drop records logged past the transcript's current end. Undo/retry
@@ -1315,6 +1322,38 @@ class MemoryStore:
                 kept.append(rec)
         path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n"
                                 for r in kept), encoding="utf-8")
+
+    def clamp_event_log_to_transcript(self) -> bool:
+        """Pull any record whose turn index points PAST the transcript's end back
+        onto the last real turn. Returns whether anything moved.
+
+        The quad pipeline resolves its envelope before the Narrator writes, so it
+        logs with the index the narrator turn is ABOUT to get. When the Writer
+        returns nothing that turn is never appended, and the record is stranded
+        one past the end: `truncate_event_log` then deletes it and a branch replay
+        filters it out, while state.json keeps the deltas it describes. Invariant
+        3 says the ledger and the state agree, and a silently lost envelope is the
+        exact class of bug branching cannot recover from."""
+        path = self.dir / "memory" / "events.jsonl"
+        if not path.exists():
+            return False
+        end = len(self.turns())
+        out, changed = [], False
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                out.append(line)          # leave corrupt lines exactly as found
+                continue
+            if isinstance(rec, dict) and rec.get("turn", 0) > end:
+                rec["turn"] = end
+                changed = True
+                out.append(json.dumps(rec, ensure_ascii=False))
+            else:
+                out.append(line)
+        if changed:
+            path.write_text("".join(ln + "\n" for ln in out), encoding="utf-8")
+        return changed
 
     # --- RPG module state (Phase 4; lives in state.json under "rpg") ---
     def rpg_state(self) -> dict:
@@ -1768,8 +1807,18 @@ class MemoryStore:
             # budgets while its visible sibling survived.
             label = ("Secrets you know (NOT yet revealed to the player — "
                      "foreshadow, hint, let them discover; never state outright)")
-            sections.append((2, label,
-                             "\n\n".join(e.render() for e in hidden_hits)))
+            always = [e for e in hidden_hits
+                      if e.pinned() or e.weight() == "critical"]
+            rest = [e for e in hidden_hits if e not in always]
+            if always:
+                sections.append((0, label,
+                                 "\n\n".join(e.render() for e in always)))
+            if rest:
+                # The framing has to be repeated, not shared: these two land in
+                # different priority tiers and the low one can be cut, so it
+                # cannot rely on a header that lives in the other section.
+                sections.append((2, (label + " (more)") if always else label,
+                                 "\n\n".join(e.render() for e in rest)))
 
         # related past episodes (Wave 2 hybrid retrieval): folds whose metadata
         # names an entity that just activated, plus their chronological
@@ -2409,8 +2458,8 @@ class SaveLibrary:
         # 4) drop folds/timeline lines that cover post-branch turns, then make
         # the fold counter agree with the scenes that actually remain — a
         # future-counting .fold_state.json would leave turns never folded.
-        _filter_folds_after(dst_store, turn_n)
-        _reconcile_fold_state(dst_store)
+        uncovered = _filter_folds_after(dst_store, turn_n)
+        _reconcile_fold_state(dst_store, uncovered)
         return dst_slug, warnings
 
     def duplicate(self, slug: str, new_title: str | None = None) -> str:
@@ -2552,19 +2601,38 @@ def _write_event_log(store: MemoryStore, records: list[dict]) -> None:
                         for r in records))
 
 
+def _fold_range(attr: str) -> tuple[int, int]:
+    """The (start, end) source turns of a fold's `turns:` attr — 'a-b' or a bare
+    'n'. (0, 0) when it is missing or unparseable."""
+    m = re.match(r"\s*(\d+)(?:\s*-\s*(\d+))?", attr or "")
+    if not m:
+        return 0, 0
+    start = int(m.group(1))
+    return start, int(m.group(2) or start)
+
+
 def _fold_end(attr: str) -> int:
     """The end turn of a fold's `turns:` attr — 'a-b' or a bare 'n'."""
-    m = re.match(r"\s*(\d+)(?:\s*-\s*(\d+))?", attr or "")
-    return int(m.group(2) or m.group(1)) if m else 0
+    return _fold_range(attr)[1]
 
 
-def _filter_folds_after(store: MemoryStore, turn_n: int) -> None:
+def _filter_folds_after(store: MemoryStore, turn_n: int) -> int | None:
     """Remove scenes + timeline lines whose source-turn range reaches past the
-    branch point (they summarize turns the branch no longer has)."""
+    branch point (they summarize turns the branch no longer has).
+
+    Returns the EARLIEST source turn left uncovered by those removals, or None if
+    nothing was removed. A scene covering turns 40-50 dropped at branch point 45
+    leaves 40-45 summarized by nothing, and the fold pointer must be told: see
+    _reconcile_fold_state, which otherwise trusts a counter this just made
+    stale."""
     scenes = store.entries("memory/scenes.md")
+    uncovered = None
     for sc in scenes:
-        if _fold_end(sc.attrs.get("turns", "")) > turn_n:
+        start, end = _fold_range(sc.attrs.get("turns", ""))
+        if end > turn_n:
             store.remove_entry("memory/scenes.md", sc.slug)
+            if start > 0:
+                uncovered = start if uncovered is None else min(uncovered, start)
     kept = []
     for ln in store.read("memory/timeline.md").splitlines():
         tm = _TL_RANGE_RE.search(ln)
@@ -2572,9 +2640,11 @@ def _filter_folds_after(store: MemoryStore, turn_n: int) -> None:
             continue
         kept.append(ln)
     store.write("memory/timeline.md", "\n".join(kept).rstrip("\n") + "\n")
+    return uncovered
 
 
-def _reconcile_fold_state(store: MemoryStore) -> None:
+def _reconcile_fold_state(store: MemoryStore,
+                          uncovered_from: int | None = None) -> None:
     """Recompute .fold_state.json from the scenes actually present. After a
     branch restores an older snapshot (which may predate the fold counter) or
     filters folds away, an inherited counter would claim turns were folded
@@ -2610,8 +2680,16 @@ def _reconcile_fold_state(store: MemoryStore) -> None:
     except (TypeError, ValueError):
         prior_turns = 0
     cap = len(store.turns())
+    # `uncovered_from` is the first turn a just-removed scene used to summarize.
+    # Trusting the prior pointer past that point was the hole: a branch that
+    # drops the scene covering turns 40-50 at branch point 45 leaves 40-45
+    # summarized by nothing, and a prior pointer of 50 clamped only to `cap`
+    # still claimed 45 — so those six turns were never folded by anyone.
     if unreadable:
-        folded = max(folded, min(prior_turns, cap))
+        trusted = min(prior_turns, cap)
+        if uncovered_from is not None:
+            trusted = min(trusted, uncovered_from - 1)
+        folded = max(folded, max(0, trusted))
     st["folded_turns"] = min(folded, cap)
     # `folded_scenes` counts scenes already folded INTO THE ARC, and nothing here
     # is evidence of that — arc.md may cover only the first few. Assuming all of

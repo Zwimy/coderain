@@ -729,6 +729,14 @@ class Engine:
             # Quad path already validated + applied inside trinity.generate.
             self._rpg_events += trinity_events
             applied = _any_applied(trinity_events)
+            if not narration and self.store.clamp_event_log_to_transcript():
+                # The envelope was logged against a narrator turn that never
+                # arrived. Re-index it onto the last real turn, loudly: the
+                # deltas ARE in state, so a ledger that skipped them would make
+                # every future branch from here silently wrong.
+                self.store.log_degraded(
+                    "quad-ledger", "Writer produced no turn; its envelope was "
+                    "re-indexed onto the last stored turn")
         elif sidecar:
             events = self.apply_envelope(sidecar, rpg_on)
             self._rpg_events += events
