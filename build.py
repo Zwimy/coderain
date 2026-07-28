@@ -15,6 +15,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+from coderain import __version__ as VERSION   # noqa: E402
+
 NAME = "Coderain"
 ZIP = "Coderain-win-x64"
 
@@ -24,9 +27,30 @@ args = [
     "--add-data", "webapp;webapp",
     "--hidden-import", "multipart", "--hidden-import", "python_multipart",
     "--collect-submodules", "coderain.modules",
+    # The HTTP layer. desktop.py -> server.py imports these statically, but list
+    # them so a router can never quietly go missing from a build.
+    "--collect-submodules", "srv",
     "desktop.py",
 ]
-print(f"building -> dist/{NAME}/  (zip: {ZIP}.zip)")
+
+
+def _last_tag() -> str:
+    try:
+        out = subprocess.run(["git", "describe", "--tags", "--abbrev=0"],
+                             cwd=ROOT, capture_output=True, text=True)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except OSError:
+        return ""
+
+
+print(f"building Coderain v{VERSION} -> dist/{NAME}/  (zip: {ZIP}.zip)")
+tag = _last_tag()
+if tag and tag.lstrip("v") != VERSION:
+    # Not fatal: you bump the code first and tag afterwards, so being AHEAD of
+    # the last tag is the normal state. Being behind it is the bug.
+    print(f"  note: last git tag is {tag}, code says {VERSION}"
+          + ("  <-- code is BEHIND the tag, bump coderain/__init__.py"
+             if tag.lstrip("v") > VERSION else "  (tag it after this build)"))
 subprocess.run(args, cwd=ROOT, check=True)
 
 zip_path = ROOT / "dist" / ZIP

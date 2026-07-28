@@ -170,4 +170,32 @@ def inspect_context(slug: str):
         # Anything that silently fell back. Degrading is fine; degrading
         # invisibly is what costs continuity with nothing to show for it.
         "health": store.health(limit=8),
+        # The provider's OWN token counts, not the /4 estimate above. Everything
+        # else on this payload is what we think we sent; this is what was billed.
+        "usage": _usage_payload(store),
     }
+
+
+def _usage_payload(store) -> dict:
+    """Lifetime tokens for this story, plus the most recent turn, per stage."""
+    tot = store.usage_total()
+    recent = store.usage(limit=40)
+    last_turn = recent[0].get("turn") if recent else None
+    return {
+        "total_in": int(tot.get("in", 0)),
+        "total_out": int(tot.get("out", 0)),
+        "cached": int(tot.get("cached", 0)),
+        "calls": int(tot.get("calls", 0)),
+        "by_stage": tot.get("by_stage", {}),
+        "last_turn": store.usage_for_turn(last_turn) if last_turn is not None
+        else {"in": 0, "out": 0, "calls": 0},
+        "price_in": float(core._cfg.raw.get("price_in", 0) or 0),
+        "price_out": float(core._cfg.raw.get("price_out", 0) or 0),
+    }
+
+
+@router.get("/api/saves/{slug}/usage")
+def save_usage(slug: str):
+    """The token ledger on its own, with the recent per-call rows."""
+    store = _engine(slug).store
+    return {**_usage_payload(store), "recent": store.usage(limit=60)}

@@ -55,12 +55,33 @@ def __getattr__(name):
 
 
 # ---------- static SPA ----------
+class _FreshFiles(StaticFiles):
+    """Serve the SPA with revalidate-always caching.
+
+    Everything here comes off localhost, so there is no bandwidth to save by
+    caching, and a stale asset is a real bug: unzip a new release over an old
+    install and the browser will happily keep running the previous app.js
+    against the new API. The failure looks like nothing in particular.
+
+    `no-cache` still allows a conditional request, so an unchanged file costs a
+    304 and no body. ES module imports (`./util.js`) resolve without the entry
+    file's query string, so a ?v= stamp would only bust the entry point — this
+    covers the whole graph.
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
+
 @app.get("/")
 def index():
-    return FileResponse(ASSETS / "webapp" / "index.html")
+    return FileResponse(ASSETS / "webapp" / "index.html",
+                        headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
-app.mount("/", StaticFiles(directory=ASSETS / "webapp"), name="webapp")
+app.mount("/", _FreshFiles(directory=ASSETS / "webapp"), name="webapp")
 
 
 if __name__ == "__main__":

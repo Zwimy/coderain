@@ -6,6 +6,7 @@ import copy
 import httpx
 from fastapi import APIRouter
 from fastapi import HTTPException
+from coderain import __version__
 from coderain import features
 from coderain import models as models_mod
 from coderain.config import ROOT as DATA_ROOT
@@ -166,6 +167,7 @@ def get_settings():
         # key saved in one looks "not saved" in the other. Showing it makes that
         # visible instead of feeling like settings failed to persist.
         "home": str(DATA_ROOT),
+        "version": __version__,
         "generation": {
             "response_length":
                 core._cfg.generation.get("response_length", "medium"),
@@ -189,6 +191,11 @@ def get_settings():
             "seed": core._cfg.generation.get("seed"),
         },
         "quick_actions": _clean_quick_actions(core._cfg.raw.get("quick_actions")),
+        # Your model's price per MILLION tokens. Left at 0 the app reports tokens
+        # only — deliberately not a bundled price list, because those go stale and
+        # a wrong number is worse than no number.
+        "price_in": float(core._cfg.raw.get("price_in", 0) or 0),
+        "price_out": float(core._cfg.raw.get("price_out", 0) or 0),
         # Previously web-invisible: these existed in config.yaml and the legacy
         # Tk app but had no endpoint, so semantic recall was permanently OFF and
         # the memory depth/budget could not be tuned from the main UI at all.
@@ -275,6 +282,14 @@ def put_settings(body: dict):
                     raw["memory"]["context_budget_tokens"] = max(1000, int(v))
                 except (TypeError, ValueError):
                     pass
+
+    # Model price per million tokens (0 = report tokens only, no cost).
+    for key in ("price_in", "price_out"):
+        if key in body:
+            try:
+                raw[key] = max(0.0, round(float(body[key] or 0), 4))
+            except (TypeError, ValueError):
+                pass
 
     # Semantic recall (vector retrieval) — a headline memory feature that was
     # permanently off for anyone who never hand-edited config.yaml.

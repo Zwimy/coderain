@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 
 from .llm import emit_json
+from .llm import stage as llm_stage
 from .memory import Entry, KIND_FILE, MemoryStore, trigger_hit
 
 SCENE_INSTRUCTION = """\
@@ -114,7 +115,8 @@ class Summarizer:
     # --- LLM call: thinking ON, JSON out, one retry ---
     def _emit_json(self, instruction: str, payload: str) -> dict | None:
         rules = self.store.read("memory-rules.md").strip()
-        return emit_json(self.llm, rules + "\n\n" + instruction, payload)
+        with llm_stage(self.llm, "fold"):
+            return emit_json(self.llm, rules + "\n\n" + instruction, payload)
 
     # --- apply validated promotions ---
     def _apply_promotions(self, obj: dict) -> list[str]:

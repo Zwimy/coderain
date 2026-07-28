@@ -1164,6 +1164,96 @@ class MemoryStore:
                 break
         return out
 
+    # --- token accounting -------------------------------------------------
+    def log_usage(self, rec: dict) -> None:
+        """Append one model call's real token counts to memory/usage.jsonl.
+
+        Not an estimate: these are the provider's own numbers, off the usage
+        frame at the end of the stream. Per STAGE, so the price of the optional
+        brains (director, lore-keeper, folds, the chapter planner) is a fact you
+        can read rather than something you infer from the bill at month end.
+
+        Unbounded ledgers rot, so this keeps the last 500 calls — enough to see
+        a story's shape — while `usage_total` keeps a running sum that survives
+        the trimming, so lifetime totals stay correct.
+        """
+        path = self.dir / "memory" / "usage.jsonl"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            row = {"turn": len(self.turns()),
+                   "stage": str(rec.get("stage", "?"))[:24],
+                   "model": str(rec.get("model", ""))[:64],
+                   "in": int(rec.get("in", 0)), "out": int(rec.get("out", 0))}
+            if rec.get("cached"):
+                row["cached"] = int(rec["cached"])
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            self._bump_usage_total(row)
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > 500:
+                path.write_text("\n".join(lines[-500:]) + "\n", encoding="utf-8")
+        except OSError:
+            pass          # accounting must never break a turn
+
+    def _bump_usage_total(self, row: dict) -> None:
+        """Lifetime sums, kept beside the ledger so trimming can't lose them."""
+        path = self.dir / "memory" / "usage-total.json"
+        try:
+            try:
+                tot = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(tot, dict):
+                    tot = {}
+            except (OSError, FileNotFoundError, json.JSONDecodeError):
+                tot = {}
+            by = tot.setdefault("by_stage", {})
+            slot = by.setdefault(row["stage"], {"in": 0, "out": 0, "calls": 0})
+            slot["in"] += row["in"]
+            slot["out"] += row["out"]
+            slot["calls"] += 1
+            tot["in"] = tot.get("in", 0) + row["in"]
+            tot["out"] = tot.get("out", 0) + row["out"]
+            tot["cached"] = tot.get("cached", 0) + int(row.get("cached", 0))
+            tot["calls"] = tot.get("calls", 0) + 1
+            path.write_text(json.dumps(tot, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+    def usage_total(self) -> dict:
+        """Lifetime token totals for this story, overall and per stage."""
+        try:
+            tot = json.loads(
+                (self.dir / "memory" / "usage-total.json").read_text(encoding="utf-8"))
+        except (OSError, FileNotFoundError, json.JSONDecodeError):
+            return {"in": 0, "out": 0, "cached": 0, "calls": 0, "by_stage": {}}
+        return tot if isinstance(tot, dict) else {
+            "in": 0, "out": 0, "cached": 0, "calls": 0, "by_stage": {}}
+
+    def usage(self, limit: int = 60) -> list[dict]:
+        """The most recent model calls, newest first."""
+        try:
+            lines = (self.dir / "memory" / "usage.jsonl").read_text(
+                encoding="utf-8").splitlines()
+        except (OSError, FileNotFoundError):
+            return []
+        out = []
+        for ln in reversed(lines):
+            try:
+                rec = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+            if len(out) >= limit:
+                break
+        return out
+
+    def usage_for_turn(self, turn: int) -> dict:
+        """What one turn cost, summed across every stage it triggered."""
+        rows = [r for r in self.usage(limit=500) if r.get("turn") == turn]
+        return {"in": sum(int(r.get("in", 0)) for r in rows),
+                "out": sum(int(r.get("out", 0)) for r in rows),
+                "calls": len(rows)}
+
     def truncate_event_log(self, max_turn: int) -> None:
         """Drop records logged past the transcript's current end. Undo/retry
         truncate the transcript — a stale envelope surviving here would be
