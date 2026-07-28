@@ -68,6 +68,16 @@ def write_save_file(slug: str, rel: str, body: dict):
         # discarded the edit by writing the pre-turn snapshot back over it.
         if rel in ("transcript.md", "state.json"):
             _forget_exchange(slug)
+        if rel == "transcript.md":
+            # A hand edit can SHORTEN the transcript, which is undo's problem
+            # exactly: records left past the new end that no branch point can
+            # reach while state.json keeps their deltas (invariant 3), and a
+            # fold pointer claiming turns that are gone, so the turns replacing
+            # them fall inside the "already folded" region and are never
+            # summarised at all (invariant 6). undo_last calls both of these;
+            # this writer reached the same state and called neither.
+            store.clamp_event_log_to_transcript()
+            store.trim_folds_to_transcript()
     return {"ok": True, "layer": store.layer_of(rel)}
 
 

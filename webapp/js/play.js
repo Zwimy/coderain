@@ -453,7 +453,14 @@ export async function renderPlay(slug) {
     // there left a ghost bubble reading "Version 2 of 2" over a transcript two
     // turns shorter, and the next ◄ painted the previous exchange's prose into
     // it — the same text twice on screen, and ✎ addressing turns that are gone.
-    if (serverTurns !== before) {
+    // Also when NOTHING streamed. The count is not sufficient on its own: if
+    // the tail is not a narrator turn (a quad turn whose Director applied
+    // deltas but whose Writer wrote nothing keeps the player turn and stores no
+    // narration), swipe_generate refuses and returns without doing anything —
+    // so the count matches, and this fell through to paint the buffer it had
+    // just cleared OVER a real stored turn, under a bar advertising a variant
+    // that does not exist.
+    if (serverTurns !== before || !body.textContent.trim()) {
       setBusy(false);
       await resync();
       return;
@@ -558,7 +565,12 @@ export async function renderPlay(slug) {
   };
 
   let aborter = null;
-  const run = async (path, body, playerText) => {
+  /* `ownsRepaint`: the caller repaints from server truth itself, so run() must
+     not claim the turn was discarded when the DOM and the store differ. Retry
+     deliberately leaves the old exchange on screen while it regenerates (see its
+     handler), so a SUCCESSFUL retry ends this function one turn ahead — which is
+     not a rollback and must not be reported as one. */
+  const run = async (path, body, playerText, ownsRepaint) => {
     if (busy) return;
     setBusy(true);
     evbar.innerHTML = "";
@@ -627,7 +639,7 @@ export async function renderPlay(slug) {
       if (playerText !== undefined && !$("#action").value) {
         $("#action").value = playerText;      // never lose what they typed
       }
-    } else if (await reconcile(serverTurns)) {
+    } else if (!ownsRepaint && await reconcile(serverTurns)) {
       // The stream said `done` but the store kept fewer turns than the screen
       // shows — the turn was rolled back server-side. resync() has repainted.
       toast("That turn produced nothing and was discarded.", "info");
@@ -788,7 +800,7 @@ export async function renderPlay(slug) {
     // (409, model down) the transcript would be two turns shorter than the
     // store, and turn indices come from DOM position — a later edit would
     // rewrite the wrong turn. run() repaints from server truth instead.
-    await run(`/api/saves/${slug}/retry`);
+    await run(`/api/saves/${slug}/retry`, undefined, undefined, true);
     await resync();
   });
   // The true turn count lives on the server; .turn divs in the DOM can be out of
