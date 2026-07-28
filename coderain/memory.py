@@ -6,6 +6,7 @@ index for smart retrieval, and assembles the per-turn context for the narrator.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -121,11 +122,22 @@ EDITABLE_FILES = [
 
 _TURN_RE = re.compile(r"<!--\s*@(player|narrator)\s*-->\s*\n(.*?)(?=\n<!--\s*@|\Z)",
                       re.DOTALL)
-_HEADING_RE = re.compile(r"^##\s+(.*?)\s*(?:\{#([a-z0-9-]+)\})?\s*$")
+# The anchor accepts anything slugify() can PRODUCE, which since it became
+# unicode-aware is no longer just [a-z0-9-]. When the two disagreed the
+# anchor stopped matching and the whole `{#slug}` fell into the TITLE group:
+# the entry re-parsed under a doubled slug, merge_entry never found it again
+# so every later fold appended a duplicate, and its triggers became the
+# mangled title, so it could never activate. Excluding braces and whitespace
+# is the real constraint — slugify emits neither.
+_HEADING_RE = re.compile(r"^##\s+(.*?)\s*(?:\{#([^\s{}]+)\})?\s*$")
 # An attribute header line = a lowercase single-token key, so prose such as
 # "She said: hello" is never mistaken for an attribute (bug: body-text loss).
 _ATTR_RE = re.compile(r"^([a-z][a-z0-9_-]{0,20}):\s?(.*)$")
-_LINK_RE = re.compile(r"\[\[(?:[a-z-]+:)?([a-z0-9-]+)\]\]")
+# Same widening, same reason: [[меч]] matched nothing, so references,
+# dangling-ref checks and the "Referenced (by name)" section were all inert
+# for a non-Latin world. The type prefix still ends at the colon, and a slug
+# can never contain one (slugify turns it into a dash).
+_LINK_RE = re.compile(r"\[\[(?:[a-z-]+:)?([^\s\[\]:]+)\]\]")
 _ZW = "​"  # zero-width space used to neutralize turn delimiters in stored text
 # A timeline line's source-turn tag, e.g. "[T6-10]" -> (6, 10).
 _SNAP_NAME_RE = re.compile(r"\d{8}-\d{6}(?:-\d+)?")
@@ -207,6 +219,21 @@ class Entry:
     importance: int = 3
     attrs: dict[str, str] = field(default_factory=dict)
     body: str = ""
+
+    def __post_init__(self) -> None:
+        # An entry MUST have a slug. render() writes `{#}` without one, which
+        # parse_entries cannot read back as an anchor, so the entry re-parses
+        # under a mangled slug and every later lookup misses it. Worse, two
+        # entities whose names both slug to nothing ("???" and "!!!") shared the
+        # empty key and _replace_or_append overwrote one with the other.
+        # Several producers guard this (pieces._entry_from_dict 400s,
+        # generator._entry_from returns None) and several do not — the card
+        # importer and the character library among them. A digest of the title
+        # is stable across runs and keeps distinct names distinct.
+        if not str(self.slug).strip():
+            digest = hashlib.sha1(
+                str(self.title).encode("utf-8")).hexdigest()[:8]
+            self.slug = f"e-{digest}"
 
     def triggers(self) -> list[str]:
         """Activation keywords: title + slug + aliases + the optional `triggers:`
@@ -664,6 +691,14 @@ class MemoryStore:
         (scenario.json) declare — e.g. races.md, rules.md. Names are sanitized:
         bare .md filenames only, never paths, never a built-in file."""
         names: list[str] = []
+        # Types this save has deleted. Without them a scenario-declared type
+        # came back on every open, because the scenario's list is read live.
+        try:
+            removed = set(json.loads(
+                (self.dir / "meta.json").read_text(encoding="utf-8")
+            ).get("removed_files") or [])
+        except (json.JSONDecodeError, OSError, AttributeError):
+            removed = set()
         for path in (self.dir / "meta.json",
                      (self.scenario_dir / "scenario.json")
                      if self.scenario_dir else None):
@@ -679,7 +714,8 @@ class MemoryStore:
                 if not re.search(r"[A-Za-z0-9]", base):
                     continue                      # slugify would invent a name
                 name = templates.slugify(base) + ".md"
-                if name not in names and name not in _RESERVED_MD:
+                if name not in names and name not in _RESERVED_MD \
+                        and name not in removed:
                     names.append(name)
         return names
 
@@ -703,8 +739,16 @@ class MemoryStore:
         except json.JSONDecodeError:
             meta = {}
         declared = meta.setdefault("custom_files", [])
+        # Re-adding clears the delete tombstone, or custom_files() would keep
+        # filtering the type back out and it could never be restored.
+        tomb = [f for f in (meta.get("removed_files") or []) if f != name]
+        changed = tomb != (meta.get("removed_files") or [])
+        if changed:
+            meta["removed_files"] = tomb
         if name not in declared:
             declared.append(name)
+            changed = True
+        if changed:
             self.write("meta.json", json.dumps(meta, indent=2))
         if not self.path(name).exists():
             label = name.removesuffix(".md").replace("-", " ").title()
@@ -975,6 +1019,16 @@ class MemoryStore:
         header = raw[:idx] if idx != -1 else raw
         turns = self.turns()
         if not 0 <= i < len(turns):
+            return False
+        # An EMPTY body is not an edit, it is a delete — and a silently
+        # corrupting one. _render_turn writes the marker and nothing after it,
+        # so _TURN_RE's `\s*\n` eats the separator and its lookahead never
+        # fires: the NEXT turn's raw `<!-- @player -->` marker gets absorbed as
+        # this turn's prose, the transcript loses a turn, and since indices are
+        # positions every later edit, swipe, branch point and events-log record
+        # is off by one from there on. There is no delete-turn feature; the
+        # editor sending "" (it only trims) must not become one.
+        if not text.strip():
             return False
         turns[i]["text"] = text.strip()
         body = "".join(self._render_turn(t["role"], t["text"]) for t in turns)
@@ -1378,7 +1432,13 @@ class MemoryStore:
         path = self.dir / "memory" / "events.jsonl"
         if not path.exists():
             return False
-        end = len(self.turns())
+        # Never below 1. Turn 0 is the reserved genesis index, and branch()
+        # filters `snap_turns < turn <= turn_n` with snap_turns == 0 — so a
+        # record parked on 0 can never be replayed at ANY branch point. Clamping
+        # an emptied transcript down to 0 moved the very failure this method
+        # prevents (a branch with different flags from its source) from "past the
+        # end" to "index 0". 1 is the lowest index a branch can reach.
+        end = max(1, len(self.turns()))
         out, changed = [], False
         for line in path.read_text(encoding="utf-8").splitlines():
             try:
@@ -1801,19 +1861,23 @@ class MemoryStore:
                 already.add(e.slug)
         # ST-12: mutually-exclusive inclusion groups collapse to one winner each
         # (weighted) before the budget competition.
-        candidates = self._collapse_groups(candidates, seed, turn_index,
-                                           always_slug=current_loc_slug)
-        # Hidden hits get the SAME treatment. They are diverted into their own
-        # list above, before this line, so they were skipping the lottery
-        # entirely: three `hidden: true, group: twist` variants of one secret all
-        # shipped in the same Secrets block, contradicting each other — which is
-        # the exact harm `group:` exists to prevent. D-001 exempts PINNED members
-        # from the lottery and says nothing about hidden ones; _collapse_groups
-        # applies that exemption itself, so routing through it keeps the decision
-        # and closes the hole.
-        hidden_hits = [c[2] for c in self._collapse_groups(
-            [(e.weight_factor() * e.importance, "", e) for e in hidden_hits],
-            seed, turn_index, always_slug=current_loc_slug)]
+        # ONE lottery over hidden and visible members together. Hidden hits are
+        # diverted into their own list above, before this line, so they used to
+        # skip the lottery entirely: three `hidden: true, group: twist` variants
+        # of one secret all shipped in the same Secrets block, contradicting each
+        # other — the exact harm `group:` exists to prevent. Running a SECOND
+        # lottery over the hidden list alone (the first attempt at this) still
+        # let a group with one hidden and one visible member emit both: mutual
+        # exclusion has to be decided across the whole group, not per list.
+        # D-001's pinned/critical exemption lives inside _collapse_groups, so
+        # routing everything through it keeps that decision intact.
+        hidden_by_slug = {e.slug for e in hidden_hits}
+        collapsed = self._collapse_groups(
+            candidates + [(e.weight_factor() * e.importance, "", e)
+                          for e in hidden_hits],
+            seed, turn_index, always_slug=current_loc_slug)
+        candidates = [c for c in collapsed if c[2].slug not in hidden_by_slug]
+        hidden_hits = [c[2] for c in collapsed if c[2].slug in hidden_by_slug]
         candidates.sort(key=lambda c: c[0], reverse=True)
         lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
         picked: dict[str, list[Entry]] = {}
@@ -2148,7 +2212,13 @@ def _unique_slug(root: Path, base: str) -> str:
     # title made only of punctuation, or of a script slugify cannot use).
     # templates.slugify used to supply this fallback itself, which is how
     # every unslugabble ENTITY name ended up sharing one key.
-    slug, n = base or "story", 2
+    # The fallback has to apply to the SUFFIXED names too. Putting it only on
+    # the first assignment meant a second punctuation-only title produced the
+    # folder "-2": created on disk and listed by the API, but _guard_slug
+    # rejects it (slugify("-2") == "2"), so the save could never be opened —
+    # and never deleted either.
+    base = templates.slugify_name(base)
+    slug, n = base, 2
     while (root / slug).exists():
         slug, n = f"{base}-{n}", n + 1
     return slug

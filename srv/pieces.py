@@ -144,9 +144,16 @@ def _delete_type_in(base_dir: Path, meta_name: str, fname: str) -> dict:
         raise HTTPException(404, "no such target")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     declared = meta.get("custom_files") or []
-    if fname not in declared:
+    if fname not in declared and not (base_dir / fname).exists():
         raise HTTPException(404, f"'{fname}' is not declared here")
     meta["custom_files"] = [f for f in declared if f != fname]
+    # Tombstone. A save reads its scenario's custom_files LIVE, and
+    # SaveLibrary.store() re-materializes every name custom_files() returns — so
+    # removing the name from this meta alone put the type straight back on the
+    # next open, as an empty stub over the registry the player had filled in.
+    # The delete has to be recorded, not just un-declared.
+    meta["removed_files"] = [f for f in (meta.get("removed_files") or [])
+                             if f != fname] + [fname]
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     try:
         (base_dir / fname).unlink()

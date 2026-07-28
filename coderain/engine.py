@@ -859,6 +859,18 @@ class Engine:
             narration = "".join(chunks).strip()
             if hidden:
                 sidecar = sidecar_mod.parse_sidecar("".join(hidden))
+                if not narration:
+                    # Everything from the marker onward IS the sidecar by
+                    # design, so a model that opens with the fence loses the
+                    # prose that follows it. The quad path reports exactly this
+                    # ("prose was swallowed by a stray sidecar fence"); the
+                    # single-brain path swallowed it in silence, and a turn that
+                    # applied deltas still counts as stored, so the reader got a
+                    # blank turn with no explanation anywhere.
+                    stray = "".join(hidden).strip()
+                    self.store.log_degraded(
+                        "writer", "no visible prose — all of it was inside or "
+                                  f"after the sidecar fence ({len(stray)} chars)")
         if narration:
             # ST-31 scrubs the MODEL's output; the ST-22 prefix is prepended AFTER
             # so a cleanup rule can't eat it (the prefix always begins the turn).
