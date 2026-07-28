@@ -18,6 +18,7 @@ from . import validator as validator_mod
 from . import config as config
 from .config import Config, context_budget
 from .llm import LLM
+from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore, safe_output_regex
 from .planner import ChapterPlanner
 from .summarizer import Summarizer
@@ -133,6 +134,10 @@ class Engine:
         self.cfg = config
         self.store = store
         self.llm = LLM(config.profile, config.generation)
+        # Every model call this story makes lands in memory/usage.jsonl with the
+        # provider's own token counts, tagged by stage. The client keeps working
+        # if this raises; the store swallows OSError for the same reason.
+        self.llm.on_usage = store.log_usage
         # The rolling chapter outline (book plan). NOT a per-turn brain — it rides
         # the summarizer's occasional LLM (seed once, extend once per completed
         # chapter). Passed into the summarizer so a scene fold can detect a chapter
@@ -447,7 +452,8 @@ class Engine:
             messages = [{**messages[0],
                          "content": messages[0]["content"] + "\n\n/no_think"},
                         *messages[1:]]
-        raw = "".join(self.llm.stream(messages))     # stream() filters <think>
+        with llm_stage(self.llm, "impersonate"):
+            raw = "".join(self.llm.stream(messages))  # stream() filters <think>
         visible, _ = sidecar_mod.strip_sidecar(raw)  # drop any ```rpg block
         return visible.strip()
 
@@ -792,8 +798,9 @@ class Engine:
         messages = [{"role": "system", "content": sys},
                     {"role": "user", "content": user_text}]
         chunks: list[str] = []
-        for piece in self.llm.stream(messages):
-            chunks.append(piece)
+        with llm_stage(self.llm, "talk"):
+            for piece in self.llm.stream(messages):
+                chunks.append(piece)
             yield piece
         reply = "".join(chunks).strip()
         if reply:
@@ -845,8 +852,9 @@ class Engine:
         convo = [{"role": "system", "content": LORE_CHECK_SYS},
                  {"role": "user", "content": payload}]
         try:
-            raw = self.llm.complete_with_tools(convo, LOOKUP_TOOL,
-                                               self._dispatch_tool)
+            with llm_stage(self.llm, "lore"):
+                raw = self.llm.complete_with_tools(
+                    convo, LOOKUP_TOOL, self._dispatch_tool)
         except Exception as e:  # noqa: BLE001 — never fatal
             if on_stage:
                 on_stage(f"Lore-keeper FAILED ({time.monotonic() - t0:.1f}s): {e} "

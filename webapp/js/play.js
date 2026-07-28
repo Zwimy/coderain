@@ -150,8 +150,52 @@ export async function contextModal(slug) {
     <p class="hint">Rules &amp; directives add ${d.rules_chars.toLocaleString()}
       chars; the ${d.history_msgs} verbatim turns add
       ${d.history_chars.toLocaleString()}.</p>
+    ${usageBlock(d.usage)}
     <div class="modal-actions"><button id="ctx-close">Close</button></div>`);
   $("#ctx-close").addEventListener("click", closeModal);
+}
+
+const fmtTok = n => (n >= 1e6 ? (n / 1e6).toFixed(2) + "M"
+  : n >= 1000 ? Math.round(n / 1000) + "k" : String(n));
+
+/* What this story has actually spent. Everything above the fold is what we
+   THINK we send; this is what the provider billed, off its own usage frame.
+   Per stage, because that answers the real question: is the extra brain
+   worth it. */
+function usageBlock(u) {
+  if (!u || !u.calls) {
+    return `<p class="hint">No token counts recorded yet. They appear once
+      you take a turn (some providers do not report usage at all).</p>`;
+  }
+  const cost = (tin, tout) => {
+    if (!u.price_in && !u.price_out) return "";
+    const c = tin / 1e6 * u.price_in + tout / 1e6 * u.price_out;
+    return ` · ${c < 0.01 ? "<$0.01" : "$" + c.toFixed(2)}`;
+  };
+  const stages = Object.entries(u.by_stage || {})
+    .sort((a, b) => (b[1].in + b[1].out) - (a[1].in + a[1].out));
+  const worst = Math.max(1, ...stages.map(([, s]) => s.in + s.out));
+  return `<h2>What it has cost</h2>
+    <p class="hint">The provider's own token counts, not an estimate.${
+      u.cached ? ` ${fmtTok(u.cached)} of the input was served from the
+      provider's prompt cache.` : ""}</p>
+    <div class="ctx-stats">
+      <div><b>${fmtTok(u.total_in)}</b><span>tokens in, all time</span></div>
+      <div><b>${fmtTok(u.total_out)}</b><span>tokens out</span></div>
+      <div><b>${u.calls}</b><span>model calls</span></div>
+      <div><b>${fmtTok(u.last_turn.in + u.last_turn.out)}</b>
+        <span>last turn${cost(u.last_turn.in, u.last_turn.out)}</span></div>
+    </div>
+    <div id="ctx-list">${stages.map(([name, s]) => `<div class="ctx-row">
+        <span class="ctx-name">${esc(name)}
+          <span class="muted">· ${s.calls}</span></span>
+        <div class="ctx-bar"><i style="width:${
+          Math.max(1, Math.round((s.in + s.out) / worst * 100))}%"></i></div>
+        <span class="ctx-n">${fmtTok(s.in + s.out)}</span>
+      </div>`).join("")}</div>
+    <p class="hint">All time: ${fmtTok(u.total_in + u.total_out)} tokens${
+      cost(u.total_in, u.total_out)}. Set your model's price per million tokens
+      in Settings to see cost.</p>`;
 }
 
 export async function renderPlay(slug) {

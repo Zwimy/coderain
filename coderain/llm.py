@@ -6,6 +6,7 @@ differ, and those come from the active profile in config.yaml.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from typing import Iterator
@@ -27,6 +28,77 @@ class LLM:
             api_key=profile.api_key,
             default_headers=profile.extra_headers or None,
         )
+        # --- token accounting -------------------------------------------
+        # The provider already tells us exactly what each call cost; we used to
+        # drop those frames on the floor and estimate from character counts
+        # instead. `on_usage` is set by the Engine to persist a record; `stage`
+        # says which part of the pipeline is spending (writer, director, fold,
+        # plan, lore, tool), so the cost of the optional brains is visible
+        # rather than inferred.
+        self.last_usage: dict | None = None
+        self.on_usage = None
+        self.stage = "writer"
+        self._ask_usage = True     # cleared if the provider rejects the option
+
+    @contextlib.contextmanager
+    def as_stage(self, stage: str):
+        """Label every call made inside the block. Restores the previous label,
+        so nesting (a fold triggered inside a turn) reports honestly."""
+        prev = self.stage
+        self.stage = stage
+        try:
+            yield
+        finally:
+            self.stage = prev
+
+    def _record(self, usage) -> None:
+        if usage is None:
+            return
+        rec = {
+            "stage": self.stage,
+            "model": self.profile.model,
+            "in": int(getattr(usage, "prompt_tokens", 0) or 0),
+            "out": int(getattr(usage, "completion_tokens", 0) or 0),
+        }
+        # A cached-prompt discount is worth seeing: it is most of the bill on a
+        # long story, where the system block barely changes between turns.
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", None) if details else None
+        if cached:
+            rec["cached"] = int(cached)
+        self.last_usage = rec
+        if self.on_usage:
+            try:
+                self.on_usage(rec)
+            except Exception:  # noqa: BLE001 — accounting must never kill a turn
+                pass
+
+    def _create(self, want_usage: bool, **kw):
+        if want_usage:
+            kw["stream_options"] = {"include_usage": True}
+        return self.client.chat.completions.create(**kw)
+
+    def _create_stream(self, **kw):
+        """Ask for usage, and stop asking if this provider won't have it.
+
+        `stream_options` is an OpenAI extension; some OpenAI-compatible servers
+        reject the unknown field with a 400. That must not break generation, so
+        one 400 downgrades this client for the rest of its life and the turn
+        proceeds without accounting.
+        """
+        if not self._ask_usage:
+            return self._create(False, **kw)
+        try:
+            return self._create(True, **kw)
+        except Exception as e:  # noqa: BLE001 — inspected, then re-raised
+            status = getattr(e, "status_code", None)
+            text = str(e).lower()
+            rejected = (status in (400, 422) or "stream_options" in text
+                        or "unknown" in text or "unsupported" in text)
+            if not rejected:
+                raise                      # a real failure: auth, network, model
+            self._ask_usage = False
+            return self._create(False, **kw)
 
     def _params(self, **overrides) -> dict:
         g = self.gen
@@ -56,13 +128,16 @@ class LLM:
         return p
 
     def _raw_stream(self, messages: list[dict], params: dict) -> Iterator[str]:
-        resp = self.client.chat.completions.create(
+        resp = self._create_stream(
             model=self.profile.model,
             messages=messages,
             stream=True,
             **params,
         )
         for chunk in resp:
+            # The usage frame arrives last and carries no choices — this is the
+            # exact frame the old code skipped, and it holds the real numbers.
+            self._record(getattr(chunk, "usage", None))
             if not getattr(chunk, "choices", None):
                 continue   # usage/keep-alive frames arrive with empty choices
             delta = chunk.choices[0].delta
@@ -88,6 +163,7 @@ class LLM:
                 model=self.profile.model, messages=convo,
                 tools=tools, tool_choice="auto", **params,
             )
+            self._record(getattr(resp, "usage", None))
             msg = resp.choices[0].message
             calls = getattr(msg, "tool_calls", None)
             if not calls:
@@ -113,7 +189,20 @@ class LLM:
         resp = self.client.chat.completions.create(
             model=self.profile.model, messages=convo, **params,
         )
+        self._record(getattr(resp, "usage", None))
         return _strip_think_text(resp.choices[0].message.content or "")
+
+
+def stage(llm, name: str):
+    """Label an LLM's calls, tolerating a client that isn't a full LLM.
+
+    Trinity, the summarizer and the planner all accept an injected client (a
+    pinned per-stage model, or a stub in the tests). Accounting is a nicety, so
+    a client without `as_stage` just doesn't get labelled — it must never turn
+    into an AttributeError mid-turn.
+    """
+    fn = getattr(llm, "as_stage", None)
+    return fn(name) if callable(fn) else contextlib.nullcontext()
 
 
 def _strip_think_text(text: str) -> str:

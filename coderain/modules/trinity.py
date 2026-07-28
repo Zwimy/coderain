@@ -32,6 +32,7 @@ import time
 from . import rpg as rpg_mod
 from .. import validator as validator_mod
 from ..llm import LLM, PROSE_MIN_TOKENS, emit_json_ex, extract_json
+from ..llm import stage as llm_stage
 
 DIRECTOR_SYS = """\
 You are the LOGIC AGENT (director) of an interactive story. Given the story context
@@ -210,7 +211,8 @@ class TrinityBrain:
         ctx, history = self._director_context(messages)
         director_msgs = [{"role": "system", "content": sys + "\n\n" + ctx},
                          *history]
-        obj, err = emit_json_ex(self.director_llm, "", messages=director_msgs)
+        with llm_stage(self.director_llm, "director"):
+            obj, err = emit_json_ex(self.director_llm, "", messages=director_msgs)
         return obj or {}, err
 
     def _redirect(self, env: dict, rejected: list) -> dict | None:
@@ -218,8 +220,9 @@ class TrinityBrain:
         deltas and get a corrected envelope back. None = re-ask failed."""
         payload = ("REJECTED deltas:\n" + validator_mod.rejection_text(rejected)
                    + "\n\nORIGINAL ENVELOPE:\n" + json.dumps(env))
-        obj, _err = emit_json_ex(self.director_llm, ENVELOPE_FIX_SYS, payload,
-                                 retry=0)
+        with llm_stage(self.director_llm, "director-fix"):
+            obj, _err = emit_json_ex(self.director_llm, ENVELOPE_FIX_SYS, payload,
+                                     retry=0)
         if not isinstance(obj, dict):
             return None
         # Accept either the bare envelope or a {"envelope": {...}} wrapper.

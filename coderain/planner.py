@@ -16,6 +16,7 @@ bends to the real story.
 from __future__ import annotations
 
 from .llm import emit_json
+from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore
 
 OUTLINE = "memory/outline.md"
@@ -106,7 +107,9 @@ class ChapterPlanner:
             payload += "\n\nWORLD:\n" + world[:2000]
         if arc:
             payload += "\n\nSTORY SO FAR:\n" + arc[:1500]
-        obj = emit_json(self.llm, SEED_INSTRUCTION.format(n=self.horizon), payload)
+        with llm_stage(self.llm, "plan"):
+            obj = emit_json(self.llm,
+                            SEED_INSTRUCTION.format(n=self.horizon), payload)
         chapters = (obj or {}).get("chapters")
         if not isinstance(chapters, list) or not chapters:
             return []                       # failed — leave empty, retry next fold
@@ -180,7 +183,8 @@ class ChapterPlanner:
             payload += "\n\nARC:\n" + arc[:1500]
         if recent:
             payload += "\n\nWHAT HAS ACTUALLY HAPPENED (recent):\n" + recent[:2000]
-        obj = emit_json(self.llm, NEXT_INSTRUCTION, payload)
+        with llm_stage(self.llm, "plan"):
+            obj = emit_json(self.llm, NEXT_INSTRUCTION, payload)
         if not isinstance(obj, dict) or not str(obj.get("title", "")).strip():
             return None
         return self._write_chapter(len(chapters) + 1, obj.get("title"),

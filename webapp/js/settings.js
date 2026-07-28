@@ -20,7 +20,7 @@ export async function renderSettings() {
      ${esc(p.label)}</option>`).join("");
 
   view.innerHTML = `<div class="page">
-    <h1>Settings</h1>
+    <h1>Settings <span class="ver">v${esc(st.version || "?")}</span></h1>
     <div class="seg" id="mode-seg">
       <button data-v="local" ${st.mode === "local" ? 'class="on"' : ""}>
         Local (Ollama)</button>
@@ -254,6 +254,19 @@ export async function renderSettings() {
           context. <b>"auto" fills the model's whole window every turn</b> — on a
           big-context model that gets very expensive, so a fixed number
           (8000–16000) is usually better.</p>
+        <div class="sub-head">What a turn costs</div>
+        <p class="hint">Every turn records the provider's own token counts. Put
+          your model's price in and the Context panel shows money instead of just
+          tokens. Coderain does not ship a price list because they go stale, and
+          a wrong number is worse than none.</p>
+        <div class="row2">
+          <div><label>$ per 1M input tokens</label>
+            <input id="mm-pin" type="number" min="0" step="0.01"
+              value="${esc(st.price_in ?? 0)}"></div>
+          <div><label>$ per 1M output tokens</label>
+            <input id="mm-pout" type="number" min="0" step="0.01"
+              value="${esc(st.price_out ?? 0)}"></div>
+        </div>
       </details>
     </div>
 
@@ -443,6 +456,8 @@ export async function renderSettings() {
         medium_fold_size: $("#mm-msize").value,
         context_budget_tokens: $("#mm-budget").value.trim(),
       },
+      price_in: $("#mm-pin").value || 0,
+      price_out: $("#mm-pout").value || 0,
       generation: {
         response_length: length,
         trinity_brain: $("#gc-trinity").checked,
