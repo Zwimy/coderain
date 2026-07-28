@@ -1761,10 +1761,15 @@ class MemoryStore:
                     sections.append((2, label + (" (more)" if always else ""),
                                      "\n\n".join(e.render() for e in rest)))
         if hidden_hits:
-            sections.append((
-                2, "Secrets you know (NOT yet revealed to the player — "
-                   "foreshadow, hint, let them discover; never state outright)",
-                "\n\n".join(e.render() for e in hidden_hits)))
+            # Hidden entries are diverted here BEFORE the pinned/critical split
+            # above, so the "always in context" contract has to be honoured again
+            # on this side — a `hidden: true` + `weight: critical` entry (an
+            # authored pattern; see wave2_test §1) was dropped whole at tight
+            # budgets while its visible sibling survived.
+            label = ("Secrets you know (NOT yet revealed to the player — "
+                     "foreshadow, hint, let them discover; never state outright)")
+            sections.append((2, label,
+                             "\n\n".join(e.render() for e in hidden_hits)))
 
         # related past episodes (Wave 2 hybrid retrieval): folds whose metadata
         # names an entity that just activated, plus their chronological
@@ -1816,9 +1821,17 @@ class MemoryStore:
             # already happened. Filtering them after the top-K slice instead let
             # them consume the slots: four high-scoring hidden entries with K=4
             # produced no "Recalled" section at all, while eligible ones waited.
+            # Scene slugs too. memory/scenes.md is not in INDEX_FILES, but the
+            # vector index DOES embed it — and scene rows are recent, long
+            # narrative prose, so they are the highest-scoring hits there are.
+            # Without them here the whole top-K was spent re-printing episodes
+            # already rendered verbatim in "Recent scenes" / "Related past
+            # scenes". (The ST-17 pass was fixed for this in round 2; this one
+            # was the other half of the same mistake.)
             exclude = (set(matched_slugs) | set(ref_slugs)
                        | {e.slug for e in player}
-                       | {s for s, (_r, e) in idx.entries.items() if e.hidden()})
+                       | {s for s, (_r, e) in idx.entries.items() if e.hidden()}
+                       | {e.slug for e in self.entries("memory/scenes.md")})
             recalled = [e for e in a.retriever(haystack, exclude)
                         if e.slug not in exclude and not e.hidden()]
             if recalled:
@@ -1851,6 +1864,7 @@ class MemoryStore:
         ranked = sorted(enumerate(sections),
                         key=lambda it: (it[1][0], len(it[1][2])))
         mark = "\n…(truncated)"
+        SEP = 0                 # the "\n\n" join below, counted so we don't overrun
         skipped: list[tuple[int, int, str, str]] = []
         for pos, (pr, title, body) in ranked:
             head = f"## {title}\n"
@@ -1861,31 +1875,40 @@ class MemoryStore:
             # budget: a long premise plus a long player entry measured at 2x.
             # The heading always survives, because a section the model can see the
             # name of is worth more than a few extra characters of its body.
+            cost = len(seg) + (SEP if kept else 0)   # "\n\n" between sections
             room = budget - used
-            if len(seg) > room:
-                if pr == 0:
-                    keep = room - len(head) - len(mark)
+            if pr == 0:
+                # Always-on. Trim into whatever is left rather than drop it; the
+                # heading survives even when nothing else can.
+                if cost > room:
+                    keep = room - len(head) - len(mark) - (SEP if kept else 0)
                     seg = head + body[:keep] + mark if keep > 0 else f"## {title}"
-                else:
-                    # Skip for now so a smaller section still gets its chance,
-                    # but remember it: the leftover room goes to the best skipped
-                    # one below. Trimming greedily here instead made packing
-                    # NON-MONOTONIC — a section that fitted-and-trimmed at a small
-                    # budget was dropped whole at a slightly larger one, because
-                    # only sections bigger than the WHOLE budget were trimmed.
-                    skipped.append((pos, pr, head, body))
-                    continue
-            if pr == 0 or used + len(seg) <= budget:
+                    cost = len(seg) + (SEP if kept else 0)
                 kept.append((pos, seg))
-                used += len(seg)
-        # One trimmed section fills whatever is left, highest priority first
-        # (ties: the one that came first in the ranked order, i.e. the smallest).
+                used += cost
+                continue
+            # Everything else: keep it if it fits, otherwise SKIP and carry on —
+            # a smaller section further down may still fit, and at a tight budget
+            # that is the difference between a degraded prompt and an empty one.
+            #
+            # This is knowingly not monotone at the margin: there are narrow
+            # budget bands where raising the budget promotes a big section and
+            # evicts smaller ones that had moved in behind it. Measured at ~5
+            # tokens wide. A strict prefix IS monotone, but it lets one fat
+            # high-priority section starve every tier below it, which at 220
+            # tokens meant no lore reached the model at all. Graceful degradation
+            # wins; see docs/DECISIONS.md D-003.
+            if cost <= room:
+                kept.append((pos, seg))
+                used += cost
+            else:
+                skipped.append((pos, pr, head, body))
+        # Whatever room is left goes to ONE trimmed section, best priority first.
         room = budget - used
         for pos, _pr, head, body in sorted(skipped, key=lambda s: s[1]):
-            keep = room - len(head) - len(mark)
+            keep = room - len(head) - len(mark) - (SEP if kept else 0)
             if keep > 0:
                 kept.append((pos, head + body[:keep] + mark))
-                used += room
             break
         chosen = [seg for _pos, seg in sorted(kept)]
 

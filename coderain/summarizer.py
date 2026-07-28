@@ -81,6 +81,9 @@ def _as_day(v) -> int:
     return v
 
 
+STR_LIMIT = 200      # free-text from a fold, mirroring validator.STR_CAP
+
+
 def _as_list(v) -> list:
     """Model-supplied lists, defensively. A scalar where a list belongs raised
     TypeError straight out of maybe_fold — leaving earlier promotions from the
@@ -267,10 +270,16 @@ class Summarizer:
         if fold_day is not None and fold_day >= cur_day:
             tm["day"], changed = fold_day, True
         current_or_later = fold_day is None or fold_day >= cur_day
+        # One line, bounded — the per-turn time_advance path already does this in
+        # validator._valid_time, and the fold path is the one writer that skipped
+        # it. clock_str() feeds attrs["when"] on every scene, which renders BEFORE
+        # the episode-index attrs; a newline there ends the header parse, so the
+        # characters/locations/quests index becomes body prose and recall_entity
+        # goes dead for that scene. A fold is one-way, so it never comes back.
         if t.get("phase") and current_or_later:
-            tm["phase"], changed = str(t["phase"]).strip(), True
+            tm["phase"], changed = _one_line(t["phase"])[:STR_LIMIT], True
         if "note" in t and current_or_later:
-            note = str(t.get("note", "")).strip()
+            note = _one_line(t.get("note", ""))[:STR_LIMIT]
             if note != tm.get("note", ""):
                 tm["note"], changed = note, True
         if not changed:

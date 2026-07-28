@@ -469,21 +469,14 @@ class App(tk.Tk):
             self._start_generation(lambda eng: eng.opening(on_stage=self._stage_cb),
                                    note="retrying the opening")
             return
-        if turns[-1]["role"] == "narrator" and len(turns) >= 2:
-            last_player = turns[-2]["text"]
-            self.store.drop_last_turns(2)
-        elif turns[-1]["role"] == "player":
-            # orphan player turn (previous generation produced nothing) — reuse it
-            last_player = turns[-1]["text"]
-            self.store.drop_last_turns(1)
-        else:
+        ok, last_player = self.engine.rollback_for_retry()
+        if not ok:
             messagebox.showinfo("Retry", "Nothing to retry yet.")
             return
-        self.engine.restore_pre_turn_rpg()  # roll back the retried turn's mechanics
         # Wipe the superseded response (and its fold/mechanics lines) from the page.
         self._clear_from_mark("resp_start")
         self._start_generation(
-            lambda eng: eng.turn(last_player, on_stage=self._stage_cb),
+            lambda eng: eng.regenerate(last_player, on_stage=self._stage_cb),
             fold_after=True, note="retrying")
 
     def _stage_cb(self, msg):
