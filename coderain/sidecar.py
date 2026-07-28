@@ -40,9 +40,20 @@ _FENCE_RE = re.compile(r"```rpg\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+_MARKER_RE = re.compile(re.escape(SIDECAR_MARKER), re.IGNORECASE)
+
+
 def find_marker(text: str, start: int = 0) -> int:
-    """Index of the sidecar fence, ignoring case. -1 when absent."""
-    return text.lower().find(SIDECAR_MARKER, start)
+    """Index of the sidecar fence in TEXT, ignoring case. -1 when absent.
+
+    Matched with a regex, not `text.lower().find(...)`: lower() is not
+    length-preserving (İ folds to two code points), so an index into the folded
+    copy drifts past the real fence. Turkish prose was enough to make
+    strip_sidecar leave the fence visible while filter_sidecar diverted only
+    part of the envelope — which then failed to parse, losing every delta.
+    """
+    m = _MARKER_RE.search(text, start)
+    return m.start() if m else -1
 
 
 def cfg_get(cfg: dict | None, key: str):
@@ -134,10 +145,11 @@ def strip_sidecar(text: str) -> tuple[str, dict | None]:
 
 
 def _partial_tail(buffer: str, tag: str) -> int:
-    low = buffer.lower()
     tail = 0
     for t in range(1, len(tag)):
-        if low.endswith(tag[:t]):
+        # casefold the SLICE, not the whole buffer: comparing suffixes needs no
+        # index arithmetic, so this stays correct for non-length-preserving folds.
+        if buffer[-t:].lower() == tag[:t]:
             tail = t
     return tail
 
