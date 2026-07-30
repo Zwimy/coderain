@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 
-from .llm import emit_json
+from .llm import emit_json_ex
 from .llm import stage as llm_stage
 from .memory import Entry, KIND_FILE, MemoryStore, trigger_hit
 
@@ -176,9 +176,23 @@ class Summarizer:
 
     # --- LLM call: thinking ON, JSON out, one retry ---
     def _emit_json(self, instruction: str, payload: str) -> dict | None:
+        """The fold's one model call.
+
+        emit_json_ex, not emit_json: the reason a fold's JSON failed is the most
+        valuable line this engine can write, because a fold is ONE-WAY. When it
+        comes back empty those turns are compressed to "(scene summary
+        unavailable)" and the pointer advances anyway, so there is no second
+        attempt and no later evidence of what went wrong. The wrapper that drops
+        the reason left "scene 1 produced no summary" as the only trace —
+        true, and useless for fixing it.
+        """
         rules = self.store.read("memory-rules.md").strip()
         with llm_stage(self.llm, "fold"):
-            return emit_json(self.llm, rules + "\n\n" + instruction, payload)
+            obj, err = emit_json_ex(self.llm, rules + "\n\n" + instruction,
+                                    payload)
+        if obj is None and err:
+            self.store.log_degraded("fold", f"fold JSON failed: {err}"[:400])
+        return obj
 
     def _hold_resolved(self, slug: str, attrs: dict) -> bool:
         """Keep a resolved thread resolved. Returns whether it had to intervene.
