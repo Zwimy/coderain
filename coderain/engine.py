@@ -847,9 +847,12 @@ class Engine:
                             *messages[1:]]
             chunks: list[str] = []
             hidden: list[str] = []
-            # response_length is a HARD output cap here, not just a prompt hint.
+            # prose_tokens, NOT reply_tokens: reasoning is spent out of the same
+            # allowance and goes first, so a prose-sized budget returns an empty
+            # turn instead of a short one (measured 4/4 empty on the shipped
+            # default model). See config.REASONING_HEADROOM.
             stream = self.llm.stream(
-                messages, max_tokens=config.reply_tokens(self.cfg.generation))
+                messages, max_tokens=config.prose_tokens(self.cfg.generation))
             # Filter in EVERY mode (see the tool path above): never leak a
             # ```rpg block, and keep the world/lore delta channel open.
             stream = sidecar_mod.filter_sidecar(stream, hidden)
@@ -1129,7 +1132,7 @@ class Engine:
     def _generate_with_tool(self, messages) -> str:
         return self.llm.complete_with_tools(
             messages, LOOKUP_TOOL, self._dispatch_tool,
-            max_tokens=config.reply_tokens(self.cfg.generation)).strip()
+            max_tokens=config.prose_tokens(self.cfg.generation)).strip()
 
     def _dispatch_tool(self, name, args):
         """Resolve a memory tool call (shared by the lookup path and Trinity's
