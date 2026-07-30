@@ -18,6 +18,8 @@ import json
 import random
 import re
 
+from .streaming import first_json_object
+
 # Config defaults; overridden by the `rpg:` block in config.yaml.
 DEFAULT_CFG = {
     "stats": ["strength", "agility", "intelligence", "knowledge",
@@ -90,31 +92,10 @@ def default_block(cfg: dict | None = None) -> dict:
     }
 
 
-def _first_json_object(s: str) -> str | None:
-    """Extract the first brace-balanced {...} object (string-aware), so an
-    unfenced/truncated sidecar with trailing braces isn't grabbed greedily."""
-    start = s.find("{")
-    if start == -1:
-        return None
-    depth, in_str, esc = 0, False, False
-    for i in range(start, len(s)):
-        c = s[i]
-        if in_str:
-            if esc:
-                esc = False
-            elif c == "\\":
-                esc = True
-            elif c == '"':
-                in_str = False
-        elif c == '"':
-            in_str = True
-        elif c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return s[start:i + 1]
-    return None
+# The scanner moved to streaming.py so llm.extract_json could stop using a
+# greedy regex that only claimed to be brace-balanced. Re-exported under the old
+# private name because rpg.py imports it from here.
+_first_json_object = first_json_object
 
 
 def parse_sidecar(text: str) -> dict | None:
