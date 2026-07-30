@@ -645,8 +645,20 @@ class Summarizer:
             # grew by one stale copy per fold, unbounded, and rode every prompt
             # at priority 1. Entry.render demotes body headings for exactly this
             # reason; the arc writer is the other place it matters.
-            arc = re.sub(r"(?m)^##(?=\s)", "###",
-                         str(obj["arc"]).strip())[:BODY_LIMIT]
+            #
+            # Split on splitlines(), not `(?m)^` — VERBATIM the form in
+            # Entry.render (memory.py), because the two are supposed to stay in
+            # sync and the comment above already says so. They diverged anyway:
+            # `^` breaks only on \n, while _arc_tail and store.beats() both scan
+            # with splitlines(), which also breaks on \r \v \f \x1c \x1d \x1e,
+            # NEL, U+2028 and U+2029. Model text carrying one of those forged a
+            # live `## Beats` — a heading no author wrote, in the file
+            # store.beats() reads, driving the per-turn "Beat n/m" block and the
+            # beat_advance delta the validator checks against it. Plus the
+            # unbounded per-fold growth this demotion was added to stop.
+            arc = "\n".join(
+                ("###" + ln[2:]) if re.match(r"##(?=\s)", ln) else ln
+                for ln in str(obj["arc"]).strip().splitlines())[:BODY_LIMIT]
             self.store.write("memory/arc.md",
                              "# Arc synopsis (long-term)\n\n" + arc + "\n"
                              + self._arc_tail())
