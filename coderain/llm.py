@@ -237,11 +237,10 @@ def extract_json(text: str) -> dict | None:
 # object mid-brace (finish=length), which then looks like "the model failed".
 JSON_MIN_TOKENS = 8192
 
-# Same disease, prose edition: the quad Writer's richer prompt (plan + resolved
-# mechanics) makes a reasoning model think longer, and at the user's normal
-# max_tokens the thinking can consume the WHOLE budget -> zero visible prose
-# (caught live: 28s of generation, empty output). Floor the writer stage.
-PROSE_MIN_TOKENS = 4096
+# The prose edition of the same disease lives in config.prose_tokens /
+# REASONING_HEADROOM. It used to be a PROSE_MIN_TOKENS constant here, which was
+# imported by trinity.py and then never used — the call site hardcoded a 1024
+# floor that could not engage — so the bug it was written for stayed live.
 
 
 def emit_json_ex(llm, system: str, payload: str = "", retry: int = 1,

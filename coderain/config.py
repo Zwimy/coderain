@@ -214,9 +214,9 @@ def context_budget(config: Config) -> int:
 # response_length is the primary length control. It used to only add a soft
 # prompt hint (which strong hosted models happily ignore) while max_tokens stayed
 # at 2500 for every setting, so "short" had no teeth. It now also caps the OUTPUT
-# tokens. The caps stay generous enough that a thinking model isn't starved of
-# prose (reasoning + reply share this budget); "medium" honors the user's own
-# max_tokens so the advanced sampler still means something.
+# tokens; "medium" honors the user's own max_tokens so the advanced sampler still
+# means something. This is the PROSE budget — see prose_tokens() for what actually
+# reaches the model, because reasoning is spent out of the same allowance.
 def reply_tokens(generation: dict | None) -> int:
     g = generation or {}
     length = str(g.get("response_length", "medium")).lower()
@@ -228,6 +228,31 @@ def reply_tokens(generation: dict | None) -> int:
         return max(256, int(g.get("max_tokens", 2500) or 2500))
     except (TypeError, ValueError):
         return 2500
+
+
+# A reasoning model spends max_tokens on THINKING first and prose second, so a
+# budget sized for prose alone comes back empty rather than short. The old comment
+# here claimed the caps were "generous enough that a thinking model isn't starved";
+# they were not. Measured on qwen3:4b — the shipped default model — with
+# response_length "short" (1200): 4 of 4 generations returned zero prose and the
+# story stayed empty, in BOTH single-brain and quad mode. Same config with 4096:
+# 4 of 4 landed.
+#
+# Headroom is ADDED rather than used as a floor on purpose. A flat floor at 4096
+# collapsed short/medium/long to one number (measured: {'short': 4096, 'medium':
+# 4096, 'long': 4096}), silently undoing the feature above. Adding keeps the three
+# settings ordered and distinct.
+#
+# Length is really enforced by the "LENGTH: keep it short" prompt directive, not by
+# this ceiling: at the same 4096 ceiling, "short" produced 350-605 chars and "long"
+# produced 1369-1753. Raising the ceiling does not lengthen prose.
+REASONING_HEADROOM = 3000
+
+
+def prose_tokens(generation: dict | None) -> int:
+    """max_tokens for a call that must return PROSE: the response_length budget
+    plus headroom for server-side reasoning, which shares the same allowance."""
+    return reply_tokens(generation) + REASONING_HEADROOM
 
 
 def _atomic_write(path: Path, text: str) -> None:

@@ -31,7 +31,7 @@ import time
 
 from . import rpg as rpg_mod
 from .. import validator as validator_mod
-from ..llm import LLM, PROSE_MIN_TOKENS, emit_json_ex, extract_json
+from ..llm import LLM, emit_json_ex, extract_json
 from ..llm import stage as llm_stage
 
 DIRECTOR_SYS = """\
@@ -328,11 +328,13 @@ class TrinityBrain:
         # yield ZERO prose (caught live on qwen3:4b at max_tokens 2500).
         overrides = {}
         if hasattr(self.writer_llm, "gen"):
-            # response_length caps the writer's output ("short" must actually be
-            # short). A minimum floor still keeps a reasoning writer from spending
-            # its whole budget on thinking and yielding zero prose.
-            from ..config import reply_tokens
-            overrides["max_tokens"] = max(1024, reply_tokens(self.writer_llm.gen))
+            # prose_tokens adds the reasoning headroom on top of the response_length
+            # budget. The old `max(1024, reply_tokens(...))` never engaged — 1024 is
+            # below every value reply_tokens can return (short=1200) — so the shipped
+            # default (qwen3:4b, medium/2500) kept producing empty turns, which is
+            # the exact failure the comment above it claimed to have fixed.
+            from ..config import prose_tokens
+            overrides["max_tokens"] = prose_tokens(self.writer_llm.gen)
         # The writer is told not to emit a sidecar; strip one defensively anyway so a
         # stray block never leaks into the prose. Mechanics come from the Director.
         raw = self.writer_llm.stream(writer_msgs, **overrides)

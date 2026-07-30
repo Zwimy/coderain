@@ -50,11 +50,26 @@ def test_length_reaches_the_model_as_max_tokens():
         list(eng.turn(f"do {length}"))
         seen[length] = cap.max_tokens
     print("max_tokens seen:", seen)
-    assert seen["short"] == 1200, seen
-    assert seen["medium"] == 2500, seen
-    assert seen["long"] == 4096, seen
-    assert seen["short"] < seen["medium"] < seen["long"]
-    print("response_length caps the real output budget on the prose path")
+    # These were 1200/2500/4096 — reply_tokens alone. That encoded the belief that
+    # max_tokens is a prose budget. It is not: a reasoning model spends it on
+    # thinking FIRST, so those numbers returned an empty turn rather than a short
+    # one (measured on qwen3:4b, the shipped default: 4 of 4 generations produced
+    # zero prose, story stayed empty). The prose path now sends prose_tokens =
+    # reply_tokens + REASONING_HEADROOM.
+    from coderain.config import REASONING_HEADROOM
+    assert seen["short"] == 1200 + REASONING_HEADROOM, seen
+    assert seen["medium"] == 2500 + REASONING_HEADROOM, seen
+    assert seen["long"] == 4096 + REASONING_HEADROOM, seen
+    # Still ORDERED and distinct. A flat floor at 4096 was tried first and
+    # collapsed all three to {'short': 4096, 'medium': 4096, 'long': 4096},
+    # silently disabling response_length; that is why headroom is added, not
+    # floored. This assertion is what catches a re-introduction of that.
+    assert seen["short"] < seen["medium"] < seen["long"], seen
+    # And the headroom must actually be there — a revert to bare reply_tokens
+    # passes the ordering check above but re-breaks every reasoning model.
+    assert seen["short"] > 1200, seen
+    print("response_length stays ordered, and every prose call carries "
+          "reasoning headroom")
 
 
 def test_length_directive_in_prompt():
