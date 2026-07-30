@@ -199,9 +199,28 @@ class Summarizer:
         attrs["status"] = "resolved"
         return True
 
+    def _player_slugs(self) -> set[str]:
+        """Every slug that means "the protagonist".
+
+        player.md already holds the player's sheet and rides EVERY prompt at
+        priority 0. A fold that promotes the protagonist into characters.md
+        creates a second, thinner copy of them which then competes with the real
+        sheet for lore budget and can contradict it. Measured in a 14-turn local
+        run: a `you` entry with an empty status, plus five more attempts on
+        you/player/<the player's invented name> filling health.jsonl."""
+        out = {"player", "you", "me", "myself", "self", "protagonist"}
+        for e in self.store.entries("player.md"):
+            for name in (e.slug, e.title, *e.aliases):
+                s = _slugify(str(name))
+                if s:
+                    out.add(s)
+        return out
+
     # --- apply validated promotions ---
     def _apply_promotions(self, obj: dict) -> list[str]:
         events: list[str] = []
+        # Read once per fold, not once per promotion: entries() re-reads the file.
+        player_slugs = self._player_slugs()
         for p in _as_list(obj.get("promotions")):
             if not isinstance(p, dict):
                 continue
@@ -222,6 +241,14 @@ class Summarizer:
                     "fold", "dropped a promotion: "
                             f"kind={kind!r:.40} slug={str(p.get('slug'))!r:.40} "
                             f"{'(no detail)' if not detail else ''}")
+                continue
+            if kind == "character" and slug in player_slugs:
+                # Not a degradation — a promotion the engine is right to refuse.
+                # Logged anyway so "why is there no `you` entry" has an answer in
+                # the Context panel instead of looking like a lost fold.
+                self.store.log_degraded(
+                    "fold", f"skipped promoting the player as an NPC "
+                            f"(slug={slug!r:.40}) — player.md is their sheet")
                 continue
             attrs = {}
             if p.get("status"):

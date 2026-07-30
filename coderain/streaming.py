@@ -102,3 +102,77 @@ def filter_think(chunks: Iterator[str]) -> Iterator[str]:
     tail = f.flush()
     if tail:
         yield tail
+
+
+def prompt_line_set(text: str) -> set[str]:
+    """The distinct non-blank lines of a prompt, for `filter_context_echo`."""
+    return {ln.strip() for ln in text.splitlines() if ln.strip()}
+
+
+def _is_echo(line: str, prompt_lines: set[str]) -> bool:
+    """Is this line context we generated, copied back verbatim?
+
+    Membership in `prompt_lines` is the whole test — we only ever delete text we
+    put in the prompt ourselves, so this cannot eat model-written prose. The two
+    extra conditions guard the coincidence case, where a short prose sentence
+    happens to repeat a context line exactly:
+
+    - a real sentence ends in terminal punctuation; a `## Time` header or a
+      `stats: strength 1` attr line does not.
+    - the scaffolding lines are all short. 200 is the same bound `_one_line`
+      uses for a rendered attr value.
+    """
+    s = line.strip()
+    if not s or len(s) > 200 or s[-1] in ".!?\"'”’":
+        return False
+    return s in prompt_lines
+
+
+def filter_context_echo(chunks: Iterator[str], prompt_lines: set[str],
+                        dropped_out: list[str]) -> Iterator[str]:
+    """Drop context scaffolding the model copied back at the START of its prose.
+
+    Small local models mimic the structure they are shown. Measured in a 14-turn
+    llama3.1:8b run: the opening reproduced the `## You {#player}` sheet verbatim
+    — heading, `importance:`, `stats:`, the lot — and then EVERY ONE of the 14
+    turns opened with the `## Time` / `Current in-world time:` block. A 3-turn
+    run of the same model whose opening happened to come out clean leaked nothing
+    afterwards, so one bad opening appears to prime the transcript, which is then
+    few-shot evidence for the next turn. Nothing stripped it, so it reached the
+    reader, the transcript, and every fold built on that transcript.
+
+    Only a LEADING run is dropped, and only lines that appear verbatim in the
+    prompt; the first line that isn't one switches this to a pass-through for the
+    rest of the stream. Anything dropped goes to `dropped_out` so the caller can
+    log it — an invisible deletion of model output would be its own invariant-2
+    bug.
+    """
+    buffer, passthrough = "", False
+    for piece in chunks:
+        if not piece:
+            continue
+        if passthrough:
+            yield piece
+            continue
+        buffer += piece
+        # Only decide on COMPLETE lines: a chunk boundary mid-line would
+        # otherwise judge "## Ti" as prose and unblock the whole filter.
+        while "\n" in buffer and not passthrough:
+            line, rest = buffer.split("\n", 1)
+            if _is_echo(line, prompt_lines):
+                dropped_out.append(line.strip())
+                buffer = rest
+            elif line.strip():
+                passthrough = True
+            else:
+                buffer = rest          # leading blank line, drop silently
+        if passthrough and buffer:
+            yield buffer
+            buffer = ""
+    # End of stream. A single-line reply never hit the newline branch above, so
+    # it still has to be judged — otherwise a turn that IS nothing but an echoed
+    # header would be emitted whole.
+    if buffer and not (not passthrough and _is_echo(buffer, prompt_lines)):
+        yield buffer
+    elif buffer:
+        dropped_out.append(buffer.strip())
