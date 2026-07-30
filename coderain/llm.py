@@ -16,6 +16,7 @@ from openai import OpenAI
 from .config import Profile
 # The pure stream-processing core lives in `streaming` (no network deps) so it can
 # also run in-browser under Pyodide. Re-exported here for backwards compatibility.
+from . import streaming
 from .streaming import THINK_CLOSE, THINK_OPEN, ThinkFilter, filter_think  # noqa: F401
 
 
@@ -209,26 +210,35 @@ def _strip_think_text(text: str) -> str:
     return "".join(filter_think(iter([text])))
 
 
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
 def extract_json(text: str) -> dict | None:
-    """Pull the first brace-balanced {...} object out of arbitrary model text and
-    validate it as a JSON dict. Returns None on no-match or invalid JSON."""
-    m = _JSON_RE.search(text)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-    except ValueError:
-        # ValueError, not JSONDecodeError: json.loads also raises a BARE
-        # ValueError for an integer literal past Python's 4300-digit conversion
-        # limit ({"day": 9999...}, the degenerate digit-repetition failure mode).
-        # That escaped this function and killed the turn with an uncaught
-        # exception and an EMPTY health log — invariant 2 both ways at once.
-        # JSONDecodeError is a ValueError subclass, so this still covers it.
-        return None
-    return obj if isinstance(obj, dict) else None
+    """Pull a JSON dict out of arbitrary model text. Returns None if there isn't
+    one.
+
+    Now genuinely brace-balanced (streaming.json_objects), which is what this
+    docstring always claimed. It used to be `re.compile(r"\\{.*\\}", re.DOTALL)`
+    — greedy, first brace to LAST brace — so a model that wrote valid JSON and
+    then added a closing sentence containing a brace produced no object at all.
+
+    It takes the first candidate that PARSES rather than the first that exists,
+    because a reasoning model often narrates a brace before committing to the
+    real object ("I'll return {scene_summary: ...} shaped output:"). Stopping at
+    the first balanced span would hand back that sketch instead of the answer.
+    """
+    for raw in streaming.json_objects(text):
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            # ValueError, not JSONDecodeError: json.loads also raises a BARE
+            # ValueError for an integer literal past Python's 4300-digit
+            # conversion limit ({"day": 9999...}, the degenerate
+            # digit-repetition failure mode). That escaped this function and
+            # killed the turn with an uncaught exception and an EMPTY health
+            # log — invariant 2 both ways at once. JSONDecodeError is a
+            # ValueError subclass, so this still covers it.
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
 
 
 # JSON stages on reasoning models (qwen3 etc.) need headroom: the server-side

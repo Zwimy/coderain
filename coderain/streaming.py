@@ -104,6 +104,50 @@ def filter_think(chunks: Iterator[str]) -> Iterator[str]:
         yield tail
 
 
+def json_objects(s: str):
+    """Yield each brace-balanced ``{...}`` substring of `s`, in order.
+
+    String-aware, so a brace inside a JSON string value doesn't shift the depth
+    count and an escaped quote doesn't end the string early.
+
+    This lives here — the dependency-free core — because it had TWO homes and
+    they disagreed. sidecar.py scanned properly; llm.extract_json used
+    ``re.compile(r"\\{.*\\}", re.DOTALL)`` while its docstring claimed to be
+    "brace-balanced". That regex is greedy: on ``{"a": 1} trailing text }`` it
+    spans from the first brace to the LAST one and parses nothing, so a model
+    that appends a sentence after valid JSON reads as a total failure. Two copies
+    of one rule, and the fold path had the weaker one.
+    """
+    depth = start = 0
+    in_str = esc = False
+    for i, c in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                yield s[start:i + 1]
+
+
+def first_json_object(s: str) -> str | None:
+    """The first brace-balanced ``{...}`` object, or None."""
+    for obj in json_objects(s):
+        return obj
+    return None
+
+
 def prompt_line_set(text: str) -> set[str]:
     """The distinct non-blank lines of a prompt, for `filter_context_echo`."""
     return {ln.strip() for ln in text.splitlines() if ln.strip()}

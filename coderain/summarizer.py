@@ -213,6 +213,33 @@ class Summarizer:
         attrs["status"] = "resolved"
         return True
 
+    # A slug the model built by prefixing the entry's KIND. Measured live:
+    # qwen3:4b promoted the same character twice in one story, as
+    # `shadow-figure` and `char-shadow-figure`, so the lorebook carried two
+    # entries for one person — each with half the detail, both competing for the
+    # same budget, and neither the "real" one. Stripping the redundant prefix
+    # makes the second promotion MERGE into the first via merge_entry.
+    #
+    # Kind-scoped on purpose: only a character sheds "char-", only a location
+    # sheds "loc-". A location genuinely called "Character Hall" keeps its slug,
+    # because "character-" is never stripped from a location.
+    _KIND_PREFIXES = {
+        "character": ("character-", "char-", "npc-", "person-"),
+        "location": ("location-", "loc-", "place-"),
+        "faction": ("faction-", "group-"),
+        "item": ("item-", "object-"),
+        "thread": ("thread-", "quest-", "plot-"),
+        "canon-event": ("canon-event-", "event-"),
+    }
+
+    @classmethod
+    def _normalize_slug(cls, slug: str, kind: str) -> str:
+        """Drop one redundant kind prefix. Never empties the slug."""
+        for pre in cls._KIND_PREFIXES.get(kind, ()):
+            if slug.startswith(pre) and len(slug) > len(pre) + 1:
+                return slug[len(pre):]
+        return slug
+
     def _player_slugs(self) -> set[str]:
         """Every slug that means "the protagonist".
 
@@ -240,12 +267,22 @@ class Summarizer:
                 continue
             kind = str(p.get("kind", "")).strip().lower()
             rel = KIND_FILE.get(kind)
-            slug = _slugify(str(p.get("slug", "")))
+            slug = self._normalize_slug(_slugify(str(p.get("slug", ""))), kind)
             # Through _one_line as well: Entry.render writes the title into the
             # `## {title}  {{#slug}}` header, so a newline there splits the entry
             # and the next promotion of the same slug creates a DUPLICATE.
             title = _one_line(p.get("title", "")) or slug
             detail = str(p.get("detail", "")).strip()[:BODY_LIMIT]
+            # A one-character slug is never a real entity — it is what falls out
+            # when a model emits a stray letter or a list gets iterated as
+            # characters (the shape D-009 describes). deepseek-r1:8b wrote a `y`
+            # entry into characters.md this way. Permanent lorebook noise for a
+            # value that cannot identify anything, so require two characters.
+            if rel and slug and len(slug) < 2:
+                self.store.log_degraded(
+                    "fold", f"dropped a promotion: kind={kind!r:.40} slug="
+                            f"{slug!r:.40} is too short to name anything")
+                continue
             if not rel or not slug or not detail:
                 # Loudly. A promotion the fold meant to make and the engine
                 # cannot is exactly the silent one-way loss invariant 2 is
