@@ -607,11 +607,13 @@ export async function renderPlay(slug) {
     live.setAttribute("aria-busy", "true");
     let settled = null;                  // ST-31: the regex-cleaned stored text
     let serverTurns = null;              // the store's authoritative turn count
+    let streamed = false;                // did any NON-EMPTY chunk arrive
     let failed = null;
     try {
       await sse(path, body, {
         stage: m => { label = m.text; },
-        chunk: m => { live.classList.remove("pending");
+        chunk: m => { if (m.text) streamed = true;   // an EMPTY chunk is not prose
+                      live.classList.remove("pending");
                       liveBody.textContent += m.text;
                       transcript.scrollTop = transcript.scrollHeight; },
         done: m => { setEvents(m.events); setSheet(m.sheet || []);
@@ -679,6 +681,24 @@ export async function renderPlay(slug) {
       // Same length, but the screen is ahead of the store — the turn produced
       // nothing and its optimistic bubble has to go. Retry is exempt: it
       // legitimately ends one bubble ahead while it regenerates.
+      toast("That turn produced nothing and was discarded.", "info");
+    } else if (!streamed && domTurns() === storeBefore) {
+      // Continue. It is the one caller with NEITHER property the two branches
+      // above rely on: it appends no optimistic bubble (so the DOM never runs
+      // ahead) and it stores nothing (so the story never gets shorter). An
+      // empty Continue was therefore reported nowhere — the reader clicked,
+      // watched "Thinking… 14s", and got back an unchanged screen in silence.
+      // Keyed on the DOM, not on the done frame's count: an empty generation
+      // does not always deliver one, and a branch that silently does nothing
+      // when its input is null is how this was missed the first time. By here
+      // the live bubble is already removed if it stayed empty, so domTurns()
+      // is the store's count whenever nothing was stored.
+      //
+      // Added as a separate branch rather than by loosening one above, because
+      // Send and retry are already caught earlier in this chain and must not
+      // move: Send-empty keeps its optimistic bubble (so the DOM is ahead and
+      // reconcile catches it) and retry-empty makes the story shorter.
+      // Invariant 2: degrading is fine, degrading invisibly is not.
       toast("That turn produced nothing and was discarded.", "info");
     }
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
@@ -947,6 +967,20 @@ export async function renderPlay(slug) {
       if (ok === undefined) return;      // keep the editor open with their text
       toast("Saved — the next turn will use it.", "ok");
       closeModal();
+      // Repaint from server truth. UNCONDITIONALLY, not just for transcript.md —
+      // narrowing this is the cleverness that generates the next defect.
+      //
+      // The server does everything right on this route (snapshot, forget the
+      // cached exchange, clamp the ledger, trim the folds) and then never told
+      // the client. Cut one exchange in "Transcript (raw)" and the DOM stayed
+      // two turns ahead of the store — and turn indices are DOM POSITION, so
+      // the next ✎ PUT its edit to a neighbouring index and overwrote a
+      // DIFFERENT turn. It returns 200, and the bubble then repaints with the
+      // new text, so the screen agrees with the lie. update_turn takes no
+      // snapshot and there is no restore path in the UI, so the overwritten
+      // prose is simply gone. Undo/Send/Retry all self-correct through
+      // reconcile()/resync(); the pen is the one writer that cannot.
+      await resync();
     });
     await load();
   });

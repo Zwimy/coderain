@@ -16,7 +16,10 @@ Asserts, once it can run:
  1) every view renders, with a clean console and no 5xx;
  2) the modals that cross module boundaries open and carry real content;
  3) navigation cleans up after itself (the Talk drawer does not orphan);
- 4) a slow view cannot paint over a newer navigation.
+ 4) a slow view cannot paint over a newer navigation;
+ 5) a Memory-panel edit repaints the transcript, so the pen cannot address a
+    turn that moved (this one destroys user prose when it regresses);
+ 6) an empty Continue is reported to the reader, not swallowed.
 """
 import os
 import shutil
@@ -65,6 +68,11 @@ try:
     }).json()["slug"]
     server._engine(slug).store.log_usage(
         {"stage": "writer", "model": "m", "in": 1200, "out": 240})
+    # Two real exchanges, so checks 5 and 6 have a transcript to work on. There
+    # is no model on this box, so they are appended rather than generated.
+    for _role, _text in (("player", "PLAYER-1"), ("narrator", "NARRATOR-1"),
+                         ("player", "PLAYER-2"), ("narrator", "NARRATOR-2")):
+        server._engine(slug).store.append_turn(_role, _text)
     # Whatever the bundled world is called on a fresh install — do not hardcode
     # it; the builder view needs a scenario that actually exists.
     scen = (c.get("/api/saves").json().get("scenarios") or [{}])[0].get("slug")
@@ -167,6 +175,66 @@ with sync_playwright() as p:
         failures.append("a slow render painted over a newer navigation "
                         "(hash says #play, the view does not)")
     print("4) a slow render can't paint over a newer navigation")
+
+    # --- a Memory-panel edit must repaint the transcript ------------------
+    # Turn indices are DOM POSITION. The server handles this route correctly
+    # (snapshot, forget the cached exchange, clamp the ledger, trim folds) and
+    # then used to return without telling the client — so after cutting an
+    # exchange the DOM stayed two turns ahead of the store, and the very next
+    # pen edit PUT its text to a neighbouring index and overwrote a DIFFERENT
+    # turn. update_turn takes no snapshot and the UI exposes no restore, so the
+    # prose it overwrites is gone. That is why this check is worth its cost.
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#mem-btn", timeout=8000)
+    page.wait_for_timeout(400)
+    before_dom = page.evaluate("document.querySelectorAll('#transcript .turn').length")
+    if before_dom != 4:
+        failures.append(f"expected 4 turns on screen before the edit, saw {before_dom}")
+    page.click("#mem-btn")
+    page.wait_for_selector("#mem-file", timeout=8000)
+    page.select_option("#mem-file", "transcript.md")
+    page.wait_for_timeout(500)
+    kept = page.evaluate("""() => {
+      const t = document.querySelector('#mem-text');
+      const cut = t.value.split('<!-- @player -->');
+      return cut.slice(0, 2).join('<!-- @player -->');   // keep exchange 1 only
+    }""")
+    page.evaluate("v => { document.querySelector('#mem-text').value = v; }", kept)
+    page.click("#mem-save")
+    page.wait_for_timeout(1200)
+    after_dom = page.evaluate("document.querySelectorAll('#transcript .turn').length")
+    store_turns = len(server._engine(slug).store.turns())
+    if after_dom != store_turns:
+        failures.append(
+            f"the Memory panel edit left the screen out of step with the store "
+            f"(DOM {after_dom} turns, store {store_turns}) — the next pen edit "
+            f"would rewrite a different turn on disk")
+    print("5) a Memory-panel edit repaints the transcript")
+
+    # --- an empty generation must be reported ----------------------------
+    # Continue is the one caller that appends no optimistic bubble AND stores
+    # nothing, so both of the checks that catch Send and retry miss it. It went
+    # silent for exactly one commit: the reader clicked, waited, and got an
+    # unchanged screen with no toast, no event and no stage line.
+    # Patch the CLASS, not the cached instance. Setting `.llm` on
+    # server._engine(slug) does not reach the engine the route actually uses,
+    # and the symptom is a "Can't reach the model" frame that looks like an
+    # environment problem rather than a broken stub.
+    import coderain.llm as _llm_mod
+    _llm_mod.LLM.stream = lambda self, messages, **k: iter([""])
+    _llm_mod.LLM.complete = lambda self, messages, **k: ""
+    page.evaluate("const t = document.querySelector('#toast'); if (t) t.className = '';")
+    page.wait_for_selector("#modal-root.hidden", state="attached", timeout=8000)
+    page.evaluate("document.querySelector('#continue').click()")
+    page.wait_for_timeout(3000)
+    said = page.evaluate(
+        "(() => { const t = document.querySelector('#toast');"
+        " return t && t.classList.contains('show') ? t.textContent : ''; })()")
+    if "produced nothing" not in said:
+        failures.append(
+            f"an empty Continue said nothing to the reader (toast={said!r}); "
+            "invariant 2 — degrading is fine, degrading invisibly is not")
+    print("6) an empty Continue is reported to the reader")
 
     browser.close()
 

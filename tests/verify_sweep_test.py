@@ -15,8 +15,8 @@ Asserts:
     prompt;
  3) a body cannot forge a second entry using a non-newline line separator;
  4) both neutralizations round-trip exactly — the body reads back as written;
- 5) the retry arithmetic: a successful retry is not reported as discarded, and
-    an empty one still is.
+ 5) removed — it was a source-text check that pinned no behaviour. See
+    tests/webapp_smoke_test.py for the toast matrix it claimed to cover.
 """
 import os
 import shutil
@@ -91,27 +91,18 @@ assert again.body == got.body and again.attrs == got.attrs, (
     "render/parse is not idempotent for a neutralized body")
 print("4) the '<!--' neutralization round-trips and is a fixpoint")
 
-# ---- 5) the retry toast arithmetic -------------------------------------
-# webapp/js/play.js is not importable here, so this pins the arithmetic the
-# browser executes. `storeBefore` must be read BEFORE the optimistic bubbles are
-# appended, or a successful retry (which stores exactly what it removed) looks
-# like a rollback and is reported to the reader as discarded.
-js = (Path(__file__).resolve().parents[1] / "webapp" / "js" / "play.js").read_text(
-    encoding="utf-8")
-before_at = js.index("const storeBefore = domTurns();")
-optimistic_at = js.index('const optimistic = playerText !== undefined')
-live_at = js.index('const live = addTurn("narrator", "");')
-assert before_at < optimistic_at < live_at, (
-    "storeBefore is measured after the in-flight bubbles are appended, so it is "
-    "the store count PLUS 1 (retry/continue) or PLUS 2 (send) — and the "
-    "`serverTurns < storeBefore` test then fires on every SUCCESSFUL retry")
-assert "startTurns" not in js, "the old, wrongly-placed counter is still there"
-# the empty-retry path must still be reported: that branch is what covers retry,
-# which is exempt from the reconcile() branch below it.
-assert "serverTurns < storeBefore" in js
-assert "!ownsRepaint && await reconcile(serverTurns)" in js, (
-    "the non-retry path lost its toast; an empty Send would go unreported")
-print("5) the retry arithmetic is measured before the in-flight bubbles")
+# ---- 5) DELETED. It tested nothing. -----------------------------------
+# What stood here was four `js.index()` substring checks over play.js source.
+# It evaluated no behaviour, it printed green over a real regression in the very
+# branch it claimed to pin (an empty Continue stopped being reported at all),
+# and on reverted code the index() calls raised ValueError — so its "confirmed
+# red against the reverted fix" passed for the wrong reason, which is the exact
+# trap this file exists to document.
+#
+# A source-text assertion cannot pin browser behaviour. The retry/Continue toast
+# matrix now lives in tests/webapp_smoke_test.py, where a real Chromium clicks
+# the buttons, and the Memory-panel repaint is pinned there too.
+print("5) (removed — see webapp_smoke_test.py for the toast matrix)")
 
 shutil.rmtree(HOME, ignore_errors=True)
 print("\nVERIFY-SWEEP FINDINGS: ALL CLOSED")
