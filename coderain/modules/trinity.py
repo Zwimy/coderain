@@ -32,6 +32,7 @@ import time
 from . import rpg as rpg_mod
 from .. import validator as validator_mod
 from ..llm import LLM, emit_json_ex, extract_json
+from ..streaming import filter_context_echo, prompt_line_set
 from ..llm import stage as llm_stage
 
 DIRECTOR_SYS = """\
@@ -344,9 +345,21 @@ class TrinityBrain:
         # transcript.md, where it poisons every later context window and the
         # summarizer. The comment above already claimed this happened.
         stream = rpg_mod.filter_sidecar(raw, hidden)
+        # …and drop echoed context scaffolding, exactly like the single-brain
+        # path. The quad Writer sees the same `## Time` block, so it has the same
+        # opportunity to copy it back into the prose.
+        echoed: list[str] = []
+        stream = filter_context_echo(
+            stream,
+            prompt_line_set(writer_msgs[0]["content"] if writer_msgs else ""),
+            echoed)
         for piece in stream:
             out_chunks.append(piece)
             yield piece
+        if echoed:
+            self.store.log_degraded(
+                "writer", f"dropped {len(echoed)} line(s) of context the model "
+                          f"copied back into its prose: {echoed[0]!r:.60}")
         # An empty Writer is a real failure mode (a silent one cost a live run):
         # say WHICH way it was empty — everything diverted as a stray sidecar
         # fence, or the model produced nothing visible at all (think-only/empty).

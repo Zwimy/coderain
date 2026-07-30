@@ -13,6 +13,7 @@ from typing import Iterator
 
 from . import features
 from . import sidecar as sidecar_mod
+from . import streaming
 from . import templates
 from . import validator as validator_mod
 from . import config as config
@@ -856,9 +857,24 @@ class Engine:
             # Filter in EVERY mode (see the tool path above): never leak a
             # ```rpg block, and keep the world/lore delta channel open.
             stream = sidecar_mod.filter_sidecar(stream, hidden)
+            # Then drop any context scaffolding the model copied back at the top
+            # of its reply. messages[0] ONLY: that is where assemble() puts the
+            # sections, and matching against the transcript too would let a
+            # legitimately repeated line be deleted as an echo.
+            echoed: list[str] = []
+            stream = streaming.filter_context_echo(
+                stream,
+                streaming.prompt_line_set(messages[0]["content"] if messages
+                                          else ""),
+                echoed)
             for piece in stream:
                 chunks.append(piece)
                 yield piece
+            if echoed:
+                self.store.log_degraded(
+                    "writer", f"dropped {len(echoed)} line(s) of context the "
+                              f"model copied back into its prose: "
+                              f"{echoed[0]!r:.60}")
             narration = "".join(chunks).strip()
             if hidden:
                 sidecar = sidecar_mod.parse_sidecar("".join(hidden))
