@@ -237,6 +237,22 @@ def extract_json(text: str) -> dict | None:
 # object mid-brace (finish=length), which then looks like "the model failed".
 JSON_MIN_TOKENS = 8192
 
+# 8192 is not always enough either, and chasing the number upward is a losing
+# game — reasoning length scales with the payload, and a fold's payload grows
+# with the story. The retry has to be able to RECOVER instead.
+#
+# Measured on qwen3:4b: scene fold 1 failed "JSON truncated (unclosed brace)",
+# scene fold 2 failed "model returned empty output" — both at the 8192 floor, and
+# both permanent, because a fold is one-way and its pointer advances regardless.
+# Isolated, the same call at a 1176-token prompt succeeded while spending ~2861
+# tokens on reasoning before 300 characters of JSON; a real fold prompt is
+# several times larger.
+#
+# The old retry could not have helped: it re-sent at the SAME budget with a nudge
+# ("That was not valid JSON"), so a truncation failure truncated identically the
+# second time. Escalating the ceiling is what makes the retry mean something.
+JSON_RETRY_CEILING = 24576
+
 # The prose edition of the same disease lives in config.prose_tokens /
 # REASONING_HEADROOM. It used to be a PROSE_MIN_TOKENS constant here, which was
 # imported by trinity.py and then never used — the call site hardcoded a 1024
@@ -274,16 +290,32 @@ def emit_json_ex(llm, system: str, payload: str = "", retry: int = 1,
         if obj is not None:
             return obj, None
         tail = text.strip()[-80:].replace("\n", " ")
+        # Two of these three mean "the model ran out of room", not "the model got
+        # it wrong", and they are the two that actually happen on a reasoning
+        # model. They need a bigger budget, not a scolding.
+        starved = False
         if "{" in text and text.count("{") > text.count("}"):
             err = (f"JSON truncated (unclosed brace — likely max_tokens too small "
                    f"for a reasoning model); tail: …{tail}")
+            starved = True
         elif not tail:
             err = "model returned empty output"
+            starved = True
         else:
             err = f"no valid JSON in output; tail: …{tail}"
-        convo.append({"role": "user",
-                      "content": "That was not valid JSON. Return ONLY the "
-                                 "JSON object, nothing else."})
+        if starved and overrides.get("max_tokens"):
+            # Raise the ceiling for the next attempt. This is a cap, not a target:
+            # a model that finishes early still finishes early, so the only cost
+            # of headroom is the room to not fail.
+            grown = min(JSON_RETRY_CEILING, int(overrides["max_tokens"]) * 2)
+            if grown > overrides["max_tokens"]:
+                overrides["max_tokens"] = grown
+                err += f" [retrying at max_tokens={grown}]"
+        convo.append({"role": "user", "content": (
+            "Your previous reply ran out of room before the JSON was finished. "
+            "Answer again with a SHORT JSON object and nothing else — keep every "
+            "string brief." if starved else
+            "That was not valid JSON. Return ONLY the JSON object, nothing else.")})
     return None, err
 
 
