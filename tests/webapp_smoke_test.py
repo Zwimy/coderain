@@ -236,6 +236,32 @@ with sync_playwright() as p:
             "invariant 2 — degrading is fine, degrading invisibly is not")
     print("6) an empty Continue is reported to the reader")
 
+    # --- the first-run screen's escape hatch must not throw ---------------
+    # welcome.js used to do `_ready = {ok: true, skipped: true}` on an imported
+    # ES-module binding. Imported bindings are read-only views, so clicking
+    # "Look around first" threw `TypeError: Assignment to constant variable.`,
+    # the button did nothing, and a user whose model was unreachable could not
+    # get past the first screen the app shows them. The setter now lives in
+    # nav.js beside the binding.
+    #
+    # Driven through the modules rather than the gate: /api/ready answers ok
+    # whenever a model IS reachable, so on a dev box with Ollama running the
+    # gate never appears and a click-based check would prove nothing silently.
+    skip_result = page.evaluate("""async () => {
+      try {
+        const nav = await import('/js/nav.js');
+        if (typeof nav.skipReadyCheck !== 'function') return 'no setter exported';
+        nav.invalidateReady();
+        nav.skipReadyCheck();
+        const st = await nav.checkReady();
+        return (st && st.ok && st.skipped) ? 'ok' : 'setter did not take: ' + JSON.stringify(st);
+      } catch (e) { return 'threw: ' + e.message; }
+    }""")
+    if skip_result != "ok":
+        failures.append(f"'Look around first' cannot satisfy the readiness "
+                        f"probe: {skip_result}")
+    print("7) the first-run screen's escape hatch works")
+
     browser.close()
 
 srv.should_exit = True

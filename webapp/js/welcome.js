@@ -1,6 +1,6 @@
 /* First run: no stories yet, so pick a model and start one. */
 import {$, api, esc, guard, toast, view} from "./util.js";
-import {_ready, checkReady, invalidateReady} from "./nav.js";
+import {checkReady, invalidateReady, skipReadyCheck} from "./nav.js";
 import {render} from "./app.js";
 
 export async function renderWelcome(state) {
@@ -96,7 +96,7 @@ export async function renderWelcome(state) {
     location.hash = "#library";
     render();
   });
-  $("#w-skip").addEventListener("click", () => { _ready = {ok: true, skipped: true}; });
+  $("#w-skip").addEventListener("click", skipReadyCheck);
   const note = $("#w-hosted-note");
   const showNote = () => {
     const p = presets[Number($("#w-preset").value) || 0];

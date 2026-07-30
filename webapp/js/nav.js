@@ -55,3 +55,14 @@ export async function checkReady(force = false) {
 }
 
 export function invalidateReady() { _ready = null; }
+
+/* "Look around first" on the first-run screen: satisfy the probe for this
+   session without claiming a model was found, so app.js's gate lets the user
+   through while Settings still shows the real state.
+
+   This lives HERE, next to the binding, because `_ready` is a module-level
+   `let` and an importing module CANNOT assign to it — imported bindings are
+   read-only views. welcome.js did exactly that, so the first screen a new user
+   sees threw `TypeError: Assignment to constant variable.`, the button did
+   nothing, and a stopped Ollama locked an existing user out of their Library. */
+export function skipReadyCheck() { _ready = {ok: true, skipped: true}; }
