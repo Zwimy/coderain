@@ -328,9 +328,17 @@ is pending — never hand them out otherwise.
 # blocks out of 15 and NOT ONE world delta reached state on any of the three. Two
 # of llama's blocks were the example copied verbatim, which the validator rightly
 # threw away. Making the block unconditional — always last, `{"deltas": {}}` when
-# nothing changed — took it to 9 of 15 fences, deltas landing on all three models,
-# and `location` from never-set to always-set. One deterministic rule is easier
-# for a small model to follow than a conditional one. Re-measure before rewording.
+# nothing changed — took it to 9 of 15 fences and `location` from never-set to
+# set. One deterministic rule is easier for a small model to follow than a
+# conditional one. Re-measure before rewording.
+#
+# What this does NOT do, measured on an independent run afterwards: make llama
+# compliant. qwen3:4b landed location AND a flag (7/12 fences, 3 ledger records);
+# llama3.1:8b emitted 2 blocks and STILL wrote nothing to the ledger, so its
+# blocks are being rejected, not missing. The A/B's llama column (2 fences, 3
+# records) did not reproduce. Treat per-model compliance as a distribution, not a
+# property: a single 5-generation sample is too small to call, which is why this
+# note exists instead of a claim that it works everywhere.
 WORLD_SIDECAR = """\
 ## World updates (required)
 
