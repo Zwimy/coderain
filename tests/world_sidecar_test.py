@@ -32,7 +32,14 @@ from coderain.memory import Library  # noqa: E402
 
 lib = Library(os.path.join(HOME, "lib"))
 
-WORLD_SC_HEADING = "## Keeping the world consistent"
+# Was "## Keeping the world consistent" — that version was headed "(optional)"
+# and told the model "no block at all is fine". Measured across three local
+# models it yielded 3 fenced blocks in 15 generations and zero world deltas
+# reaching state, so the injection this suite proves exists was doing nothing in
+# practice. What matters here is that the block IS injected in narrative mode and
+# NOT injected with RPG on, which is what the two assertions below check; the
+# heading is only how they find it.
+WORLD_SC_HEADING = "## World updates (required)"
 TAVERN_BODY = "A smoke-filled den where quiet deals are struck."
 
 

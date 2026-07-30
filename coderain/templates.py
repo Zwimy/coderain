@@ -321,12 +321,29 @@ is pending — never hand them out otherwise.
 # purpose: fewer keys means fewer output tokens and better compliance on small
 # local models. Quad mode doesn't need it — the Director proposes world deltas from
 # its own schema (_ENV_WORLD).
+# Wording here is MEASURED, not styled. The previous version was headed
+# "(optional)" and said "no block at all is fine", and small local models took the
+# invitation: across llama3.1:8b, gemma3:4b and qwen3:4b (opening + 4 turns each,
+# actions that plainly moved time, place and world state) it produced 3 fenced
+# blocks out of 15 and NOT ONE world delta reached state on any of the three. Two
+# of llama's blocks were the example copied verbatim, which the validator rightly
+# threw away. Making the block unconditional — always last, `{"deltas": {}}` when
+# nothing changed — took it to 9 of 15 fences, deltas landing on all three models,
+# and `location` from never-set to always-set. One deterministic rule is easier
+# for a small model to follow than a conditional one. Re-measure before rewording.
 WORLD_SIDECAR = """\
-## Keeping the world consistent (optional)
+## World updates (required)
 
-When your narration changes the shared world, append ONE fenced block AFTER the
-prose so the engine can record it — the reader never sees it. Include only the keys
-that changed; no block at all is fine.
+End EVERY reply with one fenced block. The reader never sees it — it is how the
+engine records what changed. When nothing changed, send the empty one.
+
+Nothing changed:
+
+```rpg
+{"deltas": {}}
+```
+
+Something changed — include ONLY the keys that changed:
 
 ```rpg
 {"deltas": {"time_advance": {"days": 0, "phase": "evening"},
@@ -342,7 +359,9 @@ that changed; no block at all is fine.
 - `flag_set` — a durable fact worth remembering (true/false, a number, or text).
 - `reveal` — hidden lore slug(s) the player has genuinely discovered on the page —
   never before they actually learn it.
-Never mention this block or its braces in the prose.
+
+The block goes AFTER the prose, always last. Never mention it or its braces in
+the prose.
 """
 
 PREMISE_HEADER = "# Premise\n\n"
