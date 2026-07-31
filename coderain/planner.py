@@ -52,6 +52,11 @@ def _status(entry: Entry) -> str:
     return (entry.attrs.get("status", "planned") or "planned").strip().lower()
 
 
+class PlanError(ValueError):
+    """An outline edit the engine refuses. Transport-agnostic on purpose: the
+    HTTP layer turns it into a 400/404, the desktop UI shows it in a dialog."""
+
+
 class ChapterPlanner:
     def __init__(self, config, store: MemoryStore, llm):
         self.store = store
@@ -241,6 +246,69 @@ class ChapterPlanner:
         return [{"index": i, "slug": c.slug, "title": c.title,
                  "goal": c.body.strip(), "status": _status(c)}
                 for i, c in enumerate(self.chapters())]
+
+    # --- panel operations ---------------------------------------------------
+    # These were written inline in srv/outline.py and raised HTTPException, which
+    # made them unreachable from any non-HTTP front end — the desktop app could
+    # not edit a chapter at all. The RULES are the engine's, not the transport's:
+    # a done or active chapter is already part of the story, so it cannot be
+    # deleted or dragged out of story order. They raise PlanError; the routes
+    # translate that to a 400/404 and the desktop UI shows it in a dialog.
+
+    def _rows_or_raise(self, idx: int) -> list[dict]:
+        rows = self.as_dicts()
+        if not 0 <= idx < len(rows):
+            raise PlanError("no such chapter")
+        return rows
+
+    def edit(self, idx: int, title: str | None = None,
+             goal: str | None = None) -> list[dict]:
+        """Edit a chapter's title and/or goal in place (positions unchanged)."""
+        rows = self._rows_or_raise(idx)
+        if title is not None:
+            rows[idx]["title"] = str(title).strip() or rows[idx]["title"]
+        if goal is not None:
+            rows[idx]["goal"] = str(goal).strip()
+        self.replace_all(rows)
+        return self.as_dicts()
+
+    def insert(self, after: int | None = None, title: str = "New chapter",
+               goal: str = "") -> list[dict]:
+        """Insert a planned chapter behind `after` (default: append)."""
+        rows = self.as_dicts()
+        pos = len(rows)
+        if isinstance(after, int) and 0 <= after < len(rows):
+            pos = after + 1
+        rows.insert(pos, {"title": str(title).strip() or "New chapter",
+                          "goal": str(goal).strip(), "status": "planned"})
+        self.replace_all(rows)
+        return self.as_dicts()
+
+    def delete(self, idx: int) -> list[dict]:
+        """Delete a PLANNED chapter. Done/active belong to the story already."""
+        rows = self._rows_or_raise(idx)
+        if rows[idx]["status"] in ("done", "active"):
+            raise PlanError("only a planned chapter can be deleted")
+        rows.pop(idx)
+        self.replace_all(rows)
+        return self.as_dicts()
+
+    def move(self, idx: int, direction: int) -> list[dict]:
+        """Reorder a planned chapter up (-1) or down (+1). An edge is a no-op,
+        not an error — the panel calls this on every arrow press."""
+        rows = self._rows_or_raise(idx)
+        try:
+            step = 1 if int(direction) > 0 else -1
+        except (TypeError, ValueError):
+            raise PlanError("direction must be -1 or 1")
+        j = idx + step
+        if not 0 <= j < len(rows):
+            return self.as_dicts()
+        if rows[idx]["status"] != "planned" or rows[j]["status"] != "planned":
+            raise PlanError("only planned chapters can be reordered")
+        rows[idx], rows[j] = rows[j], rows[idx]
+        self.replace_all(rows)
+        return self.as_dicts()
 
     # --- storage ------------------------------------------------------------
     def _write_chapter(self, n: int, title, goal, status: str) -> Entry:

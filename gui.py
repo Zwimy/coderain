@@ -283,8 +283,158 @@ class App(tk.Tk):
         st.add_separator()
         st.add_command(label="What the model sees...",
                        command=self._context_dialog)
+        st.add_command(label="Chapter plan...", command=self._outline_dialog)
         bar.add_cascade(label="Story", menu=st)
         self.config(menu=bar)
+
+    def _outline_dialog(self):
+        """The rolling chapter plan. Edits go through ChapterPlanner, which owns
+        the rules (a done or active chapter is already part of the story, so it
+        cannot be deleted or reordered) and raises PlanError when it refuses —
+        the same refusals the web panel gets, because it is the same code."""
+        if not self._guard():
+            return
+        from coderain.planner import PlanError
+        planner = self.engine.planner
+        dlg = tk.Toplevel(self)
+        dlg.title("Chapter plan")
+        dlg.configure(bg=BG)
+        dlg.transient(self)
+        tk.Label(dlg, text="A few chapters planned ahead; a fresh one is written "
+                           "each time a chapter completes.\nEdit an upcoming "
+                           "chapter's goal to steer where things go.",
+                 bg=BG, justify="left").pack(anchor="w", padx=10, pady=(10, 4))
+        lst = tk.Listbox(dlg, width=76, height=8, relief="sunken", bd=2,
+                         exportselection=False)
+        lst.pack(padx=10)
+        form = tk.Frame(dlg, bg=BG)
+        form.pack(anchor="w", padx=10, pady=4)
+        tk.Label(form, text="Title:", bg=BG).grid(row=0, column=0, sticky="e")
+        title_e = tk.Entry(form, width=52, relief="sunken", bd=2)
+        title_e.grid(row=0, column=1, padx=4)
+        tk.Label(form, text="Goal:", bg=BG).grid(row=1, column=0, sticky="ne")
+        goal_t = tk.Text(form, width=52, height=3, relief="sunken", bd=2,
+                         wrap="word", font=("Consolas", 9))
+        goal_t.grid(row=1, column=1, padx=4, pady=2)
+        status = tk.Label(dlg, text="", bg=BG, fg=NAVY)
+        status.pack(anchor="w", padx=10)
+
+        rows: list[dict] = []
+
+        def refresh(select: int | None = None):
+            rows[:] = planner.as_dicts()
+            lst.delete(0, "end")
+            for r in rows:
+                badge = {"done": "done  ", "active": "NOW   "}.get(r["status"],
+                                                                   "plan  ")
+                lst.insert("end", f"{badge}{r['title']}")
+            if rows:
+                # Default to the ACTIVE chapter, not row 0. Row 0 is usually
+                # `done`, and load() disables the form for a done chapter — so
+                # the panel opened on a dead form and the first thing a user
+                # tried to type went nowhere.
+                if select is None:
+                    select = next((n for n, r in enumerate(rows)
+                                   if r["status"] == "active"), 0)
+                i = min(select, len(rows) - 1)
+                lst.selection_clear(0, "end")
+                lst.selection_set(i)
+                lst.see(i)
+                load()
+
+        def sel() -> int | None:
+            s = lst.curselection()
+            return s[0] if s else None
+
+        def load(_evt=None):
+            i = sel()
+            if i is None:
+                return
+            title_e.delete(0, "end")
+            title_e.insert(0, rows[i]["title"])
+            goal_t.delete("1.0", "end")
+            goal_t.insert("1.0", rows[i]["goal"])
+            ro = rows[i]["status"] == "done"
+            title_e.configure(state="disabled" if ro else "normal")
+            goal_t.configure(state="disabled" if ro else "normal")
+
+        lst.bind("<<ListboxSelect>>", load)
+
+        def op(fn, keep=True):
+            """Run a planner edit, showing its refusal instead of throwing."""
+            i = sel()
+            if i is None:
+                return
+            try:
+                fn(i)
+            except PlanError as e:
+                status.configure(text=str(e))
+                return
+            status.configure(text="")
+            refresh(i if keep else None)
+
+        def save_sel():
+            def do(i):
+                planner.edit(i, title_e.get(),
+                             goal_t.get("1.0", "end").strip())
+            op(do)
+
+        brow = tk.Frame(dlg, bg=BG)
+        brow.pack(anchor="w", padx=10, pady=6)
+        self._button(brow, "Save", save_sel, width=8).pack(side="left", padx=2)
+        self._button(brow, "Add", lambda: (planner.insert(sel()), refresh()),
+                     width=8).pack(side="left", padx=2)
+        self._button(brow, "Delete", lambda: op(planner.delete, keep=False),
+                     width=8).pack(side="left", padx=2)
+        self._button(brow, "Up", lambda: op(lambda i: planner.move(i, -1)),
+                     width=6).pack(side="left", padx=2)
+        self._button(brow, "Down", lambda: op(lambda i: planner.move(i, 1)),
+                     width=6).pack(side="left", padx=2)
+
+        # These two call the model. Off the UI thread, with the button disabled,
+        # so a slow local model does not look like a hung window.
+        def threaded(label, work):
+            def run():
+                btn = getattr(dlg, "_busy_btn", None)
+                status.configure(text=f"{label}...")
+                self.generating = True
+
+                def worker():
+                    try:
+                        work()
+                        err = None
+                    except Exception as e:      # noqa: BLE001 — reported below
+                        err = str(e)
+                    self.after(0, lambda: done(err))
+
+                def done(err):
+                    self.generating = False
+                    status.configure(text=err or "")
+                    if btn is not None:
+                        btn.configure(state="normal")
+                    refresh()
+
+                if btn is not None:
+                    btn.configure(state="disabled")
+                threading.Thread(target=worker, daemon=True).start()
+            return run
+
+        grow = tk.Frame(dlg, bg=BG)
+        grow.pack(anchor="w", padx=10, pady=(0, 8))
+        gen = self._button(grow, "Generate", None, width=12)
+        gen.configure(command=threaded("planning",
+                                       lambda: planner.seed(force=True)))
+        gen.pack(side="left", padx=2)
+        adv = self._button(grow, "Chapter done", None, width=14)
+        adv.configure(command=threaded("advancing", planner.complete_active))
+        adv.pack(side="left", padx=2)
+        self._button(grow, "Close", dlg.destroy, width=8).pack(side="left", padx=2)
+
+        refresh()
+        self.after_idle(lambda: self._place_dialog(dlg))
+        dlg.plan_list, dlg.plan_title, dlg.plan_goal = lst, title_e, goal_t
+        dlg.plan_status, dlg.plan_refresh, dlg.plan_load = status, refresh, load
+        return dlg
 
     def _context_dialog(self):
         """The context inspector, from coderain.inspect — the same report the web
