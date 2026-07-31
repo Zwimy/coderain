@@ -1,8 +1,12 @@
 """The rolling chapter plan (the book plan panel)."""
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter
 from fastapi import HTTPException
+
+from coderain.planner import PlanError
 
 from .core import _engine
 from .core import _exclusive
@@ -15,6 +19,19 @@ def _outline_payload(eng) -> dict:
     return {"enabled": eng.planner.enabled(),
             "horizon": eng.planner.horizon,
             "chapters": eng.planner.as_dicts()}
+
+
+@contextlib.contextmanager
+def _as_http():
+    """Translate the planner's refusals into HTTP. The RULES live on the planner
+    (a done chapter is already part of the story, so it cannot be deleted or
+    reordered) because they are the engine's, not the transport's — they used to
+    be written inline here as HTTPException, which made them unreachable from the
+    desktop app, so it could not edit an outline at all."""
+    try:
+        yield
+    except PlanError as e:
+        raise HTTPException(404 if "no such chapter" in str(e) else 400, str(e))
 
 
 @router.get("/api/saves/{slug}/outline")
@@ -48,15 +65,9 @@ def advance_outline(slug: str):
 def edit_chapter(slug: str, idx: int, body: dict):
     """Edit a chapter's title and/or goal in place (positions unchanged)."""
     eng = _engine(slug)
-    rows = eng.planner.as_dicts()
-    if not 0 <= idx < len(rows):
-        raise HTTPException(404, "no such chapter")
-    if "title" in body:
-        rows[idx]["title"] = str(body.get("title", "")).strip() or rows[idx]["title"]
-    if "goal" in body:
-        rows[idx]["goal"] = str(body.get("goal", "")).strip()
-    with _exclusive():
-        eng.planner.replace_all(rows)
+    with _exclusive(), _as_http():
+        eng.planner.edit(idx, body.get("title") if "title" in body else None,
+                         body.get("goal") if "goal" in body else None)
     return _outline_payload(eng)
 
 
@@ -65,16 +76,10 @@ def add_chapter(slug: str, body: dict):
     """Insert a planned chapter. `after` is the 0-based index to insert behind
     (default: append to the end)."""
     eng = _engine(slug)
-    rows = eng.planner.as_dicts()
-    new = {"title": str(body.get("title", "")).strip() or "New chapter",
-           "goal": str(body.get("goal", "")).strip(), "status": "planned"}
-    after = body.get("after")
-    pos = len(rows)
-    if isinstance(after, int) and 0 <= after < len(rows):
-        pos = after + 1
-    rows.insert(pos, new)
-    with _exclusive():
-        eng.planner.replace_all(rows)
+    with _exclusive(), _as_http():
+        eng.planner.insert(body.get("after"),
+                           str(body.get("title", "") or "New chapter"),
+                           str(body.get("goal", "") or ""))
     return _outline_payload(eng)
 
 
@@ -83,14 +88,8 @@ def delete_chapter(slug: str, idx: int):
     """Delete a planned chapter. A done or active chapter can't be deleted (it's
     already part of the story) — advance instead."""
     eng = _engine(slug)
-    rows = eng.planner.as_dicts()
-    if not 0 <= idx < len(rows):
-        raise HTTPException(404, "no such chapter")
-    if rows[idx]["status"] in ("done", "active"):
-        raise HTTPException(400, "only a planned chapter can be deleted")
-    rows.pop(idx)
-    with _exclusive():
-        eng.planner.replace_all(rows)
+    with _exclusive(), _as_http():
+        eng.planner.delete(idx)
     return _outline_payload(eng)
 
 
@@ -99,19 +98,6 @@ def move_chapter(slug: str, idx: int, body: dict):
     """Reorder a planned chapter up (-1) or down (+1). Movement is confined to the
     planned tail — a done/active chapter can't be dragged out of story order."""
     eng = _engine(slug)
-    rows = eng.planner.as_dicts()
-    if not 0 <= idx < len(rows):
-        raise HTTPException(404, "no such chapter")
-    try:
-        direction = int(body.get("dir", 0))
-    except (TypeError, ValueError):
-        raise HTTPException(400, "dir must be -1 or 1")
-    j = idx + (1 if direction > 0 else -1)
-    if not 0 <= j < len(rows):
-        return _outline_payload(eng)                 # already at an edge — no-op
-    if rows[idx]["status"] != "planned" or rows[j]["status"] != "planned":
-        raise HTTPException(400, "only planned chapters can be reordered")
-    rows[idx], rows[j] = rows[j], rows[idx]
-    with _exclusive():
-        eng.planner.replace_all(rows)
+    with _exclusive(), _as_http():
+        eng.planner.move(idx, body.get("dir", 0))
     return _outline_payload(eng)
