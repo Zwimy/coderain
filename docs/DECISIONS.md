@@ -431,3 +431,41 @@ much larger change than the bug justifies.
 
 **What would change it:** a model visibly reacting to the marker, or any need to
 make `render()` serve two purposes for an unrelated reason.
+
+---
+
+## D-016 — The Tkinter UI is a source-run tool, not part of the shipped binary
+
+**Code:** `build.py`, `gui.py`, `desktop.py`. **Owner decision, 2026-07-31.**
+
+`build.py` freezes `desktop.py`, which serves `server.py` and renders `webapp/`
+in a WebView2 window. `gui.py` — the Tkinter app — is not bundled: neither `gui`
+nor `tkinter` appears in the frozen PYZ (checked: 2287 modules, both absent). It
+is reached only from a source checkout, via `Coderain.bat --gui`.
+
+This looks like a packaging bug and is not one. It is worth writing down because
+it looks *exactly* like a bug from one angle: v0.5.0 landed six commits of
+desktop parity work (Tier-2 activation gates, author's note, play aids, the
+context inspector, the chapter plan, user defaults, world authoring, the
+character depth fields) and **none of that code is in the distributable**. A
+future reader who notices that will reasonably try to "fix" it by adding a
+`--hidden-import gui` and a `--gui` flag.
+
+**Why accepted:** the zip already ships the full feature set. `Coderain.exe` is
+the web UI in a native frame, so a zip user has every feature the SPA has — the
+parity work was about the *Tkinter* front end, which `Coderain.bat` itself calls
+a "retro Tkinter UI (easter egg)". Bundling it means adding tcl/tk to the
+payload and giving a `--windowed` entry point argument parsing it does not have,
+to ship a second UI that then has to be kept working against every engine change.
+
+**Not wasted, and worth being precise about:** most of that work was moving
+engine rules OUT of HTTP route handlers — `coderain/aids.py`,
+`coderain/inspect.py`, `coderain/defaults.py`, `ChapterPlanner`'s panel methods
+with `PlanError`, `ScenarioLibrary.store/piece_files`. The routes got thinner and
+the web app runs the same shared code, so the binary benefits even though the
+Tkinter dialogs are absent from it.
+
+**What would change it:** a user asking for the Tkinter UI in the distributed
+build. The cheaper first move then is a second executable built from `gui.py`
+(`CoderainRetro.exe`), not a flag on the main one — it keeps the shipped app's
+entry point unchanged and lets the extra payload be opt-in.
