@@ -1714,11 +1714,29 @@ class App(tk.Tk):
                  # that HAD them here and saving it was silently lossless only
                  # because _ed_save preserves unmanaged attrs. Managed now.
                  "triggers_all", "triggers_not", "chance", "group",
-                 "delay", "sticky", "cooldown", "semantic", "recurse"]
+                 "delay", "sticky", "cooldown", "semantic", "recurse",
+                 # Character depth the web piece editor has and this did not.
+                 # `wants`/`motivation` are LIVE — the fold rewrites them as the
+                 # fiction changes what a character is after — so a desktop user
+                 # could read them (they render into context) but never set the
+                 # starting values. `playable` marks a character the player can
+                 # inhabit; profiles.py treats it as a managed attr.
+                 "wants", "motivation", "traits", "playable"]
 
     def _build_editor(self):
         left = tk.Frame(self.tab_editor, bg=BG)
         left.pack(side="left", fill="y", padx=8, pady=8)
+        # Scope: this save, or an authored WORLD. Scenario pieces were only
+        # editable over HTTP before, so a desktop author could fix a character
+        # in the story they were playing but not in the world it came from —
+        # and every new save from that world kept the flaw.
+        tk.Label(left, text="Editing:", bg=BG).pack(anchor="w")
+        self.ed_scope_var = tk.StringVar(value=self._ED_THIS_STORY)
+        self.ed_scope_box = ttk.Combobox(left, textvariable=self.ed_scope_var,
+                                         state="readonly", width=24)
+        self.ed_scope_box.pack(anchor="w", pady=(0, 6))
+        self.ed_scope_box.bind("<<ComboboxSelected>>", self._ed_scope_changed)
+        self._ed_load_scopes()
         tk.Label(left, text="Lore file:", bg=BG).pack(anchor="w")
         self.ed_file_var = tk.StringVar()
         self.ed_file_box = ttk.Combobox(left, textvariable=self.ed_file_var,
@@ -1770,6 +1788,7 @@ class App(tk.Tk):
         for key, label in (("pinned", "pinned (always in context)"),
                            ("hidden", "hidden (secret — AI foreshadows only)"),
                            ("companion", "companion"),
+                           ("playable", "playable ★"),
                            ("once", "once (event rules)")):
             var = tk.BooleanVar(value=False)
             tk.Checkbutton(flags, text=label, variable=var, bg=BG,
@@ -1789,18 +1808,23 @@ class App(tk.Tk):
         self.ed_fields["rarity"] = rar
         entry_row(11, "Objectives (a; b):", "objectives")
         entry_row(12, "Type:", "type", width=20)
-        self._build_editor_gates(right, row=13)
-        tk.Label(right, text="Body:", bg=BG).grid(row=14, column=0, sticky="ne",
+        entry_row(13, "Traits / tags (a, b):", "traits")
+        # Live values: the fold rewrites these as the fiction moves, so what is
+        # typed here is a STARTING point, not a fixed label.
+        entry_row(14, "Wants (goal now):", "wants")
+        entry_row(15, "Motivation (why):", "motivation")
+        self._build_editor_gates(right, row=16)
+        tk.Label(right, text="Body:", bg=BG).grid(row=17, column=0, sticky="ne",
                                                   padx=4, pady=(4, 0))
         self.ed_body = tk.Text(right, width=64, height=12, font=("Consolas", 10),
                                relief="sunken", bd=2, wrap="word",
                                undo=True)
-        self.ed_body.grid(row=14, column=1, columnspan=3, sticky="nsew",
+        self.ed_body.grid(row=17, column=1, columnspan=3, sticky="nsew",
                           padx=4, pady=(4, 0))
-        right.grid_rowconfigure(14, weight=1)
+        right.grid_rowconfigure(17, weight=1)
         right.grid_columnconfigure(3, weight=1)
         brow = tk.Frame(right, bg=BG)
-        brow.grid(row=15, column=1, columnspan=3, sticky="w", pady=6)
+        brow.grid(row=18, column=1, columnspan=3, sticky="w", pady=6)
         self._button(brow, "Save piece", self._ed_save, width=12).pack(side="left")
         self.ed_status = tk.Label(brow, text="", bg=BG, fg=NAVY)
         self.ed_status.pack(side="left", padx=8)
@@ -1883,10 +1907,60 @@ class App(tk.Tk):
         # outliving the tab it belonged to.
         widget.bind("<Destroy>", hide)
 
+    _ED_THIS_STORY = "— this story —"
+
+    def _ed_store(self):
+        """The store the Editor tab is pointed at.
+
+        Either this save, or a SCENARIO — the authored world a save is
+        instantiated from. Scenario authoring used to be reachable only over
+        HTTP (srv/pieces.py built the store itself), so the desktop app could
+        edit a story's lorebook but not the world behind it, and could not reach
+        events.md at all.
+        """
+        scope = getattr(self, "ed_scope_var", None)
+        name = scope.get() if scope is not None else ""
+        if not name or name == self._ED_THIS_STORY:
+            return self.store
+        try:
+            return self.lib.scenarios.store(self._ed_scenarios.get(name, ""))
+        except (FileNotFoundError, AttributeError):
+            # A scenario deleted from under the tab must not wedge the editor.
+            return self.store
+
+    def _ed_scope_changed(self, _evt=None):
+        self._ed_current = None
+        self._ed_load_files()
+
+    def _ed_load_scopes(self):
+        """Populate the scope picker: this story, then every authored world."""
+        self._ed_scenarios = {}
+        names = [self._ED_THIS_STORY]
+        try:
+            for sc in self.lib.scenarios.list():
+                label = f"world: {sc.get('title') or sc.get('slug')}"
+                self._ed_scenarios[label] = sc.get("slug", "")
+                names.append(label)
+        except (AttributeError, OSError):
+            pass                        # no scenarios yet is not an error
+        self.ed_scope_box.configure(values=names)
+        if self.ed_scope_var.get() not in names:
+            self.ed_scope_var.set(self._ED_THIS_STORY)
+
+    def _ed_in_scenario(self) -> bool:
+        return (getattr(self, "ed_scope_var", None) is not None
+                and self.ed_scope_var.get() != self._ED_THIS_STORY)
+
     def _ed_registries(self) -> list[str]:
-        if self.store is None:
+        if self._ed_in_scenario():
+            slug = self._ed_scenarios.get(self.ed_scope_var.get(), "")
+            try:
+                return self.lib.scenarios.piece_files(slug)
+            except (FileNotFoundError, AttributeError):
+                return []
+        if self._ed_store() is None:
             return []
-        return (["player.md"] + self.store.gated_registries()
+        return (["player.md"] + self._ed_store().gated_registries()
                 + ["threads.md", "events.md"])
 
     def _ed_load_files(self):
@@ -1912,18 +1986,18 @@ class App(tk.Tk):
 
     def _ed_load_list(self):
         self.ed_list.delete(0, "end")
-        if self.store is None or not self.ed_file_var.get():
+        if self._ed_store() is None or not self.ed_file_var.get():
             return
-        for e in self.store.entries(self.ed_file_var.get()):
+        for e in self._ed_store().entries(self.ed_file_var.get()):
             marks = ("*" if e.pinned() else "") \
                 + (" [hidden]" if e.hidden() else "")
             self.ed_list.insert("end", f"{e.title}{marks}")
 
     def _ed_selected_entry(self):
         sel = self.ed_list.curselection()
-        if not sel or self.store is None:
+        if not sel or self._ed_store() is None:
             return None
-        entries = self.store.entries(self.ed_file_var.get())
+        entries = self._ed_store().entries(self.ed_file_var.get())
         return entries[sel[0]] if sel[0] < len(entries) else None
 
     def _ed_load_entry(self):
@@ -1968,7 +2042,7 @@ class App(tk.Tk):
         self.ed_status.configure(text="new piece — fill the form and Save")
 
     def _ed_save(self):
-        if self.store is None or self.generating:
+        if self._ed_store() is None or self.generating:
             return
         from coderain.templates import slugify
         f = self.ed_fields
@@ -1983,7 +2057,7 @@ class App(tk.Tk):
         cur = self._ed_current \
             if (self._ed_current and self._ed_current[0] == rel) else None
         # preserve attrs the form doesn't manage (e.g. turns:, when:, consumed:)
-        old = next((e for e in self.store.entries(rel)
+        old = next((e for e in self._ed_store().entries(rel)
                     if cur and e.slug == cur[1]), None)
         attrs = dict(old.attrs) if old else {}
         for key in self._ED_ATTRS:
@@ -2009,27 +2083,27 @@ class App(tk.Tk):
                                if a.strip()],
                       importance=imp, attrs=attrs,
                       body=self.ed_body.get("1.0", "end").strip())
-        self.store.upsert_entry(rel, entry)
+        self._ed_store().upsert_entry(rel, entry)
         if cur and cur[1] != slug:
-            self.store.remove_entry(rel, cur[1])   # slug renamed
+            self._ed_store().remove_entry(rel, cur[1])   # slug renamed
         self._ed_current = (rel, slug)
         self._ed_load_list()
         self.ed_status.configure(text=f"saved {slug} → {rel}")
 
     def _ed_delete(self):
         e = self._ed_selected_entry()
-        if e is None or self.store is None:
+        if e is None or self._ed_store() is None:
             return
         rel = self.ed_file_var.get()
         if not messagebox.askyesno("Delete piece",
                                    f"Delete '{e.title}' from {rel}?"):
             return
-        self.store.remove_entry(rel, e.slug)
+        self._ed_store().remove_entry(rel, e.slug)
         self._ed_load_list()
         self.ed_status.configure(text=f"deleted {e.slug}")
 
     def _ed_add_type(self):
-        if self.store is None:
+        if self._ed_store() is None:
             return
         name = simpledialog.askstring(
             "Add lore type", "Name for the new lore file (e.g. Races, Rules):",
@@ -2037,7 +2111,7 @@ class App(tk.Tk):
         if not name:
             return
         try:
-            rel = self.store.add_custom_file(name)
+            rel = self._ed_store().add_custom_file(name)
         except ValueError as e:
             messagebox.showinfo("Add lore type", str(e))
             return
