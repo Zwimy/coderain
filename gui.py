@@ -276,7 +276,170 @@ class App(tk.Tk):
         sc.add_command(label="Delete scenario...",
                        command=self._delete_scenario_dialog)
         bar.add_cascade(label="Scenario", menu=sc)
+
+        st = tk.Menu(bar, tearoff=0)
+        st.add_command(label="Author's note...", command=self._authors_note_dialog)
+        st.add_command(label="Play aids...", command=self._play_aids_dialog)
+        bar.add_cascade(label="Story", menu=st)
         self.config(menu=bar)
+
+    # ---------- STORY: author's note + play aids (web parity) ----------
+    def _authors_note_dialog(self):
+        """ST-21. Standing guidance woven into the prompt, never shown to the
+        reader. `depth` picks where it rides: "system" (stable, cacheable) or
+        "tail" (right before the newest turn, which small models obey more)."""
+        if not self._guard():
+            return
+        state = self.store.world_state()
+        an = state.get("authors_note")
+        an = an if isinstance(an, dict) else {}
+        dlg = tk.Toplevel(self)
+        dlg.title("Author's note")
+        dlg.configure(bg=BG)
+        dlg.transient(self)
+        tk.Label(dlg, text="Standing guidance woven into the prompt — tone, "
+                           "pacing, style.\nNever shown to the reader.",
+                 bg=BG, justify="left").pack(anchor="w", padx=10, pady=(10, 4))
+        txt = tk.Text(dlg, width=78, height=12, font=("Consolas", 10),
+                      relief="sunken", bd=2, wrap="word", undo=True)
+        txt.pack(padx=10)
+        txt.insert("1.0", self.store.custom_instructions())
+        row = tk.Frame(dlg, bg=BG)
+        row.pack(anchor="w", padx=10, pady=6)
+        tk.Label(row, text="Placement:", bg=BG).pack(side="left")
+        depth = tk.StringVar(value=an.get("depth") if an.get("depth") in
+                             ("system", "tail") else "system")
+        for val, label in (("system", "system prompt"), ("tail", "near the end")):
+            tk.Radiobutton(row, text=label, value=val, variable=depth, bg=BG,
+                           activebackground=BG).pack(side="left", padx=3)
+        tk.Label(row, text="  Every N turns:", bg=BG).pack(side="left")
+        every = tk.Spinbox(row, from_=1, to=99, width=4, relief="sunken", bd=2)
+        every.pack(side="left")
+        every.delete(0, "end")
+        try:
+            every.insert(0, str(max(1, int(an.get("every", 1)))))
+        except (TypeError, ValueError):
+            every.insert(0, "1")
+
+        def save():
+            self.store.set_custom_instructions(txt.get("1.0", "end").strip())
+            s = self.store.world_state()
+            # int, NOT _num: _num returns a float, and the HTTP route stores
+            # max(1, int(...)). A float here would put 3.0 in state.json where
+            # the web app puts 3 — the two paths disagreeing on the type of a
+            # value they both write is exactly what sharing the writer was for.
+            try:
+                ev = max(1, int(float(every.get())))
+            except (TypeError, ValueError):
+                ev = 1
+            s["authors_note"] = {"depth": depth.get(), "every": ev}
+            self.store.set_world_state(s)
+            dlg.destroy()
+
+        brow = tk.Frame(dlg, bg=BG)
+        brow.pack(pady=(0, 10))
+        self._button(brow, "Save", save, width=10).pack(side="left", padx=4)
+        self._button(brow, "Cancel", dlg.destroy, width=10).pack(side="left")
+        self.after_idle(lambda: self._place_dialog(dlg))
+        # Named handles: a test that addresses these by widget-tree order gets a
+        # different answer depending on traversal direction.
+        dlg.note_text, dlg.note_depth, dlg.note_every = txt, depth, every
+        return dlg
+
+    def _play_aids_dialog(self):
+        """ST-30 quick actions + ST-31 output regex rules, for THIS save.
+
+        Both go through coderain.aids, the same cleaners the HTTP routes use —
+        an unsafe (ReDoS-prone) pattern is dropped here exactly as it would be
+        on the web side, rather than this UI inventing its own idea of safe.
+        """
+        if not self._guard():
+            return
+        from coderain.aids import clean_quick_actions, clean_regex_rules
+        ws = self.store.world_state()
+        dlg = tk.Toplevel(self)
+        dlg.title("Play aids")
+        dlg.configure(bg=BG)
+        dlg.transient(self)
+
+        tk.Label(dlg, text="Quick actions (one per line, max 20):",
+                 bg=BG).pack(anchor="w", padx=10, pady=(10, 2))
+        qa = tk.Text(dlg, width=78, height=6, font=("Consolas", 10),
+                     relief="sunken", bd=2, wrap="none", undo=True)
+        qa.pack(padx=10)
+        qa.insert("1.0", "\n".join(clean_quick_actions(ws.get("quick_actions"))))
+
+        tk.Label(dlg, text="Output rules — rewrite the model's prose before you "
+                           "see it (max 30):",
+                 bg=BG).pack(anchor="w", padx=10, pady=(8, 2))
+        mid = tk.Frame(dlg, bg=BG)
+        mid.pack(padx=10, fill="x")
+        lst = tk.Listbox(mid, width=54, height=6, relief="sunken", bd=2,
+                         exportselection=False)
+        lst.pack(side="left")
+        rules = list(clean_regex_rules(ws.get("regex_rules")))
+
+        def redraw():
+            lst.delete(0, "end")
+            for r in rules:
+                lst.insert("end", f"{r['find']}  ->  {r['replace']}"
+                                  + (f"  [{r['flags']}]" if r["flags"] else ""))
+
+        form = tk.Frame(mid, bg=BG)
+        form.pack(side="left", padx=8)
+        fields = {}
+        for i, (key, label) in enumerate((("find", "Find (regex):"),
+                                          ("replace", "Replace:"),
+                                          ("flags", "Flags (ims):"))):
+            tk.Label(form, text=label, bg=BG).grid(row=i, column=0, sticky="e")
+            e = tk.Entry(form, width=24, relief="sunken", bd=2)
+            e.grid(row=i, column=1, padx=3, pady=1)
+            fields[key] = e
+
+        def add():
+            cand = {"find": fields["find"].get(),
+                    "replace": fields["replace"].get(),
+                    "flags": fields["flags"].get()}
+            cleaned = clean_regex_rules([cand])
+            if not cleaned:
+                # Same verdict the web route gives: unsafe or empty patterns are
+                # refused. Saying so beats a row that silently never appears.
+                messagebox.showinfo(
+                    "Play aids", "That pattern was refused — it is empty, not a "
+                                 "string, or risky enough to hang a turn.")
+                return
+            rules.append(cleaned[0])
+            redraw()
+            for e in fields.values():
+                e.delete(0, "end")
+
+        def remove():
+            sel = lst.curselection()
+            if sel:
+                rules.pop(sel[0])
+                redraw()
+
+        brow2 = tk.Frame(form, bg=BG)
+        brow2.grid(row=3, column=0, columnspan=2, pady=4)
+        self._button(brow2, "Add", add, width=8).pack(side="left", padx=2)
+        self._button(brow2, "Remove", remove, width=8).pack(side="left", padx=2)
+        redraw()
+
+        def save():
+            s = self.store.world_state()
+            s["quick_actions"] = clean_quick_actions(qa.get("1.0", "end"))
+            s["regex_rules"] = clean_regex_rules(rules)
+            self.store.set_world_state(s)
+            dlg.destroy()
+
+        brow = tk.Frame(dlg, bg=BG)
+        brow.pack(pady=10)
+        self._button(brow, "Save", save, width=10).pack(side="left", padx=4)
+        self._button(brow, "Cancel", dlg.destroy, width=10).pack(side="left")
+        self.after_idle(lambda: self._place_dialog(dlg))
+        # Named handles — see _authors_note_dialog.
+        dlg.aids_quick, dlg.aids_fields, dlg.aids_list = qa, fields, lst
+        return dlg
 
     # ---------- CHAT TAB ----------
     def _build_chat(self):

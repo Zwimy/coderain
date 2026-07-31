@@ -71,12 +71,9 @@ def put_authors_note(slug: str, body: dict):
     except (TypeError, ValueError):
         every = 1
     with _exclusive():                           # don't race a live turn's state write
-        # custom_instructions() reads the body BELOW the first `---`; keep whatever
-        # header sits above it (the template's, or the user's own) instead of nuking it.
-        existing = store.read("custom-instructions.md")
-        head = existing.split("---", 1)[0] if "---" in existing \
-            else "# Custom instructions (this save)\n\n"
-        store.write("custom-instructions.md", head + "---\n" + content)
+        # Header-preserving write lives on the store so the desktop UI writes the
+        # note identically; see MemoryStore.set_custom_instructions.
+        store.set_custom_instructions(content)
         state = store.world_state()
         state["authors_note"] = {"depth": depth, "every": every}
         store.set_world_state(state)

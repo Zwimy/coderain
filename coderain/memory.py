@@ -995,6 +995,19 @@ class MemoryStore:
             text = text.split("---", 1)[1]
         return text.strip()
 
+    def set_custom_instructions(self, content: str) -> None:
+        """Replace the author's note, keeping whatever header sits above the
+        `---`. The inverse of custom_instructions(), and the ONLY correct way to
+        write it: replacing the whole file nukes the template's header (or the
+        user's own), which custom_instructions() then reads back as part of the
+        note on the next turn. Shared so the HTTP route and the desktop UI
+        cannot drift — the pair that did drift (extract_json vs
+        _first_json_object) is why this is a method and not a copied snippet."""
+        existing = self.read("custom-instructions.md")
+        head = existing.split("---", 1)[0] if "---" in existing \
+            else "# Custom instructions (this save)\n\n"
+        self.write("custom-instructions.md", head + "---\n" + str(content or ""))
+
     # --- hidden lore reveal (Wave 2; the one sanctioned md mutation) --------
     def set_hidden(self, slug: str, hidden: bool) -> Entry | None:
         """Flip an entry's hidden flag across all registries (threads included —
