@@ -1,10 +1,12 @@
 """User defaults: the rule files and skeletons a new story inherits."""
 from __future__ import annotations
 
+import contextlib
 import zipfile
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
+from coderain import defaults as cr_defaults
 from coderain import templates
 from coderain.profiles import STAT_NAMES
 
