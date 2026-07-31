@@ -1223,7 +1223,15 @@ class App(tk.Tk):
     # save writes through Entry/upsert, so hand-editing stays fully equivalent.
     _ED_ATTRS = ["status", "weight", "pinned", "hidden", "triggers", "links",
                  "stats", "skills", "rarity", "objectives", "companion",
-                 "type", "once"]
+                 "type", "once",
+                 # Tier-2 activation gates. The engine has honoured these since
+                 # ST-12 (see tier2_test.py) and the web builder authors all of
+                 # them, but this editor exposed none — so a desktop-only user
+                 # could not reach a shipped feature at all, and opening a piece
+                 # that HAD them here and saving it was silently lossless only
+                 # because _ed_save preserves unmanaged attrs. Managed now.
+                 "triggers_all", "triggers_not", "chance", "group",
+                 "delay", "sticky", "cooldown", "semantic", "recurse"]
 
     def _build_editor(self):
         left = tk.Frame(self.tab_editor, bg=BG)
@@ -1298,22 +1306,99 @@ class App(tk.Tk):
         self.ed_fields["rarity"] = rar
         entry_row(11, "Objectives (a; b):", "objectives")
         entry_row(12, "Type:", "type", width=20)
-        tk.Label(right, text="Body:", bg=BG).grid(row=13, column=0, sticky="ne",
+        self._build_editor_gates(right, row=13)
+        tk.Label(right, text="Body:", bg=BG).grid(row=14, column=0, sticky="ne",
                                                   padx=4, pady=(4, 0))
         self.ed_body = tk.Text(right, width=64, height=12, font=("Consolas", 10),
                                relief="sunken", bd=2, wrap="word",
                                undo=True)
-        self.ed_body.grid(row=13, column=1, columnspan=3, sticky="nsew",
+        self.ed_body.grid(row=14, column=1, columnspan=3, sticky="nsew",
                           padx=4, pady=(4, 0))
-        right.grid_rowconfigure(13, weight=1)
+        right.grid_rowconfigure(14, weight=1)
         right.grid_columnconfigure(3, weight=1)
         brow = tk.Frame(right, bg=BG)
-        brow.grid(row=14, column=1, columnspan=3, sticky="w", pady=6)
+        brow.grid(row=15, column=1, columnspan=3, sticky="w", pady=6)
         self._button(brow, "Save piece", self._ed_save, width=12).pack(side="left")
         self.ed_status = tk.Label(brow, text="", bg=BG, fg=NAVY)
         self.ed_status.pack(side="left", padx=8)
         self._ed_current = None      # (rel, slug) being edited
         self._ed_load_files()
+
+    def _build_editor_gates(self, parent, row: int):
+        """The Tier-2 activation gates, in one labelled block.
+
+        Grouped rather than mixed into the main fields because they share one
+        rule a reader needs: every one of them NARROWS when an already-triggered
+        entry is allowed in. None of them can pull an entry into context on its
+        own, so an empty block behaves exactly as before.
+        """
+        box = tk.LabelFrame(parent, text="Activation (advanced)", bg=BG, fg=NAVY,
+                            padx=6, pady=4)
+        box.grid(row=row, column=0, columnspan=4, sticky="ew", padx=4, pady=(6, 2))
+
+        def field(r, c, label, key, width=18, hint=""):
+            tk.Label(box, text=label, bg=BG).grid(row=r, column=c * 2,
+                                                  sticky="e", padx=(6, 2), pady=1)
+            e = tk.Entry(box, width=width, relief="sunken", bd=2)
+            e.grid(row=r, column=c * 2 + 1, sticky="w", padx=(0, 6), pady=1)
+            if hint:
+                self._tooltip(e, hint)
+            self.ed_fields[key] = e
+            return e
+
+        field(0, 0, "All of (and):", "triggers_all", hint=(
+            "Every word must appear this turn, on top of Triggers."))
+        field(0, 1, "None of (not):", "triggers_not", hint=(
+            "Any of these words present blocks the entry this turn."))
+        field(1, 0, "Chance %:", "chance", width=8, hint=(
+            "Roll to include once triggered. Seeded by (story, turn, slug), "
+            "so a retry reproduces it."))
+        field(1, 1, "Group:", "group", hint=(
+            "Only ONE activated member of a group is kept, chosen by weight."))
+        field(2, 0, "Delay (turns):", "delay", width=8, hint=(
+            "Dormant until the story is this many turns old."))
+        field(2, 1, "Sticky (turns):", "sticky", width=8, hint=(
+            "Once activated, stays in context this many more turns."))
+        field(3, 0, "Cooldown:", "cooldown", width=8, hint=(
+            "After activating, cannot activate again for this many turns."))
+        flags = tk.Frame(box, bg=BG)
+        flags.grid(row=3, column=2, columnspan=2, sticky="w", padx=(0, 6))
+        for key, label in (("semantic", "semantic (meaning, not just words)"),
+                           ("recurse", "recursive (may trigger others)")):
+            var = tk.BooleanVar(value=False)
+            tk.Checkbutton(flags, text=label, variable=var, bg=BG,
+                           activebackground=BG).pack(side="left", padx=3)
+            self.ed_fields[key] = var
+
+    def _tooltip(self, widget, text: str):
+        """Hover help. These gates are the one part of the editor whose meaning
+        is not guessable from its label, and the web builder explains them in
+        prose next to each control; a desktop form has no room for that."""
+        tip = {"win": None}
+
+        def show(_evt=None):
+            if tip["win"] is not None:
+                return
+            x = widget.winfo_rootx()
+            y = widget.winfo_rooty() + widget.winfo_height() + 2
+            win = tk.Toplevel(widget)
+            win.wm_overrideredirect(True)
+            win.wm_geometry(f"+{x}+{y}")
+            tk.Label(win, text=text, justify="left", bg="#ffffe0", fg="black",
+                     relief="solid", bd=1, wraplength=320,
+                     font=("Segoe UI", 8)).pack()
+            tip["win"] = win
+
+        def hide(_evt=None):
+            if tip["win"] is not None:
+                tip["win"].destroy()
+                tip["win"] = None
+
+        widget.bind("<Enter>", show)
+        widget.bind("<Leave>", hide)
+        # Destroying the tip with its widget stops a stray yellow rectangle
+        # outliving the tab it belonged to.
+        widget.bind("<Destroy>", hide)
 
     def _ed_registries(self) -> list[str]:
         if self.store is None:
