@@ -4,6 +4,11 @@ Status: PLAN ONLY. Nothing here is written yet. This file describes the docs we
 intend to produce so anyone can jump in later and execute it. Do not treat the
 outlines below as finished documentation.
 
+Revised for 0.5.0 (2026-07-31): the open questions below are now settled, and a
+section was added for the things a live play test proved that the guide has to
+say out loud. Read "Newly true as of 0.5.0" before writing any page, because
+three of the pages below were planned around behaviour that has since changed.
+
 ## Goal
 
 A new person clones the repo (or installs the desktop build), opens the docs, and
@@ -131,6 +136,52 @@ Ordered so a first time reader can go top to bottom.
 - The inline help text already written into the Settings page and the modals is
   accurate copy we can adapt for settings.md and the feature pages.
 
+## Newly true as of 0.5.0 (must be reflected)
+
+These came out of a real play test through local Ollama plus the desktop parity
+work. Each one changes a page that was already planned above.
+
+1. There are THREE front ends, not two, and the guide must not blur them.
+   - the web app (browser, `Coderain.bat`), the primary UI
+   - the desktop build (`Coderain.exe`), which is that same web UI in a native
+     window, so it has the same features
+   - the Tkinter UI (`Coderain.bat --gui`), a source checkout only tool, not in
+     the shipped zip (see DECISIONS D-016)
+   getting-started.md must say which one the reader is looking at, and must not
+   promise the Tkinter app to someone who downloaded the zip.
+
+2. Model choice needs its own section, with measured numbers. This is the single
+   biggest thing that decides whether a new user has a working app:
+   - a reasoning model (qwen3, deepseek-r1) spends max_tokens on THINKING first
+     and prose second, so a budget sized for prose alone returns an empty turn
+   - measured on qwen3:4b, the shipped default, with response_length "short":
+     4 of 4 generations produced no prose at all until the fix in 0.4.1
+   - the fix adds reasoning headroom on every prose call, so this is now a
+     tuning note rather than a failure, but "short" on a reasoning model still
+     means terse output because thinking eats most of the budget first
+   - world sidecar compliance varies by model. Measured over 5 generations each:
+     qwen3:4b emits it reliably, deepseek-r1:8b usually, llama3.1:8b and
+     gemma3:4b rarely or with blocks the validator rejects. On a model that does
+     not emit it, the in world clock only advances at a scene fold, so it lags
+     the prose. Say this plainly instead of letting it read as a bug.
+
+3. troubleshooting.md already lists "empty or think only output". We now know the
+   cause and can give a real answer instead of a shrug: raise response_length,
+   or use a non reasoning model, and check the Context panel for the health line
+   that names it. Same for "the story forgot something": the context inspector
+   ("What the model sees") answers it directly, and every prompt bug found this
+   week was found by reading it. That panel deserves its own short page or a
+   prominent section in playing.md.
+
+4. New surfaces to document that did not exist when this plan was written: user
+   defaults (your own starting templates, rules versus skeletons behave
+   differently), the play aids panel (quick actions and output regex rules), and
+   the author's note placement control (system versus tail, every N turns).
+
+5. Health and honesty: `memory/health.jsonl` and the Context panel are how the
+   engine reports that something degraded. A guide that never mentions them
+   leaves users guessing. Give them a short section in troubleshooting.md.
+
 ## Execution order (phases)
 
 1. Skeleton: create docs/README.md index plus empty stubs for each page, so links
@@ -142,11 +193,48 @@ Ordered so a first time reader can go top to bottom.
 5. Track 2: architecture.
 6. Screenshots pass and a full link and accuracy check against the current code.
 
-## Open questions (decide before writing)
+## Decisions (settled 2026-07-31, were open questions)
 
-- One long single page guide, or the multi file docs/ folder above. The plan assumes
-  multi file. If a single page is preferred, the same outline becomes the headings.
-- Where docs are published: kept in the repo as markdown only, or also rendered to a
-  simple site later.
-- How deep the RPG and lorebook reference should go, since those have the largest
-  surface. Suggest a short concept page plus a fuller reference appendix if needed.
+- Multi file docs/ folder, as outlined above. A single page would pass 3000 lines
+  once the lorebook and RPG references are in, and the accuracy rule (every claim
+  checked against the source) is far easier to hold per page.
+- Markdown in the repo only, no rendered site. GitHub renders it, relative links
+  work, and it stays in the same review path as the code it describes. Revisit
+  only if the guide is ever pointed at from outside the repo.
+- Concept page plus reference appendix for the two big surfaces. worlds-and-cards
+  explains the activation system with one worked example per gate, and a separate
+  appendix table lists every attribute with its exact name, type and default. The
+  same split for RPG: rpg-mode teaches it, an appendix lists the envelope fields.
+  Reason: those two are where an outdated claim is most likely, and a table is
+  cheaper to re verify against the source than prose is.
+
+## Sizing and order of attack
+
+Ordered by "a reader can do something new when this lands", not by page number.
+
+| phase | pages | why this order |
+| --- | --- | --- |
+| 1 | docs/README.md index plus stubs | links resolve, shape visible, cheap |
+| 2 | getting-started, concepts | someone can install, connect a model, play |
+| 3 | troubleshooting (early, not last) | the empty turn and forgot something answers are the most asked questions, and both now have real answers |
+| 4 | playing, the-brains | the daily loop plus the cost levers |
+| 5 | worlds-and-cards, chapter-plan, rpg-mode | authoring, the largest surface |
+| 6 | settings, rules-files, appendices | reference, verified field by field |
+| 7 | architecture | contributor track |
+| 8 | screenshots and a full accuracy pass | do once, at the end, against the code |
+
+troubleshooting moved from phase 4 to phase 3 deliberately. It was planned as
+reference, but the two questions it answers (why did I get no text, why did the
+story forget something) are the first two a new user hits, and both have measured
+answers now.
+
+## Before writing any page
+
+- Verify every named setting, default and file against the source. Defaults are in
+  `coderain/config.py`, routes in `srv/`, the web UI in `webapp/js/`, the Tkinter UI
+  in `gui.py`. The plan above already contains at least one stale claim per page
+  written more than a month ago, which is the reason for this rule.
+- No em or en dashes anywhere in shipped text, and no AI sounding copy. Commas,
+  colons and parentheses instead.
+- State the version the page was checked against, so the next reader knows how much
+  to trust it.
