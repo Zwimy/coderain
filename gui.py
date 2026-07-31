@@ -285,7 +285,109 @@ class App(tk.Tk):
                        command=self._context_dialog)
         st.add_command(label="Chapter plan...", command=self._outline_dialog)
         bar.add_cascade(label="Story", menu=st)
+
+        df = tk.Menu(bar, tearoff=0)
+        df.add_command(label="User defaults...", command=self._defaults_dialog)
+        bar.add_cascade(label="Defaults", menu=df)
         self.config(menu=bar)
+
+    def _defaults_dialog(self):
+        """Your own starting templates — every NEW world and story is seeded
+        from these instead of the shipped ones.
+
+        App-wide, not per-story, which is why this is its own menu rather than
+        sitting under Story. Rules and skeletons behave differently and the list
+        says which is which: a rule is re-read every turn and reverting rewrites
+        it; a skeleton only seeds new stories and reverting deletes it.
+        """
+        from coderain import defaults as cr_defaults
+        lib = self.lib
+        dlg = tk.Toplevel(self)
+        dlg.title("User defaults")
+        dlg.configure(bg=BG)
+        dlg.transient(self)
+        tk.Label(dlg, text="Every new world and story is seeded from these. "
+                           "Edit one to make it yours,\nor revert to the version "
+                           "the app ships with at any time.",
+                 bg=BG, justify="left").pack(anchor="w", padx=10, pady=(10, 4))
+        mid = tk.Frame(dlg, bg=BG)
+        mid.pack(padx=10, fill="both")
+        lst = tk.Listbox(mid, width=34, height=16, relief="sunken", bd=2,
+                         exportselection=False)
+        lst.pack(side="left", fill="y")
+        txt = tk.Text(mid, width=72, height=16, font=("Consolas", 9),
+                      relief="sunken", bd=2, wrap="word", undo=True)
+        txt.pack(side="left", padx=(8, 0))
+        status = tk.Label(dlg, text="", bg=BG, fg=NAVY)
+        status.pack(anchor="w", padx=10)
+        items: list[dict] = []
+
+        def refresh(keep: int | None = None):
+            items[:] = cr_defaults.list_defaults(lib)
+            lst.delete(0, "end")
+            for it in items:
+                mark = "*" if it["customized"] else " "
+                lst.insert("end", f"{mark} {it['name']}  ({it['kind']})")
+            if items:
+                i = min(keep or 0, len(items) - 1)
+                lst.selection_clear(0, "end")
+                lst.selection_set(i)
+                load()
+
+        def sel() -> int | None:
+            s = lst.curselection()
+            return s[0] if s else None
+
+        def load(_evt=None):
+            i = sel()
+            if i is None:
+                return
+            txt.delete("1.0", "end")
+            try:
+                txt.insert("1.0", cr_defaults.read_default(lib, items[i]["name"]))
+                status.configure(text="")
+            except cr_defaults.DefaultError as e:
+                status.configure(text=str(e))
+
+        lst.bind("<<ListboxSelect>>", load)
+
+        def save():
+            i = sel()
+            if i is None:
+                return
+            try:
+                cr_defaults.write_default(lib, items[i]["name"],
+                                          txt.get("1.0", "end"))
+            except cr_defaults.DefaultError as e:
+                status.configure(text=str(e))
+                return
+            status.configure(text=f"saved {items[i]['name']}")
+            refresh(i)
+
+        def revert():
+            i = sel()
+            if i is None:
+                return
+            try:
+                text = cr_defaults.revert_default(lib, items[i]["name"])
+            except cr_defaults.DefaultError as e:
+                status.configure(text=str(e))
+                return
+            txt.delete("1.0", "end")
+            txt.insert("1.0", text)
+            status.configure(text=f"reverted {items[i]['name']}")
+            refresh(i)
+
+        brow = tk.Frame(dlg, bg=BG)
+        brow.pack(anchor="w", padx=10, pady=8)
+        self._button(brow, "Save", save, width=10).pack(side="left", padx=2)
+        self._button(brow, "Revert", revert, width=10).pack(side="left", padx=2)
+        self._button(brow, "Close", dlg.destroy, width=10).pack(side="left", padx=2)
+        refresh()
+        self.after_idle(lambda: self._place_dialog(dlg))
+        dlg.def_list, dlg.def_text, dlg.def_status = lst, txt, status
+        dlg.def_items, dlg.def_load = items, load
+        return dlg
 
     def _outline_dialog(self):
         """The rolling chapter plan. Edits go through ChapterPlanner, which owns
