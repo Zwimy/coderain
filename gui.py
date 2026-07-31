@@ -280,8 +280,76 @@ class App(tk.Tk):
         st = tk.Menu(bar, tearoff=0)
         st.add_command(label="Author's note...", command=self._authors_note_dialog)
         st.add_command(label="Play aids...", command=self._play_aids_dialog)
+        st.add_separator()
+        st.add_command(label="What the model sees...",
+                       command=self._context_dialog)
         bar.add_cascade(label="Story", menu=st)
         self.config(menu=bar)
+
+    def _context_dialog(self):
+        """The context inspector, from coderain.inspect — the same report the web
+        app's "What the model sees" renders.
+
+        This is the panel that answers "why did the story forget X" with "X is
+        not in the prompt, and here is what crowded it out". Every prompt bug
+        found this week was found by reading it.
+        """
+        if not self._guard():
+            return
+        from coderain.inspect import context_report
+        try:
+            d = context_report(self.engine, self.cfg)
+        except Exception as e:              # noqa: BLE001 — an inspector must
+            messagebox.showinfo("Context",  # never be the thing that breaks
+                                f"Couldn't inspect the context: {e}")
+            return
+        dlg = tk.Toplevel(self)
+        dlg.title("What the model sees")
+        dlg.configure(bg=BG)
+        dlg.transient(self)
+        pct = d["budget_used_pct"]
+        head = (f"{d['approx_tokens']:,} tokens in   ·   {pct}% of memory budget"
+                f"   ·   {d['history_msgs']} verbatim turns\n"
+                f"{d['brain']} brain   ·   semantic recall "
+                f"{d['semantic_recall']}   ·   continuity check "
+                + (f"1/{d['lore_check']['every']}" if d["lore_check"]["on"]
+                   else "off"))
+        tk.Label(dlg, text=head, bg=BG, justify="left",
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10,
+                                                    pady=(10, 2))
+        if pct >= 95:
+            tk.Label(dlg, text="Budget nearly full — lower-priority lore is "
+                               "being cut. Raise the memory budget or trim the "
+                               "biggest sections below.",
+                     bg=BG, fg="#a03030", justify="left",
+                     wraplength=560).pack(anchor="w", padx=10)
+        txt = tk.Text(dlg, width=78, height=22, font=("Consolas", 9),
+                      relief="sunken", bd=2, wrap="none")
+        txt.pack(padx=10, pady=4)
+        biggest = max([s["chars"] for s in d["sections"]] or [1])
+        lines = []
+        for s in d["sections"]:
+            bar_w = max(1, round(s["chars"] / biggest * 28))
+            ent = f" ({s['entries']})" if s["entries"] else ""
+            lines.append(f"{s['title'][:30]:<32}{'#' * bar_w:<29}"
+                         f"{s['chars']:>7,}{ent}")
+        lines.append("")
+        lines.append(f"rules & directives{'':<14}{'':<29}{d['rules_chars']:>7,}")
+        lines.append(f"{d['history_msgs']} verbatim turns{'':<15}{'':<29}"
+                     f"{d['history_chars']:>7,}")
+        if d["health"]:
+            lines += ["", "Something fell back quietly:"]
+            lines += [f"  · {h.get('stage')} (turn {h.get('turn')}): "
+                      f"{h.get('reason')}" for h in d["health"]]
+        u = d["usage"]
+        lines += ["", f"Billed so far: {u['total_in']:,} in / "
+                      f"{u['total_out']:,} out over {u['calls']} calls"]
+        txt.insert("1.0", "\n".join(lines))
+        txt.configure(state="disabled")
+        self._button(dlg, "Close", dlg.destroy, width=10).pack(pady=(0, 10))
+        self.after_idle(lambda: self._place_dialog(dlg))
+        dlg.ctx_report, dlg.ctx_text = d, txt
+        return dlg
 
     # ---------- STORY: author's note + play aids (web parity) ----------
     def _authors_note_dialog(self):

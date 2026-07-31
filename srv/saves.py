@@ -2,11 +2,10 @@
 context inspector."""
 from __future__ import annotations
 
-import re
 from fastapi import APIRouter
 from fastapi import HTTPException
 from coderain import features
-from coderain.config import context_budget
+from coderain.inspect import context_report, usage_report
 from coderain.memory import Entry
 from coderain.profiles import apply_character
 from coderain.profiles import apply_playable_entry
@@ -132,66 +131,13 @@ def inspect_context(slug: str):
     section with its size, so "the story forgot X" can be answered with "X is not
     in the prompt, here is why" instead of guesswork. Three real bugs this month
     were found with a throwaway version of this; it belongs in the app."""
-    eng = _engine(slug)
-    store = eng.store
-    hist = store.recent_turns(eng.short_term)
-    msgs = eng._messages(hist, "(preview of the next turn)")
-    sys_txt = msgs[0]["content"]
-    # Split on the section headings assemble() writes; entry headings carry a
-    # {#slug} and belong to the section above them, so they are not split points.
-    parts = re.split(r"(?m)^## (?![^\n]*\{#)(.+)$", sys_txt)
-    preamble, sections = parts[0], []
-    for i in range(1, len(parts) - 1, 2):
-        body = parts[i + 1]
-        sections.append({
-            "title": parts[i].strip(),
-            "chars": len(body.strip()),
-            "entries": len(re.findall(r"(?m)^## [^\n]*\{#", body)),
-        })
-    hist_chars = sum(len(m["content"]) for m in msgs[1:])
-    total = len(sys_txt) + hist_chars
-    budget = context_budget(core._cfg)
-    return {
-        "model": core._cfg.profile.model,
-        "brain": "quad" if eng.trinity else "single",
-        "lore_check": {"on": bool(core._cfg.generation.get("lore_check")),
-                       "every": int(core._cfg.generation.get("lore_check_every", 1)),
-                       "due_next_turn": eng.lore_due()},
-        "budget_tokens": budget,
-        "rules_chars": len(preamble.strip()),
-        "history_msgs": len(msgs) - 1,
-        "history_chars": hist_chars,
-        "system_chars": len(sys_txt),
-        "total_chars": total,
-        "approx_tokens": total // 4,
-        "budget_used_pct": round(len(sys_txt) / max(1, budget * 4) * 100),
-        "sections": sorted(sections, key=lambda s: -s["chars"]),
-        "semantic_recall": "on" if eng.retriever is not None else "off",
-        # Anything that silently fell back. Degrading is fine; degrading
-        # invisibly is what costs continuity with nothing to show for it.
-        "health": store.health(limit=8),
-        # The provider's OWN token counts, not the /4 estimate above. Everything
-        # else on this payload is what we think we sent; this is what was billed.
-        "usage": _usage_payload(store),
-    }
+    # The report itself lives in coderain.inspect so the desktop UI can show the
+    # same thing. This route is now transport only.
+    return context_report(_engine(slug), core._cfg)
 
 
 def _usage_payload(store) -> dict:
-    """Lifetime tokens for this story, plus the most recent turn, per stage."""
-    tot = store.usage_total()
-    recent = store.usage(limit=40)
-    last_turn = recent[0].get("turn") if recent else None
-    return {
-        "total_in": int(tot.get("in", 0)),
-        "total_out": int(tot.get("out", 0)),
-        "cached": int(tot.get("cached", 0)),
-        "calls": int(tot.get("calls", 0)),
-        "by_stage": tot.get("by_stage", {}),
-        "last_turn": store.usage_for_turn(last_turn) if last_turn is not None
-        else {"in": 0, "out": 0, "calls": 0},
-        "price_in": float(core._cfg.raw.get("price_in", 0) or 0),
-        "price_out": float(core._cfg.raw.get("price_out", 0) or 0),
-    }
+    return usage_report(store, core._cfg)
 
 
 @router.get("/api/saves/{slug}/usage")
