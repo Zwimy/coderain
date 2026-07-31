@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from coderain import features
 from coderain import templates
+from coderain.aids import clean_quick_actions, clean_regex_rules
 from coderain.config import ROOT as DATA_ROOT
 from coderain.config import load_config
 from coderain.engine import Engine
@@ -272,32 +273,11 @@ def _stream_generation(slug: str, run):
 
 
 # ---------- Tier 4 play aids: quick actions (ST-30) + regex rules (ST-31) ----------
-def _clean_quick_actions(raw) -> list[str]:
-    if isinstance(raw, str):
-        raw = raw.split("\n")
-    if not isinstance(raw, list):
-        return []
-    return [s.strip() for s in raw if isinstance(s, str) and s.strip()][:20]
-
-
-def _clean_regex_rules(raw) -> list[dict]:
-    out = []
-    if not isinstance(raw, list):
-        return out
-    for r in raw:
-        if not isinstance(r, dict):
-            continue
-        find = r.get("find")
-        # a non-string or ReDoS-prone pattern is dropped on save (import re-checks
-        # at exec time too, since import bypasses this cleaning layer).
-        if not isinstance(find, str) or not safe_output_regex(find):
-            continue
-        out.append({"find": find, "replace": str(r.get("replace", ""))[:1000],
-                    "flags": "".join(c for c in str(r.get("flags", "")).lower()
-                                     if c in "ims")})
-        if len(out) >= 30:
-            break
-    return out
+# The bounds live in coderain.aids so the desktop UI applies exactly the same
+# ones. Re-exported under the old private names: srv/settings.py and srv/world.py
+# import them from here.
+_clean_quick_actions = clean_quick_actions
+_clean_regex_rules = clean_regex_rules
 
 # ---------- exports ----------
 _EXPORT_DIR = Path(tempfile.gettempdir()) / "coderain-exports"
