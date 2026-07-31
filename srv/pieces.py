@@ -13,22 +13,24 @@ from coderain.generator import PIECE_KINDS
 from coderain.generator import _split_premise_body
 from coderain.memory import Entry
 from coderain.memory import MemoryStore
+from coderain.memory import SCENARIO_PIECE_FILES
 
 from .core import _guard_slug
 from .core import lib
 
 # ---------- scenarios (FictionLab shape: name + premise + introduction) ----
-_BASE_PIECE_FILES = ["characters.md", "locations.md", "items.md",
-                     "factions.md", "threads.md", "events.md"]
+# The list and the store both live on ScenarioLibrary now, so the desktop app
+# can author a scenario too. Kept as module names because this file uses them
+# throughout.
+_BASE_PIECE_FILES = SCENARIO_PIECE_FILES
 
 
 def _scen_store(slug: str) -> MemoryStore:
     _guard_slug(slug)
-    scen_dir = lib.scenarios.dir(slug)
-    if not (scen_dir / "scenario.json").exists():
-        raise HTTPException(404, f"no such scenario: {slug}")
-    # scenario_dir = itself so custom lore types (scenario.json) resolve
-    return MemoryStore(scen_dir, None, scen_dir)
+    try:
+        return lib.scenarios.store(slug)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
 
 
 def _piece_files(store: MemoryStore) -> list[str]:

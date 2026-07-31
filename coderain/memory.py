@@ -26,6 +26,12 @@ from .macros import expand_macros
 GATED_REGISTRIES = [
     "characters.md", "locations.md", "factions.md", "items.md", "canon-events.md",
 ]
+# The piece files a SCENARIO author edits. events.md is here but not in the
+# registries above: unfired event rules must never reach the Writer.
+SCENARIO_PIECE_FILES = [
+    "characters.md", "locations.md", "items.md", "factions.md",
+    "threads.md", "events.md",
+]
 # All files that hold indexable entries.
 INDEX_FILES = [
     "player.md", "characters.md", "locations.md", "factions.md", "items.md",
@@ -2337,6 +2343,29 @@ class ScenarioLibrary:
 
     def exists(self, slug: str) -> bool:
         return bool(slug) and (self.root / slug / "scenario.json").exists()
+
+    def store(self, slug: str) -> MemoryStore:
+        """A MemoryStore over the scenario itself, for authoring its pieces.
+
+        `scenario_dir` is the scenario, so custom lore types declared in its own
+        scenario.json resolve. Lived in srv/pieces.py, which meant scenario
+        authoring was reachable only over HTTP — the desktop app could edit a
+        STORY's lorebook but not the world it is instantiated from.
+        """
+        if not self.exists(slug):
+            raise FileNotFoundError(f"no such scenario: {slug}")
+        d = self.dir(slug)
+        return MemoryStore(d, None, d)
+
+    def piece_files(self, slug: str) -> list[str]:
+        """The piece files a scenario author edits, custom lore types last.
+
+        Includes events.md, which is NOT a lorebook registry — unfired event
+        rules must never reach the Writer — but IS authored here.
+        """
+        store = self.store(slug)
+        return SCENARIO_PIECE_FILES + [f for f in store.custom_files()
+                                       if f not in SCENARIO_PIECE_FILES]
 
     def list(self) -> list[dict]:
         out = []
