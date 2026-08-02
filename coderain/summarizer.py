@@ -18,7 +18,7 @@ import re
 
 from .llm import emit_json_ex
 from .llm import stage as llm_stage
-from .memory import Entry, KIND_FILE, MemoryStore, trigger_hit
+from .memory import Entry, KIND_FILE, MemoryStore, _attr_true, trigger_hit
 
 SCENE_INSTRUCTION = """\
 You are the story's memory keeper. Fold the TURNS below into ONE concise scene
@@ -598,9 +598,24 @@ class Summarizer:
         # Roll the chapter plan forward when THIS fold reports the active chapter's
         # goal landed (only when a chapter was actually handed to the fold, so a
         # stray flag on an outline-less story can't advance anything).
-        if self.planner and chapter_hint and obj \
-                and obj.get("chapter_goal_met") is True:
-            events += self.planner.complete_active()
+        #
+        # _attr_true, NOT `is True`. The strict identity check accepted only a real
+        # JSON boolean, so a model answering "chapter_goal_met": "true" — a string,
+        # which small local models produce constantly — was ignored in total
+        # silence, and chapters never advanced on their own. Every other
+        # model-supplied boolean in this engine goes through _attr_true
+        # ("true"/"yes"/"1"/"on"); this was the one place that did not.
+        if self.planner and chapter_hint and obj:
+            met = obj.get("chapter_goal_met")
+            if _attr_true(met):
+                events += self.planner.complete_active()
+            elif met not in (None, False, "", "false", "no", "0"):
+                # Present, not recognisably true, not recognisably false. Advancing
+                # is one-way, so refuse — but say so, because the symptom
+                # ("chapters never advance") is otherwise invisible.
+                self.store.log_degraded(
+                    "fold", "chapter_goal_met was neither true nor false "
+                            f"({met!r:.40}); the chapter did not advance")
         return events
 
     def refold_scene(self, scene_slug: str) -> dict:
