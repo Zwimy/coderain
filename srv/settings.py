@@ -143,6 +143,18 @@ def local_models():
                             in models_mod.LOCAL_SUGGESTIONS]}
 
 
+def _local_pin(trinity: dict, stage: str) -> str:
+    """The Ollama model this stage is pinned to, or "" when it follows the
+    active profile. Only a pin that explicitly names the LOCAL profile counts —
+    a stage pinned to another hosted model is not a local supporting model."""
+    st = (trinity or {}).get(stage)
+    if not isinstance(st, dict):
+        return ""
+    if str(st.get("profile", "")).strip() != "local":
+        return ""
+    return str(st.get("model", "")).strip()
+
+
 @router.get("/api/models/hosted")
 def hosted_models():
     return {"presets": models_mod.HOSTED_PRESETS,
@@ -176,6 +188,12 @@ def get_settings():
             "base_url": hosted.get("base_url", ""),
             "context_tokens": hosted.get("context_tokens", 131072),
             "key_set": bool(read_env().get(HOSTED_KEY_ENV, "")),
+            # Supporting stages may run on a LOCAL model while the hosted model
+            # writes: the Director and Lore-keeper are structured/analytic work
+            # that a small local model does adequately and for free, and they run
+            # on every turn. Empty string = that stage uses the hosted model.
+            "director_local": _local_pin(trinity, "director"),
+            "lorekeeper_local": _local_pin(trinity, "lorekeeper"),
         },
         # Which data folder this instance reads and writes. The desktop build and a
         # source run use DIFFERENT homes (%LOCALAPPDATA%\Coderain vs the repo), so a
@@ -413,20 +431,27 @@ def put_settings(body: dict):
         key = str(ho.get("api_key", "")).strip()
         if key:
             write_env({HOSTED_KEY_ENV: key})
-        # One big dual-mode model serves every stage, so drop the LOCAL per-stage
-        # model pins — but keep any other trinity settings. This used to pop the
-        # whole block, which silently deleted a hand-configured lore-keeper every
-        # time the user pressed Save in hosted mode.
+        # Supporting stages MAY stay local while the hosted model writes. This
+        # used to strip every per-stage pin unconditionally ("one big dual-mode
+        # model serves every stage"), which made a hosted writer with a free
+        # local Director impossible to configure from the UI even though the
+        # engine has always honoured such a pin. Now: a stage the user pinned to
+        # a local model is written through; a stage left blank follows hosted.
         tri = raw.get("trinity")
-        if isinstance(tri, dict):
-            kept = {k: {kk: vv for kk, vv in v.items()
-                        if kk not in ("profile", "model")}
-                    for k, v in tri.items() if isinstance(v, dict)}
-            kept = {k: v for k, v in kept.items() if v}
-            if kept:
-                raw["trinity"] = kept
-            else:
-                raw.pop("trinity", None)
+        tri = tri if isinstance(tri, dict) else {}
+        kept = {k: {kk: vv for kk, vv in v.items()
+                    if kk not in ("profile", "model")}
+                for k, v in tri.items() if isinstance(v, dict)}
+        for stage in ("director", "lorekeeper"):
+            pin = str(ho.get(f"{stage}_local", "") or "").strip()
+            if pin:
+                kept.setdefault(stage, {}).update(
+                    {"profile": "local", "model": pin})
+        kept = {k: v for k, v in kept.items() if v}
+        if kept:
+            raw["trinity"] = kept
+        else:
+            raw.pop("trinity", None)
         raw["active_profile"] = "hosted"
 
     save_yaml(raw)

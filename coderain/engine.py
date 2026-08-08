@@ -21,7 +21,7 @@ from .config import Config, context_budget
 # Imported by NAME, not via the module alias above: inside Engine.__init__ the
 # parameter `config` shadows the module, so config.history_budget resolves to the
 # Config object and raises.
-from .config import HISTORY_FLOOR_TURNS, history_budget
+from .config import HISTORY_FLOOR_TURNS, history_budget, short_term_turns
 from .llm import LLM
 from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore, safe_output_regex
@@ -149,7 +149,8 @@ class Engine:
         # landing for free and roll the plan forward.
         self.planner = ChapterPlanner(config, store, self.llm)
         self.summarizer = Summarizer(config, store, self.llm, planner=self.planner)
-        self.short_term = int(config.memory.get("short_term_turns", 12))
+        # 'auto' by default: the token ceiling governs, not a fixed count.
+        self.short_term = short_term_turns(config)
         # Explicit number, or `auto`/0 = fill the profile's window (long-context
         # cloud models get everything above the reply reserve).
         self.budget = context_budget(config)
