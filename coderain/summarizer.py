@@ -96,6 +96,10 @@ LIST_LIMIT = 32
 # Highest in-world day a fold may set. ~27,000 years of story is not a real
 # ceiling for anyone; a bound that keeps the number short in every prompt is.
 DAY_CAP = 10_000_000
+# How far ahead of the live clock ONE fold may push the day. A year of timeskip
+# is generous for a handful of turns; 2043 from day 5 is a model writing a
+# calendar year, and that value is unrecoverable once accepted (see _apply_time).
+MAX_FOLD_DAY_JUMP = 365
 
 
 def _as_list(v) -> list:
@@ -447,9 +451,27 @@ class Summarizer:
         # monotonic guard below means nothing can move the day back, so a single
         # hallucinated 1e9 pinned the clock at the cap AND froze every later
         # fold's phase/note, since none of them ever compare >= again.
-        if fold_day is not None and not 0 <= fold_day <= DAY_CAP:
+        # Two bounds, because the absolute one is not the one that bites.
+        # DAY_CAP catches absurd magnitudes (a 4000-digit day). The realistic
+        # hallucination is a YEAR — "day": 2043 — which sails under a 10-million
+        # ceiling, and then the monotonic guard below makes it PERMANENT: no
+        # later fold can move the day back, and phase/note only apply when the
+        # fold's day is >= the live one, so the whole clock freezes. Seen live on
+        # a 744-turn save stuck at "Day 2043, deep night".
+        #
+        # So also bound the JUMP. A fold summarizes a handful of turns; it may
+        # legitimately cross a long timeskip, but not leap centuries. Rejecting
+        # (not clamping) leaves fold_day None, which sets current_or_later True —
+        # so phase and note keep updating even when the day is refused.
+        too_big = fold_day is not None and not 0 <= fold_day <= DAY_CAP
+        too_far = (fold_day is not None and not too_big
+                   and fold_day > cur_day + MAX_FOLD_DAY_JUMP)
+        if too_big or too_far:
+            why = ("out-of-range" if too_big else
+                   f"a {fold_day - cur_day}-day jump (looks like a year, not a "
+                   f"story day)")
             self.store.log_degraded(
-                "fold-time", f"ignored an out-of-range day ({fold_day!s:.40}); "
+                "fold-time", f"ignored {why} day ({fold_day!s:.40}); "
                              f"the clock stays at day {cur_day}")
             fold_day = None
         if fold_day is not None and fold_day >= cur_day:
