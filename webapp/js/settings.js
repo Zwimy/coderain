@@ -115,6 +115,27 @@ export async function renderSettings() {
         <code>${esc(st.home || "")}</code>. The desktop app and a source run use
         DIFFERENT folders, so a key saved in one will read as "not saved" in the
         other.</p>
+      <h2>Supporting models (local, free)</h2>
+      <p class="muted">The Director plans the turn and the Lore-keeper checks
+        continuity. Both are structured work a small local model does well, and
+        both run every turn — pointing them at Ollama keeps the hosted model for
+        the prose you are paying for. Leave either on
+        <b>(use the hosted model)</b> to send it to the hosted endpoint instead.
+        ${names.length ? "" : `<span style="color:var(--player)">Ollama is not
+        running or has no models pulled, so only the hosted option is
+        available.</span>`}</p>
+      <div class="row">
+        <div><label>Director</label>
+          <select id="hm-director">
+            <option value="">(use the hosted model)</option>
+            ${localOpts(st.hosted.director_local || "")}
+          </select></div>
+        <div><label>Lore-keeper</label>
+          <select id="hm-lorekeeper">
+            <option value="">(use the hosted model)</option>
+            ${localOpts(st.hosted.lorekeeper_local || "")}
+          </select></div>
+      </div>
       <h2>Context windows (snapshot)</h2>
       <pre class="table">${esc(hosted.hints.join("\n"))}</pre>
       <details><summary class="muted">What the big platforms actually run</summary>
@@ -489,6 +510,11 @@ export async function renderSettings() {
         base_url: $("#hm-base").value.trim(),
         context_tokens: Number($("#hm-ctx").value) || 131072,
         api_key: $("#hm-key").value.trim(),
+        // "" means "follow the hosted model". The server only writes a stage pin
+        // when this names an actual local model, so saving in hosted mode no
+        // longer wipes a hand-configured local Director.
+        director_local: $("#hm-director") ? $("#hm-director").value : "",
+        lorekeeper_local: $("#hm-lorekeeper") ? $("#hm-lorekeeper").value : "",
       },
     };
     return body;

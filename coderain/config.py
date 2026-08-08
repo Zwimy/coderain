@@ -60,7 +60,7 @@ generation:
   lore_check: false
   lore_check_every: 1
 memory:
-  short_term_turns: 12
+  short_term_turns: auto
   medium_fold_after: 12
   medium_fold_size: 5
   long_fold_after: 8
@@ -222,6 +222,33 @@ def context_budget(config: Config) -> int:
 # enormous turns can no longer silently double the prompt. Floored so a single
 # huge turn can never starve history down to nothing.
 HISTORY_FLOOR_TURNS = 4
+
+# Sanity cap when short_term_turns is "auto" — the token ceiling is what actually
+# governs, this only stops a pathological transcript being walked in full.
+HISTORY_COUNT_CAP = 200
+
+
+def short_term_turns(config) -> int:
+    """How many verbatim turns to consider before the token ceiling trims them.
+
+    "auto" (the default) means "let the budget decide", which is what every
+    comparable app does: AI Dungeon gives history ~50% of the remaining tokens,
+    SillyTavern fits as many recent messages as the allowance holds. A fixed 12
+    left roughly 40% of the history allowance unused on a normal config.
+
+    Also the one safe place to handle 0. `recent_turns(n)` is `turns()[-n:]`, and
+    `[-0:]` is `[0:]` — the ENTIRE transcript. Someone setting 0 to mean "no
+    verbatim history" would have got the whole novel in every prompt.
+    """
+    mem = getattr(config, "memory", None) or {}
+    raw = mem.get("short_term_turns", "auto")
+    if isinstance(raw, str) and raw.strip().lower() in ("", "auto"):
+        return HISTORY_COUNT_CAP
+    try:
+        n = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return HISTORY_COUNT_CAP
+    return n if n > 0 else HISTORY_COUNT_CAP
 
 
 def history_budget(config) -> int:
