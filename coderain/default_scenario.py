@@ -378,7 +378,12 @@ AIDS = {
     ],
     "authors_note": {
         "depth": "tail",
-        "every": 3,
+        # every: 1, not 3. `every: N` injects the note only on exchanges where
+        # (exchange % N == 0), so N=3 left exchanges 1 and 2 with NO style
+        # guidance at all — including the OPENING, the one turn that sets the
+        # voice every later turn is then primed by. A style note that skips the
+        # opening and two turns in three reads to the user as "it doesn't work".
+        "every": 1,
         "content": (
             "Narrate in tight second-person, present tense: noir, grounded, "
             "unhurried. The Veil looks real because it was built to — render its "

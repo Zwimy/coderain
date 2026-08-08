@@ -18,6 +18,10 @@ from . import templates
 from . import validator as validator_mod
 from . import config as config
 from .config import Config, context_budget
+# Imported by NAME, not via the module alias above: inside Engine.__init__ the
+# parameter `config` shadows the module, so config.history_budget resolves to the
+# Config object and raises.
+from .config import HISTORY_FLOOR_TURNS, history_budget
 from .llm import LLM
 from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore, safe_output_regex
@@ -149,6 +153,8 @@ class Engine:
         # Explicit number, or `auto`/0 = fill the profile's window (long-context
         # cloud models get everything above the reply reserve).
         self.budget = context_budget(config)
+        # Token ceiling under short_term_turns; see config.history_budget.
+        self.history_tokens = history_budget(config)
         self.scenes_tail = 4
         # Open-core seam: premium modules resolve through coderain.features —
         # None when a module is trimmed from the build, and every use below
@@ -212,6 +218,26 @@ class Engine:
                                        budget_tokens=self.budget,
                                        retriever=self.retriever)
         return self._augment_style(self._augment_rpg(messages))
+
+    def history_window(self, drop_last: bool = False) -> list[dict]:
+        """The verbatim turns actually sent, capped by COUNT and by TOKENS.
+
+        short_term_turns is the count the user reasons about; history_budget is a
+        ceiling underneath it, because a fixed count means 12 terse turns and 12
+        enormous ones cost wildly different amounts and neither was measured.
+        Trims from the OLDEST end (the newest turns are the ones that matter) and
+        never below HISTORY_FLOOR_TURNS, so one runaway turn cannot leave the
+        model with no conversation at all.
+        """
+        turns = self.store.recent_turns(self.short_term)
+        if drop_last:
+            turns = turns[:-1]
+        limit = self.history_tokens * 4          # same chars-per-token estimate
+        floor = HISTORY_FLOOR_TURNS              # as the rest of the engine uses
+        while len(turns) > floor and \
+                sum(len(t.get("text", "")) for t in turns) > limit:
+            turns = turns[1:]
+        return turns
 
     def _authors_note_cfg(self) -> tuple[str, int]:
         """ST-21: per-save author's-note placement — depth ('system' | 'tail') and
@@ -463,7 +489,7 @@ class Engine:
     def turn(self, player_input: str, on_stage=None) -> Iterator[str]:
         prior = self._begin_turn()
         self.store.append_turn("player", player_input)
-        history = self.store.recent_turns(self.short_term)[:-1]
+        history = self.history_window(drop_last=True)
         messages = self._messages(history, player_input)
         stored = False
         try:
@@ -488,7 +514,7 @@ class Engine:
         model simply extends the last scene, so the pipeline is otherwise identical
         (Director plan → validate → Writer)."""
         prior = self._begin_turn()
-        history = self.store.recent_turns(self.short_term)
+        history = self.history_window()
         messages = self._messages(
             history,
             "Continue the narration from exactly where it left off. Do not "
@@ -597,7 +623,7 @@ class Engine:
         """Draft the PLAYER's next action in first person (ST 'Impersonate',
         ST-04). Returns a short suggestion; stores nothing — the UI drops it in
         the composer for the player to edit or send."""
-        history = self.store.recent_turns(self.short_term)
+        history = self.history_window()
         messages = self._messages(
             history,
             "Suggest MY next move as the player: first person, 1-2 sentences, "

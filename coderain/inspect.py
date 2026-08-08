@@ -39,10 +39,25 @@ def usage_report(store, cfg) -> dict:
     }
 
 
+def _note_report(eng) -> dict:
+    """The author's note: how big it is, where it rides, and whether THIS turn
+    includes it. `every: N` skips it on every turn that is not a multiple of N,
+    which is invisible from the prose and reads as "the note does nothing"."""
+    text = eng.store.custom_instructions()
+    depth, every = eng._authors_note_cfg()
+    exchange = sum(1 for t in eng.store.turns()
+                   if t.get("role") == "narrator") + 1
+    return {"chars": len(text), "depth": depth, "every": every,
+            "included_next_turn": bool(text) and exchange % every == 0}
+
+
 def context_report(eng, cfg) -> dict:
     """Assemble the next turn's prompt for real and describe it."""
     store = eng.store
-    hist = store.recent_turns(eng.short_term)
+    # history_window, not recent_turns: the inspector must show what is ACTUALLY
+    # sent. Reporting the uncapped count here would make the panel disagree with
+    # the prompt, which is the one thing it exists to prevent.
+    hist = eng.history_window()
     msgs = eng._messages(hist, "(preview of the next turn)")
     sys_txt = msgs[0]["content"]
     parts = _SECTION_RE.split(sys_txt)
@@ -71,6 +86,17 @@ def context_report(eng, cfg) -> dict:
         "total_chars": total,
         "approx_tokens": total // 4,
         "budget_used_pct": round(len(sys_txt) / max(1, budget * 4) * 100),
+        # The author's note rides the system prompt under "# STYLE DIRECTIVES",
+        # a single-# heading, so the ## section split never saw it and its size
+        # was silently attributed to whichever section happened to precede it.
+        # A user asking "why is my style note not working" could not see how big
+        # it was, or whether this turn included it at all.
+        "authors_note": _note_report(eng),
+        # What the count cap and the token ceiling actually did this turn.
+        "history_cap_turns": eng.short_term,
+        "history_budget_tokens": eng.history_tokens,
+        "history_trimmed": max(0, min(eng.short_term, len(store.turns()))
+                               - len(eng.history_window())),
         "sections": sorted(sections, key=lambda s: -s["chars"]),
         "semantic_recall": "on" if eng.retriever is not None else "off",
         # Anything that silently fell back. Degrading is fine; degrading

@@ -211,6 +211,36 @@ def context_budget(config: Config) -> int:
         return 8000
 
 
+# Verbatim history is a FIXED COUNT (short_term_turns) and, until this existed,
+# sat entirely outside the context budget: 12 short turns and 12 very long ones
+# cost wildly different amounts and neither was measured. Most chat front ends
+# (SillyTavern among them) budget history by TOKENS instead, including as many
+# recent messages as fit and cutting the rest.
+#
+# This is the middle position, and deliberately so: short_term_turns stays the
+# cap a user reasons about, and this is a ceiling underneath it, so a run of
+# enormous turns can no longer silently double the prompt. Floored so a single
+# huge turn can never starve history down to nothing.
+HISTORY_FLOOR_TURNS = 4
+
+
+def history_budget(config) -> int:
+    """Token ceiling for the verbatim turns. 'auto' = half the memory budget."""
+    mem = getattr(config, "memory", None) or {}
+    raw = mem.get("short_term_max_tokens", "auto")
+    if isinstance(raw, str) and raw.strip().lower() in ("", "auto"):
+        return max(1000, context_budget(config) // 2)
+    try:
+        return max(500, int(raw))
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError too: YAML parses `short_term_max_tokens: .inf` as
+        # float('inf'), and int(inf) raises OverflowError, not ValueError. That
+        # escaped Engine.__init__ and made EVERY save fail to open until
+        # config.yaml was hand-edited — breaking this module's contract that a
+        # bad config degrades to defaults instead of taking the app down.
+        return max(1000, context_budget(config) // 2)
+
+
 # response_length is the primary length control. It used to only add a soft
 # prompt hint (which strong hosted models happily ignore) while max_tokens stayed
 # at 2500 for every setting, so "short" had no teeth. It now also caps the OUTPUT
