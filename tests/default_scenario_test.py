@@ -55,7 +55,13 @@ ws = ss.world_state()
 assert ws.get("quick_actions") and "Take the copper coin" in ws["quick_actions"], ws.get("quick_actions")
 assert ws.get("regex_rules") and len(ws["regex_rules"]) == 3, ws.get("regex_rules")
 an = ws.get("authors_note") or {}
-assert an.get("depth") == "tail" and an.get("every") == 3, an
+# every == 1, not 3. This encoded the old shipped value. `every: N` injects the
+# author's note only on exchanges where (exchange % N == 0), so N=3 left
+# exchanges 1 and 2 with no style guidance at all — including the OPENING, the
+# one turn that sets the voice every later turn is then primed by. A style note
+# that skips the opening and two turns in three reads to a user as "the note
+# does nothing", which is exactly how it was reported.
+assert an.get("depth") == "tail" and an.get("every") == 1, an
 note = ss.custom_instructions()
 assert "second-person" in note.lower() and "veil" in note.lower(), note[:120]
 # the world content came across too

@@ -32,16 +32,37 @@ ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
        "CODERAIN_HOME": _TEST_HOME}
 
 
+# Per-suite wall clock. There was NO timeout: subprocess.run without one blocks
+# forever, so a single hung suite hung the whole run silently and indefinitely,
+# with the last printed line the only clue. The GUI suites are the realistic way
+# to get there — gui.py has ~30 blocking modal calls (messagebox/simpledialog/
+# filedialog), only two suites stub them, and a modal raised by an app that has
+# been withdrawn is INVISIBLE: it waits for a click nobody can make.
+#
+# 300s is ~10x the slowest honest suite (webapp_smoke_test boots uvicorn and a
+# headless Chromium). Anything past that is stuck, not slow.
+SUITE_TIMEOUT_S = 300
+
+
 def main() -> int:
     tests = sorted((ROOT / "tests").glob("*.py"))
-    failed = []
+    failed, stuck = [], []
     for t in tests:
-        print(f"=== {t.name} ===")
-        if subprocess.run([str(PY), str(t)], env=ENV).returncode:
+        print(f"=== {t.name} ===", flush=True)      # flush: a crash mid-run must
+        try:                                       # still leave the name behind
+            rc = subprocess.run([str(PY), str(t)], env=ENV,
+                                timeout=SUITE_TIMEOUT_S).returncode
+        except subprocess.TimeoutExpired:
+            print(f"!!! {t.name} exceeded {SUITE_TIMEOUT_S}s and was killed "
+                  f"(a blocking dialog or an infinite loop)", flush=True)
+            stuck.append(t.name)
+            continue
+        if rc:
             failed.append(t.name)
-    print("\n" + ("ALL SUITES PASSED" if not failed
-                  else "FAILED: " + ", ".join(failed)))
-    return 1 if failed else 0
+    bad = failed + [f"{s} (TIMEOUT)" for s in stuck]
+    print("\n" + ("ALL SUITES PASSED" if not bad
+                  else "FAILED: " + ", ".join(bad)))
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":
