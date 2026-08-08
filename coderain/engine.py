@@ -112,6 +112,30 @@ Keep both lists short and concrete — only what THIS turn could get wrong.
 """
 
 
+class _ToolJSONClient:
+    """Adapter that lets a TOOL-CALLING stage go through emit_json_ex.
+
+    emit_json_ex takes "any object exposing .complete(messages)", and gives back
+    the JSON token floor, one retry with a corrective nudge, and the budget
+    escalation a starved reasoning model needs. The lore-keeper was the only JSON
+    stage that skipped all of it — it called complete_with_tools and then
+    extract_json by hand, so a single malformed reply was final, and the health
+    line said "no valid JSON in output" with no tail to show what came back.
+    Measured on a live save: 7 lore-keeper failures in ~100 turns.
+
+    `gen` is forwarded because emit_json_ex only applies the token floor to a
+    client that has it.
+    """
+
+    def __init__(self, llm, tools, dispatch):
+        self._llm, self._tools, self._dispatch = llm, tools, dispatch
+        self.gen = getattr(llm, "gen", {})
+
+    def complete(self, messages, **overrides) -> str:
+        return self._llm.complete_with_tools(
+            messages, self._tools, self._dispatch, **overrides)
+
+
 def _lore_directive(facts: dict) -> str:
     """Render the lore-keeper's findings as a post-history instruction (appended
     AFTER the player's action, where it binds hardest on the next tokens)."""
@@ -1138,7 +1162,7 @@ class Engine:
         Returns a post-history directive, or "" when it finds nothing / fails
         (continuity is best-effort and must never break a turn)."""
         import time
-        from .llm import extract_json
+        from .llm import emit_json_ex
         t0 = time.monotonic()
         if on_stage:
             on_stage("Continuity check")
@@ -1150,20 +1174,28 @@ class Engine:
                  {"role": "user", "content": payload}]
         try:
             with llm_stage(self.llm, "lore"):
-                raw = self.llm.complete_with_tools(
-                    convo, LOOKUP_TOOL, self._dispatch_tool)
+                # Through emit_json_ex, like every other JSON stage: token floor,
+                # one retry with a nudge, and budget escalation when the reply was
+                # starved rather than wrong. Doing this by hand made a single bad
+                # reply final.
+                obj, err = emit_json_ex(
+                    _ToolJSONClient(self.llm, LOOKUP_TOOL, self._dispatch_tool),
+                    "", messages=convo)
         except Exception as e:  # noqa: BLE001 — never fatal
             if on_stage:
                 on_stage(f"Lore-keeper FAILED ({time.monotonic() - t0:.1f}s): {e} "
                          "— continuing unvetted")
             self.store.log_degraded("lore-keeper", f"{type(e).__name__}: {e}")
             return ""
-        obj = extract_json(raw)
         if not isinstance(obj, dict):
             if on_stage:
                 on_stage(f"Lore-keeper FAILED ({time.monotonic() - t0:.1f}s): "
                          "no valid JSON — continuing unvetted")
-            self.store.log_degraded("lore-keeper", "no valid JSON in output")
+            # The REASON, not just the symptom: emit_json_ex distinguishes
+            # truncated from empty from malformed and carries the tail, which is
+            # the difference between "raise the budget" and "the model is wrong".
+            self.store.log_degraded(
+                "lore-keeper", f"no usable JSON: {err or 'unknown'}"[:400])
             return ""
         directive = _lore_directive(obj)
         if on_stage:
