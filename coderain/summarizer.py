@@ -797,8 +797,20 @@ class Summarizer:
                 return "\n" + "\n".join(lines[i:]).rstrip("\n") + "\n"
         return ""
 
-    def maybe_fold(self) -> list[str]:
-        """Run any due folds; returns human-readable event strings."""
+    def maybe_fold(self, on_stage=None) -> list[str]:
+        """Run any due folds; returns human-readable event strings.
+
+        `on_stage` reports progress WHILE the folds run. This matters more than
+        it looks: maybe_fold is called after the prose has already streamed, so
+        without it the reader watches finished text next to a dead UI for the
+        length of the most expensive call the engine makes (measured on a real
+        save: ~4,300 output tokens per fold, on 1 turn in 7). It is a loop, too,
+        so a backlog does several in a row.
+        """
+        def note(msg: str) -> None:
+            if on_stage:
+                on_stage(msg)
+
         events: list[str] = []
         turns = self.store.turns()
         state = self.store.state()
@@ -813,9 +825,12 @@ class Summarizer:
             # fold is making anyway, so it's rate-limited to fold cadence rather than
             # attempted every turn. Idempotent after the first success.
             if self.planner is not None:
+                if self.planner.enabled() and not self.planner.chapters():
+                    note("Planning chapters")
                 events += self.planner.ensure_seeded()
             chunk = turns[folded:folded + self.medium_size]
             scene_no = self._next_scene_no()
+            note(f"Folding memory: scene {scene_no}")
             events += self._fold_scene(chunk, scene_no, folded + 1)  # 1-based start
             # Advance by the ACTUAL chunk length, never the configured size — a
             # short tail chunk (or a hand-edited size > after) must not overshoot
@@ -842,6 +857,7 @@ class Summarizer:
             chunk = scenes[folded_sc:folded_sc + self.long_size]
             if not chunk:
                 break              # nothing left to fold; never spin on an empty slice
+            note(f"Updating the long-term arc ({len(chunk)} scenes)")
             arc_events = self._fold_arc(chunk)
             if arc_events is None:
                 # Advancing here marked these scenes "absorbed into the arc" when

@@ -746,10 +746,13 @@ class Engine:
             return self.continue_story(on_stage=on_stage)
         return self.turn(player_input, on_stage=on_stage)
 
-    def maybe_fold(self) -> list[str]:
+    def maybe_fold(self, on_stage=None) -> list[str]:
         """Run due memory folds after a turn. Returns event strings for the UI —
-        RPG mechanics events (from this turn's sidecar) first, then fold events."""
-        events = self._rpg_events + self.summarizer.maybe_fold()
+        RPG mechanics events (from this turn's sidecar) first, then fold events.
+
+        Pass `on_stage` to see progress while it works; this runs after the prose
+        has streamed, so a silent fold reads as a frozen turn."""
+        events = self._rpg_events + self.summarizer.maybe_fold(on_stage)
         self._rpg_events = []
         return events
 
