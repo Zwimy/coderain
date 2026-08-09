@@ -28,6 +28,17 @@ class LLM:
             base_url=profile.base_url,
             api_key=profile.api_key,
             default_headers=profile.extra_headers or None,
+            # The SDK's defaults are read=600s with max_retries=2, so a stalled
+            # request could occupy the turn lock for ~30 MINUTES before failing.
+            # That is indistinguishable from a hang, and it lands where it hurts
+            # most: the fold runs AFTER the prose has streamed, so the reader is
+            # left staring at finished text with a dead UI.
+            #
+            # Generous, not tight: a fold legitimately generates ~4,300 tokens
+            # (measured on a real save), which is minutes on a slow local model.
+            # The point is a ceiling that exists, not a short one.
+            timeout=request_timeout(generation),
+            max_retries=1,
         )
         # --- token accounting -------------------------------------------
         # The provider already tells us exactly what each call cost; we used to
@@ -246,6 +257,20 @@ def extract_json(text: str) -> dict | None:
 # live threads-stage run truncated even at 4096) — so a too-small budget cuts the
 # object mid-brace (finish=length), which then looks like "the model failed".
 JSON_MIN_TOKENS = 8192
+
+# Wall clock for ONE model request, seconds. Overridable per install via
+# generation.request_timeout_s for a very slow local model on a big fold.
+REQUEST_TIMEOUT_S = 300
+
+
+def request_timeout(generation: dict | None) -> float:
+    """Per-request ceiling. Floored at 30s so a typo cannot make every call fail
+    instantly, which would look exactly like the model being unreachable."""
+    try:
+        return max(30.0, float((generation or {}).get("request_timeout_s",
+                                                      REQUEST_TIMEOUT_S)))
+    except (TypeError, ValueError):
+        return float(REQUEST_TIMEOUT_S)
 
 # 8192 is not always enough either, and chasing the number upward is a losing
 # game — reasoning length scales with the payload, and a fold's payload grows

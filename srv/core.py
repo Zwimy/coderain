@@ -246,7 +246,33 @@ def _stream_generation(slug: str, run):
                     yield _sse({"t": "chunk", "text": piece})
             while notes:
                 yield _sse({"t": "stage", "text": notes.pop(0)})
-            events = eng.maybe_fold()
+            # The fold runs AFTER the prose has streamed and is the most
+            # expensive call the engine makes, so doing it inline and silently
+            # left the reader looking at finished text beside a dead UI —
+            # reported as "turns get stuck after the text has generated".
+            #
+            # Run it on a worker and pump its stage notes out as they appear.
+            # The turn lock is still held for the whole thing (a fold must not
+            # race the next turn), so this changes what the reader SEES, not
+            # when the request completes.
+            fold_out: dict = {}
+
+            def _fold():
+                try:
+                    fold_out["events"] = eng.maybe_fold(notes.append)
+                except Exception as exc:      # noqa: BLE001 — surfaced below
+                    fold_out["error"] = exc
+
+            worker = threading.Thread(target=_fold, daemon=True)
+            worker.start()
+            while worker.is_alive() or notes:
+                while notes:
+                    yield _sse({"t": "stage", "text": notes.pop(0)})
+                if worker.is_alive():
+                    worker.join(timeout=0.25)
+            if "error" in fold_out:
+                raise fold_out["error"]
+            events = fold_out.get("events", [])
             # ST-31: hand back the final STORED narrator text so the client can
             # settle the streamed (raw) turn onto the regex-cleaned version.
             tail = eng.store.turns()
