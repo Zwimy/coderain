@@ -195,6 +195,28 @@ def _any_applied(events: list[str]) -> bool:
 
 
 class Engine:
+    # Reassigning `engine.llm` has to reach the components that were handed a
+    # reference to it, or the swap is silently partial. `sweep_fold_test.py` set
+    # `e.llm` and `e.summarizer.llm` to a stub and still spent 342 of its 349
+    # seconds inside httpcore: the PLANNER kept the real client, so every fold
+    # that seeded an outline made live calls. A hermetic offline suite quietly
+    # became one that needed a provider to be up, and blew its 300s budget.
+    #
+    # A property rather than a fix in that one test, because the trap is the API:
+    # nothing about `engine.llm = stub` suggests two other objects still hold the
+    # old one, and every future test would step on it the same way.
+    @property
+    def llm(self):
+        return self._llm
+
+    @llm.setter
+    def llm(self, value) -> None:
+        self._llm = value
+        for holder in (getattr(self, "planner", None),
+                       getattr(self, "summarizer", None)):
+            if holder is not None:
+                holder.llm = value
+
     def __init__(self, config: Config, store: MemoryStore):
         self.cfg = config
         self.store = store
