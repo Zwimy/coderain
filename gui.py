@@ -492,43 +492,82 @@ class App(tk.Tk):
                      width=6).pack(side="left", padx=2)
         self._button(brow, "Down", lambda: op(lambda i: planner.move(i, 1)),
                      width=6).pack(side="left", padx=2)
+        # Rewrite ONE chapter. A model call, so it runs off the UI thread like
+        # Generate does; a done chapter is refused by the planner, not here, so
+        # both front ends get the same verdict.
+        regen = self._button(brow, "Rewrite", None, width=9)
+        regen.configure(command=lambda: _regen_selected(regen))
+        regen.pack(side="left", padx=2)
 
         # These two call the model. Off the UI thread, with the button disabled,
         # so a slow local model does not look like a hung window.
-        def threaded(label, work):
+        def threaded(label, work, btn=None, keep=None):
+            """Run a model call off the UI thread.
+
+            `btn` is passed in rather than read off the dialog: the previous
+            version looked for an attribute nothing ever set, so it always found
+            None and no button was ever disabled while a call was running.
+            `keep` holds the selected row across the refresh, so rewriting a
+            chapter does not bounce the selection back to the active one.
+            """
             def run():
-                btn = getattr(dlg, "_busy_btn", None)
                 status.configure(text=f"{label}...")
                 self.generating = True
+                result = {}
 
                 def worker():
                     try:
                         work()
-                        err = None
+                        result["err"] = None
                     except Exception as e:      # noqa: BLE001 — reported below
-                        err = str(e)
-                    self.after(0, lambda: done(err))
+                        result["err"] = str(e)
 
-                def done(err):
-                    self.generating = False
-                    status.configure(text=err or "")
-                    if btn is not None:
-                        btn.configure(state="normal")
-                    refresh()
-
+                thread = threading.Thread(target=worker, daemon=True)
                 if btn is not None:
                     btn.configure(state="disabled")
-                threading.Thread(target=worker, daemon=True).start()
+                thread.start()
+
+                def poll():
+                    # after() is scheduled from the MAIN thread only. The first
+                    # version called it from inside the worker, which is not
+                    # thread-safe in Tk and raises "main thread is not in main
+                    # loop" outright when no mainloop is running. _drain_queue
+                    # already polls this way; this now matches it.
+                    if thread.is_alive():
+                        self.after(120, poll)
+                        return
+                    self.generating = False
+                    status.configure(text=result.get("err") or "")
+                    if btn is not None:
+                        btn.configure(state="normal")
+                    refresh(keep)
+
+                self.after(120, poll)
             return run
+
+        def _regen_selected(btn):
+            """Rewrite the selected chapter. The planner refuses a completed one,
+            so both front ends give the same verdict; this only surfaces it."""
+            i = sel()
+            if i is None:
+                return
+            if rows[i]["status"] == "done":
+                status.configure(
+                    text="a completed chapter is already part of the story")
+                return
+            threaded("rewriting", lambda: planner.regenerate_chapter(i),
+                     btn, keep=i)()
 
         grow = tk.Frame(dlg, bg=BG)
         grow.pack(anchor="w", padx=10, pady=(0, 8))
-        gen = self._button(grow, "Generate", None, width=12)
-        gen.configure(command=threaded("planning",
-                                       lambda: planner.seed(force=True)))
+        # "Replan", not "Generate": it keeps completed and current chapters and
+        # replaces only the planned tail, one chapter per call.
+        gen = self._button(grow, "Replan", None, width=12)
+        gen.configure(command=threaded("replanning",
+                                       lambda: planner.seed(force=True), gen))
         gen.pack(side="left", padx=2)
         adv = self._button(grow, "Chapter done", None, width=14)
-        adv.configure(command=threaded("advancing", planner.complete_active))
+        adv.configure(command=threaded("advancing", planner.complete_active, adv))
         adv.pack(side="left", padx=2)
         self._button(grow, "Close", dlg.destroy, width=8).pack(side="left", padx=2)
 

@@ -186,10 +186,21 @@ s8.write("premise.md", "A courier crosses a frozen kingdom carrying a box.")
 cfg8 = load_config()
 cfg8.generation["chapter_plan"] = True
 cfg8.generation["chapter_horizon"] = 3
-p8 = ChapterPlanner(cfg8, s8, _Stub(json.dumps({"chapters": [
+# ONE chapter per call: seeding no longer takes a batch reply. The newline in
+# the title is the point of this check and is unchanged.
+class _SeqStub:
+    def __init__(self, items):
+        self.items = list(items)
+
+    def complete(self, messages, **k):
+        nxt = self.items.pop(0) if self.items else {"title": "Extra", "goal": "x"}
+        return json.dumps(nxt)
+
+
+p8 = ChapterPlanner(cfg8, s8, _SeqStub([
     {"title": "The Road\nNorth", "goal": "Reach the pass."},
     {"title": "The Road\nSouth", "goal": "Turn back."},
-    {"title": "The Pass", "goal": "Cross."}]})))
+    {"title": "The Pass", "goal": "Cross."}]))
 p8.seed()
 slugs = [c.slug for c in p8.chapters()]
 assert slugs == ["ch-1", "ch-2", "ch-3"], (

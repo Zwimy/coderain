@@ -93,6 +93,16 @@ def delete_chapter(slug: str, idx: int):
     return _outline_payload(eng)
 
 
+@router.post("/api/saves/{slug}/outline/{idx}/regenerate")
+def regenerate_chapter(slug: str, idx: int):
+    """Rewrite ONE chapter in place, keeping its position and status. Sees the
+    whole outline and the story so far, so the replacement fits its neighbours."""
+    eng = _engine(slug)
+    with _exclusive(), _as_http():
+        events = eng.planner.regenerate_chapter(idx)
+    return {**_outline_payload(eng), "events": events}
+
+
 @router.post("/api/saves/{slug}/outline/{idx}/move")
 def move_chapter(slug: str, idx: int, body: dict):
     """Reorder a planned chapter up (-1) or down (+1). Movement is confined to the

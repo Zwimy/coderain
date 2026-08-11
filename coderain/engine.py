@@ -136,6 +136,42 @@ class _ToolJSONClient:
             messages, self._tools, self._dispatch, **overrides)
 
 
+def _chapter_directive(store) -> str:
+    """The active chapter, restated AFTER the player's action.
+
+    The full plan already rides the system prompt as "Story structure (chapter
+    plan)", but that is one section among a dozen and, on a large context,
+    thousands of tokens from where generation starts. Reported live as the story
+    drifting wherever it wants. Same reasoning as _lore_directive below: the last
+    thing the model reads binds hardest on the next tokens.
+
+    The final line is the anti-drift instruction. Naming the goal is not enough
+    on its own; the model also has to be told to check whether recent turns
+    actually moved toward it.
+    """
+    chapters = store.entries("memory/outline.md")
+    if not chapters:
+        return ""
+
+    def status(c):
+        return (c.attrs.get("status", "planned") or "planned").strip().lower()
+
+    active = next((c for c in chapters if status(c) == "active"), None) \
+        or next((c for c in chapters if status(c) != "done"), None)
+    if active is None:
+        return ""
+    goal = " ".join(active.body.split())[:400]
+    nxt = [c.title for c in chapters[chapters.index(active) + 1:][:1]]
+    out = ["# THIS CHAPTER — steer toward it, do not wander off it",
+           f"You are in: {active.title}",
+           f"Its goal: {goal}" if goal else "",
+           "Every scene must move toward that goal, complicate it, or pay it "
+           "off. If the last few turns have not advanced it, advance it now.",
+           "Do not resolve it in a single turn, and do not skip ahead to "
+           + (f"'{nxt[0]}'." if nxt else "later chapters.")]
+    return "\n".join(p for p in out if p)
+
+
 def _lore_directive(facts: dict) -> str:
     """Render the lore-keeper's findings as a post-history instruction (appended
     AFTER the player's action, where it binds hardest on the next tokens)."""
@@ -870,6 +906,13 @@ class Engine:
                 if directive:
                     messages = [*messages,
                                 {"role": "system", "content": directive}]
+        # The active chapter, restated where it binds. Costs no extra call: the
+        # plan is already on disk. Placed AFTER any continuity directive so the
+        # chapter goal is the last thing read before writing.
+        if self.cfg.generation.get("chapter_outline", True):
+            chapter = _chapter_directive(self.store)
+            if chapter:
+                messages = [*messages, {"role": "system", "content": chapter}]
         if self.trinity is not None:
             # Quad pipeline: the Logic Agent's envelope is validated and RESOLVED
             # before the Narrator writes (so prose narrates the actual outcome);

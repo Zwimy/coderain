@@ -26,12 +26,18 @@ export async function outlineModal(slug) {
       const ro = ch.status === "done" ? "disabled" : "";
       const label = ch.status === "done" ? "done"
         : ch.status === "active" ? "now" : "planned";
+      // Rewrite one chapter in place. Offered on active too: rewording the goal
+      // the writer is aiming at is legitimate steering. Never on done — that is
+      // not a plan any more, it is what happened, and the server refuses it.
+      const regen = ch.status === "done" ? ""
+        : `<button data-op="regen"
+             title="rewrite just this chapter to fit the story so far">↻</button>`;
       const ops = ch.status === "planned"
-        ? `<button data-op="up" title="move earlier">↑</button>
+        ? `${regen}<button data-op="up" title="move earlier">↑</button>
            <button data-op="down" title="move later">↓</button>
            <button data-op="del" title="delete this chapter">🗑</button>`
         : ch.status === "active"
-        ? `<button data-op="advance" class="primary"
+        ? `${regen}<button data-op="advance" class="primary"
              title="mark this chapter complete and plan the next">Chapter done →</button>`
         : "";
       return `<div class="ch-row ${ch.status}" data-i="${i}">
@@ -77,9 +83,11 @@ export async function outlineModal(slug) {
     $("#ch-close").addEventListener("click", closeModal);
     const gen = $("#ch-gen");
     if (gen) gen.addEventListener("click", async () => {
-      if (chs.length && !(await confirmModal("Regenerate the whole plan?",
-        "This replaces every chapter — including any already completed — with a "
-        + "fresh outline from your premise.", "Regenerate"))) return;
+      // Copy corrected with the behaviour: this no longer wipes completed
+      // chapters, and no longer plans from the premise alone.
+      if (chs.length && !(await confirmModal("Replan the upcoming chapters?",
+        "Completed and current chapters are kept. Every planned chapter is "
+        + "replaced, one at a time, using the story so far.", "Replan"))) return;
       await refetch(() => call("/generate", {method: "POST"}), gen);
     });
     const add = $("#ch-add");
@@ -99,6 +107,8 @@ export async function outlineModal(slug) {
           if (op === "up") return refetch(() => call(`/${i}/move`, {method: "POST", body: {dir: -1}}));
           if (op === "down") return refetch(() => call(`/${i}/move`, {method: "POST", body: {dir: 1}}));
           if (op === "del") return refetch(() => call(`/${i}`, {method: "DELETE"}));
+          if (op === "regen") return refetch(
+            () => call(`/${i}/regenerate`, {method: "POST"}), btn);
           if (op === "advance") return refetch(() => call("/advance", {method: "POST"}), btn);
         }));
     });
