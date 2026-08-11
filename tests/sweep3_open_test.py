@@ -198,9 +198,21 @@ s8.write("premise.md", "A courier crosses a frozen kingdom carrying a sealed box
 cfg8 = load_config()
 cfg8.generation["chapter_plan"] = True
 cfg8.generation["chapter_horizon"] = 3
-p8 = ChapterPlanner(cfg8, s8, _Stub(json.dumps({"chapters": [
+# ONE chapter per call. Seeding no longer asks for a batch, so a stub replying
+# with the same {"chapters": [...]} object every time now yields nothing at all.
+# Same coverage (numbering survives a hole), current protocol.
+class _SeqStub:
+    def __init__(self, items):
+        self.items = list(items)
+
+    def complete(self, messages, **k):
+        nxt = self.items.pop(0) if self.items else {"title": "Extra", "goal": "x"}
+        return json.dumps(nxt)
+
+
+p8 = ChapterPlanner(cfg8, s8, _SeqStub([
     {"title": "One", "goal": "a"}, {"title": "Two", "goal": "b"},
-    {"title": "Three", "goal": "c"}]})))
+    {"title": "Three", "goal": "c"}]))
 assert p8.enabled(), "precondition: the planner must be on for this check"
 p8.seed()
 assert [c.slug for c in p8.chapters()] == ["ch-1", "ch-2", "ch-3"], p8.chapters()

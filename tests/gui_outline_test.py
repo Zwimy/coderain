@@ -20,6 +20,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -171,12 +172,75 @@ def test_refusal_shows_in_the_panel():
     print("6. a refusal is shown in the panel, not raised")
 
 
+def _click(dlg, label):
+    for w in dlg.winfo_children():
+        for b in w.winfo_children():
+            if isinstance(b, tk.Button) and b.cget("text") == label:
+                b.invoke()
+                return True
+    raise AssertionError(f"no {label!r} button")
+
+
+def test_rewrite_button_targets_the_selection():
+    """§7 the Rewrite button must pass the SELECTED index to the planner, not
+    whatever row happens to be first."""
+    dlg = app._outline_dialog()
+    rows = app.engine.planner.as_dicts()
+    i = next(n for n, r in enumerate(rows) if r["status"] == "planned")
+    called = {}
+    real = app.engine.planner.regenerate_chapter
+    app.engine.planner.regenerate_chapter = lambda idx: called.setdefault("idx", idx) or []
+    try:
+        dlg.plan_list.selection_clear(0, "end")
+        dlg.plan_list.selection_set(i)
+        dlg.plan_load()
+        _click(dlg, "Rewrite")
+        # No mainloop here, so after() callbacks only fire inside update().
+        for _ in range(80):
+            app.update()
+            if "idx" in called and not app.generating:
+                break
+            time.sleep(0.05)
+    finally:
+        app.engine.planner.regenerate_chapter = real
+        app.generating = False
+    assert called.get("idx") == i, (called, i)
+    dlg.destroy()
+    print("7. Rewrite passes the selected chapter index to the planner")
+
+
+def test_rewrite_refuses_a_done_chapter_without_a_model_call():
+    """§8 the guard fires in the UI before any call is made, and says why."""
+    dlg = app._outline_dialog()
+    done_i = next(n for n, r in enumerate(app.engine.planner.as_dicts())
+                  if r["status"] == "done")
+    called = {}
+    real = app.engine.planner.regenerate_chapter
+    app.engine.planner.regenerate_chapter = lambda idx: called.setdefault("idx", idx)
+    try:
+        dlg.plan_list.selection_clear(0, "end")
+        dlg.plan_list.selection_set(done_i)
+        dlg.plan_load()
+        _click(dlg, "Rewrite")
+        app.update()
+    finally:
+        app.engine.planner.regenerate_chapter = real
+        app.generating = False
+    assert "idx" not in called, "a model call was made for a completed chapter"
+    assert "already part of the story" in dlg.plan_status.cget("text"), \
+        dlg.plan_status.cget("text")
+    dlg.destroy()
+    print("8. Rewrite refuses a completed chapter before calling the model")
+
+
 for fn in (test_basic_edits,
            test_delete_protects_story_chapters,
            test_move_protects_story_order_and_edges,
            test_dialog_lists_chapters_and_opens_on_the_active_one,
            test_dialog_edit_reaches_disk,
-           test_refusal_shows_in_the_panel):
+           test_refusal_shows_in_the_panel,
+           test_rewrite_button_targets_the_selection,
+           test_rewrite_refuses_a_done_chapter_without_a_model_call):
     fn()
 
 app.destroy()

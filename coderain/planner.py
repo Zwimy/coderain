@@ -24,25 +24,32 @@ from .memory import Entry, MemoryStore
 OUTLINE = "memory/outline.md"
 DEFAULT_HORIZON = 4      # active + ~3 planned ahead
 
-SEED_INSTRUCTION = """\
-You are the story ARCHITECT laying out a book-style outline. From the premise and
-world below, plan the first {n} chapters as a rolling arc. Each chapter is a STAGE
-of the story with one concrete dramatic goal — a question it opens and answers — not
-a single scene. Chapter 1 is where play begins; each later chapter escalates toward
-the story's end. Keep every goal concise (<= 30 words), forward-looking, and free of
-specific dialogue or fixed outcomes (the play decides those).
-
-Return ONLY a JSON object:
-{{"chapters": [{{"title": "Chapter title", "goal": "what this chapter must accomplish"}}]}}
-Exactly {n} chapters, in order.
-"""
+# SEED_INSTRUCTION (ask for all N chapters in one reply) is gone. Every path now
+# plans ONE chapter per call so each is built on the ones before it, and so a
+# single malformed element cannot cost the whole batch.
 
 NEXT_INSTRUCTION = """\
-You are the story ARCHITECT extending a book-style outline. Below are the chapters
-so far (completed and current) and WHAT HAS ACTUALLY HAPPENED. Plan the SINGLE next
-chapter that should follow — building on the real events, escalating the arc, not
-repeating a stage already done. Concise goal (<= 30 words), no fixed dialogue or
-outcomes.
+You are the story ARCHITECT extending a book-style outline. You are given the
+premise, the world, the chapters so far (completed, current and planned) and WHAT
+HAS ACTUALLY HAPPENED. Plan the SINGLE next chapter that should follow.
+
+If there are no chapters yet, plan chapter 1: where play begins, drawn from the
+premise. Otherwise build on the real events, escalate the arc, and never repeat a
+stage the story has already been through.
+
+Concise goal (<= 30 words), forward-looking, no fixed dialogue or outcomes.
+
+Return ONLY a JSON object: {"title": "Chapter title", "goal": "what it must accomplish"}
+"""
+
+SLOT_INSTRUCTION = """\
+You are the story ARCHITECT rewriting ONE chapter of an existing outline. The
+chapter marked "<<< REWRITE THIS ONE" is the only one you may change. Replace it
+with a better chapter for that slot: it must follow from the chapter before it,
+lead into the chapter after it, and fit what has actually happened.
+
+Do not renumber, reorder, or touch any other chapter. Concise goal (<= 30 words),
+no fixed dialogue or outcomes.
 
 Return ONLY a JSON object: {"title": "Chapter title", "goal": "what it must accomplish"}
 """
@@ -98,43 +105,44 @@ class ChapterPlanner:
         return self.seed()
 
     def seed(self, force: bool = False) -> list[str]:
-        """Generate the opening `horizon` chapters from the premise/world. One LLM
-        call. `force` regenerates from scratch (the UI 'regenerate' button)."""
+        """Fill the outline out to the horizon, ONE CHAPTER PER CALL.
+
+        Two deliberate changes from the original single-call version.
+
+        It plans one chapter at a time. Asking for N chapters in one reply gave
+        the model no chance to build each on the last, and a malformed element
+        anywhere cost the whole batch (D-008: the old force path deleted the
+        outline BEFORE it validated the reply, so a bad response left nothing).
+        Each call now sees every chapter already written.
+
+        `force` KEEPS what the story has lived through. It used to delete every
+        chapter including completed ones and replan from the premise, which threw
+        away the record of what the story had actually been about and produced a
+        plan incoherent with its own history. Only `planned` chapters are cleared.
+        """
         if not self._enabled:
             return []
         if self.chapters() and not force:
             return []
-        premise = self.store.read("premise.md").strip()
-        if len(premise) <= 20:
+        if not self._has_premise():
             return []
-        world = self.store.read("world-bible.md").strip()
-        arc = self.store.read("memory/arc.md").strip()
-        payload = "PREMISE:\n" + premise
-        if world:
-            payload += "\n\nWORLD:\n" + world[:2000]
-        if arc:
-            payload += "\n\nSTORY SO FAR:\n" + arc[:1500]
-        with llm_stage(self.llm, "plan"):
-            obj = emit_json(self.llm,
-                            SEED_INSTRUCTION.format(n=self.horizon), payload)
-        chapters = (obj or {}).get("chapters")
-        if not isinstance(chapters, list) or not chapters:
-            return []                       # failed — leave empty, retry next fold
-        # Clear any prior outline on a forced regenerate.
-        for c in self.chapters():
-            self.store.remove_entry(OUTLINE, c.slug)
-        n = 0
-        for ch in chapters[:self.horizon]:
-            if not isinstance(ch, dict):
-                continue
-            # Number by what is actually WRITTEN, not by position in the model's
-            # list. Numbering by position left a hole (ch-1, ch-3) whenever an
-            # element wasn't an object, and _generate_next then reused ch-3 and
-            # overwrote a real chapter.
-            n += 1
-            self._write_chapter(n, ch.get("title"), ch.get("goal"),
-                                "active" if n == 1 else "planned")
-        return [f"outline: planned {n} chapters"] if n else []
+        events: list[str] = []
+        if force:
+            dropped = 0
+            for c in self.chapters():
+                if _status(c) == "planned":
+                    self.store.remove_entry(OUTLINE, c.slug)
+                    dropped += 1
+            if dropped:
+                events.append(f"outline: cleared {dropped} planned chapter(s)")
+        # _reconcile tops the plan back up to the horizon one chapter at a time
+        # and normalises the statuses, which is exactly the job here.
+        before = len(self.chapters())
+        events += self._reconcile()
+        made = len(self.chapters()) - before
+        if made:
+            events.append(f"outline: planned {made} chapter(s)")
+        return events
 
     def complete_active(self) -> list[str]:
         """The active chapter's goal has landed: mark it done, activate the next,
@@ -180,26 +188,72 @@ class ChapterPlanner:
                 self.store.upsert_entry(OUTLINE, c)
         return events
 
-    def _generate_next(self) -> Entry | None:
-        """Plan ONE more chapter onto the end, seeded with the chapters so far and
-        what actually happened. One LLM call."""
-        chapters = self.chapters()
-        prior = "\n".join(
-            f"- {c.title} [{_status(c)}]: {c.body.strip()}" for c in chapters)
+    def _plan_payload(self, mark: int | None = None) -> str:
+        """Everything a chapter generator should know, for EVERY path.
+
+        Seeding used to see only the premise, the world and the arc, so a
+        regenerate mid-story planned as if the story had not happened: it could
+        not see its own completed chapters or a single scene of what was played.
+        One payload now feeds seeding, extending and single-chapter rewrites, so
+        none of them can be coherent while another is not.
+
+        `mark` flags one chapter as the one being rewritten, so the model can see
+        the neighbours it has to fit between.
+        """
+        premise = self.store.read("premise.md").strip()
+        world = self.store.read("world-bible.md").strip()
         arc = self.store.read("memory/arc.md").strip()
         scenes = self.store.entries("memory/scenes.md")
         recent = "\n\n".join(e.render().strip() for e in scenes[-3:])
-        payload = "CHAPTERS SO FAR:\n" + (prior or "(none)")
+        rows = []
+        for i, c in enumerate(self.chapters()):
+            flag = "   <<< REWRITE THIS ONE" if i == mark else ""
+            rows.append(f"- {c.title} [{_status(c)}]: {c.body.strip()}{flag}")
+        out = "PREMISE:\n" + premise[:2000]
+        if world:
+            out += "\n\nWORLD:\n" + world[:2000]
+        out += "\n\nCHAPTERS SO FAR:\n" + ("\n".join(rows) or "(none yet)")
         if arc:
-            payload += "\n\nARC:\n" + arc[:1500]
+            out += "\n\nSTORY SO FAR (arc):\n" + arc[:1500]
         if recent:
-            payload += "\n\nWHAT HAS ACTUALLY HAPPENED (recent):\n" + recent[:2000]
+            out += "\n\nWHAT HAS ACTUALLY HAPPENED (recent scenes):\n" + recent[:2000]
+        return out
+
+    def _plan_one(self, instruction: str, mark: int | None = None) -> dict | None:
+        """One chapter, one LLM call. The unit every path is built from."""
         with llm_stage(self.llm, "plan"):
-            obj = emit_json(self.llm, NEXT_INSTRUCTION, payload)
+            obj = emit_json(self.llm, instruction, self._plan_payload(mark))
         if not isinstance(obj, dict) or not str(obj.get("title", "")).strip():
+            return None
+        return obj
+
+    def _generate_next(self) -> Entry | None:
+        """Plan ONE more chapter onto the end, seeded with the chapters so far and
+        what actually happened. One LLM call."""
+        obj = self._plan_one(NEXT_INSTRUCTION)
+        if obj is None:
             return None
         return self._write_chapter(self._next_number(), obj.get("title"),
                                    obj.get("goal"), "planned")
+
+    def regenerate_chapter(self, idx: int) -> list[str]:
+        """Rewrite ONE chapter in place, keeping its position and status.
+
+        A completed chapter is refused: it is not a plan any more, it is what
+        happened. Everything else is fair game, including the active one, because
+        rewording the goal the writer is aiming at is legitimate steering.
+        """
+        rows = self._rows_or_raise(idx)
+        if rows[idx]["status"] == "done":
+            raise PlanError("a completed chapter is already part of the story")
+        obj = self._plan_one(SLOT_INSTRUCTION, mark=idx)
+        if obj is None:
+            raise PlanError("the model did not return a usable chapter")
+        was = rows[idx]["title"]
+        rows[idx]["title"] = str(obj.get("title", "")).strip() or was
+        rows[idx]["goal"] = str(obj.get("goal", "")).strip()
+        self.replace_all(rows)
+        return [f"chapter rewritten: {was} -> {rows[idx]['title']}"]
 
     def _next_number(self) -> int:
         """One past the HIGHEST chapter number on file, not the chapter COUNT.

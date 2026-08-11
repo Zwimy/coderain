@@ -33,22 +33,22 @@ def _status(c):
 
 
 class SeedStub:
-    """Emits `horizon` chapters on the seed call, then one chapter per extend call."""
-    def __init__(self, horizon):
+    """ONE chapter per call.
+
+    This used to branch: a batch reply carrying `horizon` chapters for the seed
+    call, and a single chapter for each extend. There is no batch call any more —
+    seeding, extending and single-chapter rewrites all plan one chapter per call,
+    each one seeing the chapters already written. So the stub is now uniform, and
+    `calls` counts every chapter the planner asked for.
+    """
+    def __init__(self, horizon=4):
         self.horizon = horizon
-        self.extend_calls = 0
+        self.calls = 0
 
     def complete(self, messages, **k):
-        sys_txt = messages[0]["content"]
-        if "extending" in sys_txt:            # NEXT_INSTRUCTION (vs seed)
-            self.extend_calls += 1
-            n = self.extend_calls
-            return json.dumps({"title": f"Added Chapter {n}",
-                               "goal": f"escalate, step {n}"})
-        # seed
-        return json.dumps({"chapters": [
-            {"title": f"Chapter {i}", "goal": f"goal {i}"}
-            for i in range(1, self.horizon + 1)]})
+        self.calls += 1
+        n = self.calls
+        return json.dumps({"title": f"Chapter {n}", "goal": f"goal {n}"})
 
 
 # ---- 1) seed --------------------------------------------------------------
@@ -88,8 +88,9 @@ assert _status(chapters[0]) == "done", _status(chapters[0])
 assert planner.active().slug == "ch-2", planner.active().slug
 non_done = [c for c in chapters if _status(c) != "done"]
 assert len(non_done) == 4, [(c.title, _status(c)) for c in chapters]
-assert stub.extend_calls == 1, stub.extend_calls           # exactly one new chapter
-assert chapters[-1].title == "Added Chapter 1", chapters[-1].title
+# 4 calls seeded the outline, so the one new chapter here is call 5.
+assert stub.calls == 5, stub.calls                          # exactly one new chapter
+assert chapters[-1].title == "Chapter 5", chapters[-1].title
 assert any("chapter done" in e.lower() for e in ev), ev
 print("3) completion: ch-1 done, ch-2 active, one fresh chapter appended (horizon held)")
 
