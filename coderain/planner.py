@@ -28,19 +28,38 @@ DEFAULT_HORIZON = 4      # active + ~3 planned ahead
 # plans ONE chapter per call so each is built on the ones before it, and so a
 # single malformed element cannot cost the whole batch.
 
+# Handing the model the whole outline so each chapter builds on the last also
+# hands it the easiest possible answer: paraphrase a neighbour. Seen live, three
+# chapters into one story — "uncover the contract's hidden compulsion" followed
+# by "uncover the contract's hidden trap", and the second one written as the
+# lead-in to the chapter ABOVE it. Both instructions carry the same distinctness
+# block, so no path can enforce it while another does not.
+DISTINCT_RULES = """\
+Your chapter must be its own STAGE of the story, not a rewording of a neighbour:
+- It opens a question no other chapter opens. If its goal could swap places with
+  another chapter's and the outline would still read the same, it is wrong.
+- Never restate another chapter's goal in different words. If you find yourself
+  reusing its verb and its nouns, you are writing the same chapter twice.
+- It may only set up chapters AFTER it. Never write it as the lead-in to a
+  chapter listed above it, and never as the payoff of one listed below it.
+- Give it its own pressure, its own place and its own opposition. An outline
+  that circles the same three nouns is the failure to avoid.
+"""
+
 NEXT_INSTRUCTION = """\
 You are the story ARCHITECT extending a book-style outline. You are given the
-premise, the world, the chapters so far (completed, current and planned) and WHAT
-HAS ACTUALLY HAPPENED. Plan the SINGLE next chapter that should follow.
+premise, the world, the chapters so far (numbered, with their status) and WHAT
+HAS ACTUALLY HAPPENED. Write the chapter in the marked empty slot at the END.
 
 If there are no chapters yet, plan chapter 1: where play begins, drawn from the
 premise. Otherwise build on the real events, escalate the arc, and never repeat a
 stage the story has already been through.
 
+{rules}
 Concise goal (<= 30 words), forward-looking, no fixed dialogue or outcomes.
 
-Return ONLY a JSON object: {"title": "Chapter title", "goal": "what it must accomplish"}
-"""
+Return ONLY a JSON object: {{"title": "Chapter title", "goal": "what it must accomplish"}}
+""".format(rules=DISTINCT_RULES)
 
 SLOT_INSTRUCTION = """\
 You are the story ARCHITECT rewriting ONE chapter of an existing outline. The
@@ -48,15 +67,62 @@ chapter marked "<<< REWRITE THIS ONE" is the only one you may change. Replace it
 with a better chapter for that slot: it must follow from the chapter before it,
 lead into the chapter after it, and fit what has actually happened.
 
-Do not renumber, reorder, or touch any other chapter. Concise goal (<= 30 words),
-no fixed dialogue or outcomes.
+Do not renumber, reorder, or touch any other chapter.
 
-Return ONLY a JSON object: {"title": "Chapter title", "goal": "what it must accomplish"}
-"""
+{rules}
+Concise goal (<= 30 words), no fixed dialogue or outcomes.
+
+Return ONLY a JSON object: {{"title": "Chapter title", "goal": "what it must accomplish"}}
+""".format(rules=DISTINCT_RULES)
 
 
 def _status(entry: Entry) -> str:
     return (entry.attrs.get("status", "planned") or "planned").strip().lower()
+
+
+_STOP = frozenset("""a an the and or but of to in on at by for with from into over
+under this that these those your you his her its their our my as is are was were
+be been being it he she they them then than while during after before not no nor
+so if when where which who whom whose what how why all any both each more most
+other some such own same too very can will just now must has have had do does did
+""".split())
+
+
+def _content_words(text: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z]+", str(text).lower())
+            if len(w) > 2 and w not in _STOP]
+
+
+def _trigrams(words: list[str]) -> set[tuple[str, str, str]]:
+    return {tuple(words[i:i + 3]) for i in range(len(words) - 2)}
+
+
+def _restates(goal: str, others: list[str]) -> str:
+    """Does this goal restate a chapter already in the outline? Pure code, per
+    invariant 1: the model is not asked to judge its own duplicate.
+
+    THREE CONSECUTIVE CONTENT WORDS shared with another chapter is the signal.
+    It is what caught the live case — "uncover the contract's hidden compulsion"
+    against "uncover the contract's hidden trap": different sentences, same beat,
+    and they share the content trigram (uncover, contract, hidden).
+
+    A word-overlap ratio does NOT work here and was tried first. Those two goals
+    share four content words out of twenty-two, a Jaccard of 0.18, which sits
+    below any threshold you could set without firing on every chapter of a story
+    that legitimately keeps saying "dragon". Adjacency is the part that carries
+    the meaning: the same words in the same order is a restatement, the same
+    words scattered is just the same setting.
+
+    Returns the offending phrase (for the retry nudge and the health line), or "".
+    """
+    mine = _trigrams(_content_words(goal))
+    if not mine:
+        return ""
+    for other in others:
+        shared = mine & _trigrams(_content_words(other))
+        if shared:
+            return " ".join(sorted(shared)[0])
+    return ""
 
 
 class PlanError(ValueError):
@@ -197,18 +263,31 @@ class ChapterPlanner:
         One payload now feeds seeding, extending and single-chapter rewrites, so
         none of them can be coherent while another is not.
 
-        `mark` flags one chapter as the one being rewritten, so the model can see
-        the neighbours it has to fit between.
+        `mark` says which slot is being written, so the model can see the
+        neighbours it has to fit between. An index inside the outline marks a
+        rewrite; `mark == len(chapters)` marks the empty slot on the end, which
+        is the append path.
+
+        The rows are NUMBERED and the slot is always marked. Unnumbered rows with
+        no marker are why a freshly appended chapter came back written as the
+        lead-in to a chapter two slots above it: nothing in the payload said
+        where the new one went, so the model picked a gap it liked.
         """
         premise = self.store.read("premise.md").strip()
         world = self.store.read("world-bible.md").strip()
         arc = self.store.read("memory/arc.md").strip()
         scenes = self.store.entries("memory/scenes.md")
         recent = "\n\n".join(e.render().strip() for e in scenes[-3:])
+        chapters = self.chapters()
         rows = []
-        for i, c in enumerate(self.chapters()):
+        for i, c in enumerate(chapters):
             flag = "   <<< REWRITE THIS ONE" if i == mark else ""
-            rows.append(f"- {c.title} [{_status(c)}]: {c.body.strip()}{flag}")
+            rows.append(
+                f"{i + 1}. [{_status(c)}] {c.title}: {c.body.strip()}{flag}")
+        if mark is not None and mark >= len(chapters):
+            rows.append(f"{len(chapters) + 1}. <<< WRITE THIS ONE — the new last "
+                        "chapter. Nothing follows it yet, so it cannot lead into "
+                        "anything listed above.")
         out = "PREMISE:\n" + premise[:2000]
         if world:
             out += "\n\nWORLD:\n" + world[:2000]
@@ -219,18 +298,54 @@ class ChapterPlanner:
             out += "\n\nWHAT HAS ACTUALLY HAPPENED (recent scenes):\n" + recent[:2000]
         return out
 
-    def _plan_one(self, instruction: str, mark: int | None = None) -> dict | None:
-        """One chapter, one LLM call. The unit every path is built from."""
-        with llm_stage(self.llm, "plan"):
-            obj = emit_json(self.llm, instruction, self._plan_payload(mark))
-        if not isinstance(obj, dict) or not str(obj.get("title", "")).strip():
-            return None
+    def _plan_one(self, instruction: str, mark: int | None = None,
+                  avoid: list[str] | None = None) -> dict | None:
+        """One chapter, one LLM call — with one retry when it comes back as a
+        restatement of a chapter already in the outline.
+
+        The retry is worth its cost because planning is rare (once per completed
+        chapter, ~15-25 turns) and a duplicate is not a bad sentence you read
+        once: it sits in the outline steering every turn of that chapter, and it
+        is what the NEXT chapter is then planned against. One bad chapter breeds
+        the next one.
+
+        A second failure is accepted rather than dropped — an outline with a
+        weak chapter still beats a hole — but it is logged, per invariant 2.
+        """
+        avoid = [a for a in (avoid or []) if str(a).strip()]
+        payload = self._plan_payload(mark)
+        obj = None
+        for attempt in (1, 2):
+            with llm_stage(self.llm, "plan"):
+                obj = emit_json(self.llm, instruction, payload)
+            if not isinstance(obj, dict) or not str(obj.get("title", "")).strip():
+                return None
+            echo = _restates(obj.get("goal", ""), avoid)
+            if not echo:
+                return obj
+            if attempt == 2:
+                self.store.log_degraded(
+                    "chapter-plan",
+                    f"chapter kept restating the outline ({echo!r}) after a retry")
+                return obj
+            payload += (
+                "\n\nREJECTED. Your last answer restated a chapter that is "
+                f"already in the outline above: \"{str(obj.get('goal')).strip()}\""
+                f"\nThe phrase \"{echo}\" is already there. That is the same "
+                "chapter twice. Write a DIFFERENT stage of the story: different "
+                "pressure, different place, different thing at stake.")
         return obj
+
+    def _goals(self, skip: int | None = None) -> list[str]:
+        """The goals a new or rewritten chapter must not restate."""
+        return [c.body.strip() for i, c in enumerate(self.chapters())
+                if i != skip]
 
     def _generate_next(self) -> Entry | None:
         """Plan ONE more chapter onto the end, seeded with the chapters so far and
         what actually happened. One LLM call."""
-        obj = self._plan_one(NEXT_INSTRUCTION)
+        obj = self._plan_one(NEXT_INSTRUCTION, mark=len(self.chapters()),
+                             avoid=self._goals())
         if obj is None:
             return None
         return self._write_chapter(self._next_number(), obj.get("title"),
@@ -246,7 +361,8 @@ class ChapterPlanner:
         rows = self._rows_or_raise(idx)
         if rows[idx]["status"] == "done":
             raise PlanError("a completed chapter is already part of the story")
-        obj = self._plan_one(SLOT_INSTRUCTION, mark=idx)
+        obj = self._plan_one(SLOT_INSTRUCTION, mark=idx,
+                             avoid=self._goals(skip=idx))
         if obj is None:
             raise PlanError("the model did not return a usable chapter")
         was = rows[idx]["title"]
