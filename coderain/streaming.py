@@ -153,27 +153,63 @@ def prompt_line_set(text: str) -> set[str]:
     return {ln.strip() for ln in text.splitlines() if ln.strip()}
 
 
-def _is_echo(line: str, prompt_lines: set[str]) -> bool:
+def system_line_set(messages: list[dict]) -> set[str]:
+    """Lines from the engine-authored system messages AFTER the assembled one.
+
+    These are directives we write ourselves and append at the tail — the lore
+    directive and the chapter directive — placed there precisely because the
+    last thing a model reads binds hardest on the next tokens. That position is
+    also what made them the most echo-prone text in the prompt, and the filter
+    could not see them: it was built from messages[0] alone.
+
+    The transcript is still excluded on purpose. Matching against user and
+    assistant turns would let a legitimately repeated line be deleted as an echo.
+    """
+    out: set[str] = set()
+    for m in (messages or [])[1:]:
+        if m.get("role") != "system":
+            continue
+        out |= prompt_line_set(str(m.get("content") or ""))
+    return out
+
+
+def _is_echo(line: str, prompt_lines: set[str],
+             directive_lines: frozenset | set = frozenset()) -> bool:
     """Is this line context we generated, copied back verbatim?
 
-    Membership in `prompt_lines` is the whole test — we only ever delete text we
-    put in the prompt ourselves, so this cannot eat model-written prose. The two
-    extra conditions guard the coincidence case, where a short prose sentence
-    happens to repeat a context line exactly:
+    Membership is the whole test — we only ever delete text we put in the prompt
+    ourselves, so this cannot eat model-written prose. The two extra conditions
+    guard the coincidence case, where a short prose sentence happens to repeat a
+    context line exactly:
 
     - a real sentence ends in terminal punctuation; a `## Time` header or a
       `stats: strength 1` attr line does not.
     - the scaffolding lines are all short. 200 is the same bound `_one_line`
       uses for a rendered attr value.
+
+    `directive_lines` is exempt from the punctuation rule, and has to be. The
+    tail directives are written AS SENTENCES — "Every scene must move toward
+    that goal, complicate it, or pay it off." — so the punctuation guard, which
+    assumes scaffolding never looks like prose, protected them from removal.
+    Reported live: a whole chapter directive rendered into the story, heading
+    and all. Exact-matching a 100-character line we wrote is not coincidence,
+    which is what makes the exemption safe; the 200-char bound still applies,
+    only a LEADING run is ever dropped, and every drop is logged.
     """
     s = line.strip()
-    if not s or len(s) > 200 or s[-1] in ".!?\"'”’":
+    if not s or len(s) > 200:
+        return False
+    if s in directive_lines:
+        return True
+    if s[-1] in ".!?\"'”’":
         return False
     return s in prompt_lines
 
 
 def filter_context_echo(chunks: Iterator[str], prompt_lines: set[str],
-                        dropped_out: list[str]) -> Iterator[str]:
+                        dropped_out: list[str],
+                        directive_lines: frozenset | set = frozenset()
+                        ) -> Iterator[str]:
     """Drop context scaffolding the model copied back at the START of its prose.
 
     Small local models mimic the structure they are shown. Measured in a 14-turn
@@ -203,7 +239,7 @@ def filter_context_echo(chunks: Iterator[str], prompt_lines: set[str],
         # otherwise judge "## Ti" as prose and unblock the whole filter.
         while "\n" in buffer and not passthrough:
             line, rest = buffer.split("\n", 1)
-            if _is_echo(line, prompt_lines):
+            if _is_echo(line, prompt_lines, directive_lines):
                 dropped_out.append(line.strip())
                 buffer = rest
             elif line.strip():
@@ -216,7 +252,8 @@ def filter_context_echo(chunks: Iterator[str], prompt_lines: set[str],
     # End of stream. A single-line reply never hit the newline branch above, so
     # it still has to be judged — otherwise a turn that IS nothing but an echoed
     # header would be emitted whole.
-    if buffer and not (not passthrough and _is_echo(buffer, prompt_lines)):
+    if buffer and not (not passthrough
+                       and _is_echo(buffer, prompt_lines, directive_lines)):
         yield buffer
     elif buffer:
         dropped_out.append(buffer.strip())

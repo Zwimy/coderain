@@ -32,7 +32,8 @@ import time
 from . import rpg as rpg_mod
 from .. import validator as validator_mod
 from ..llm import LLM, emit_json_ex, extract_json
-from ..streaming import filter_context_echo, prompt_line_set
+from ..streaming import (filter_context_echo, prompt_line_set,
+                         system_line_set)
 from ..llm import stage as llm_stage
 
 DIRECTOR_SYS = """\
@@ -352,7 +353,11 @@ class TrinityBrain:
         stream = filter_context_echo(
             stream,
             prompt_line_set(writer_msgs[0]["content"] if writer_msgs else ""),
-            echoed)
+            echoed,
+            # The tail directives (continuity, chapter) ride writer_msgs too, and
+            # are the MOST echo-prone text in the prompt precisely because they
+            # sit last. messages[0] alone could not see them.
+            system_line_set(writer_msgs))
         for piece in stream:
             out_chunks.append(piece)
             yield piece
