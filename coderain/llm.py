@@ -51,6 +51,10 @@ class LLM:
         self.on_usage = None
         self.stage = "writer"
         self._ask_usage = True     # cleared if the provider rejects the option
+        # Same pattern for `reasoning`: an OpenRouter/OpenAI extension that a
+        # plain llama.cpp or Ollama endpoint will 400 on. One rejection turns it
+        # off for the life of this client rather than breaking every turn.
+        self._send_reasoning = True
 
     @contextlib.contextmanager
     def as_stage(self, stage: str):
@@ -85,13 +89,6 @@ class LLM:
             except Exception:  # noqa: BLE001 — accounting must never kill a turn
                 pass
 
-    # TODO (ROADMAP.md "send a `reasoning` parameter", 2026-08-22): nothing here
-    # ever sends one, so a model's DEFAULT thinking behaviour is what we get and
-    # cannot be turned off from inside the app. filter_think strips <think> only
-    # after those tokens are generated and billed. Measured on OpenRouter:
-    # deepseek-v4-flash defaults to "high" effort, and several flash models carry
-    # "default_enabled": true. Thread `reasoning` in from generation config here,
-    # degrading the same way `_ask_usage` does when a provider rejects the key.
     def _create(self, want_usage: bool, **kw):
         if want_usage:
             kw["stream_options"] = {"include_usage": True}
@@ -116,8 +113,16 @@ class LLM:
                         or "unknown" in text or "unsupported" in text)
             if not rejected:
                 raise                      # a real failure: auth, network, model
+            # Two optional extensions ride on this call. Drop `reasoning` first
+            # when the error names it: losing thinking control is a smaller loss
+            # than losing token accounting, and dropping both on one 400 would
+            # blind the usage log for a rejection that was never about usage.
+            if "reasoning" in text and self._send_reasoning:
+                self._send_reasoning = False
+                return self._create_stream(**_without_reasoning(kw))
             self._ask_usage = False
-            return self._create(False, **kw)
+            return self._create(False, **_without_reasoning(kw)
+                                if not self._send_reasoning else kw)
 
     def _params(self, **overrides) -> dict:
         g = self.gen
@@ -140,6 +145,26 @@ class LLM:
         # reaches those backends without breaking strict OpenAI schemas. Merged AFTER
         # overrides (and via setdefault) so a caller's own extra_body isn't clobbered
         # and can still win on the same key.
+        # Thinking control. Until this existed nothing here ever sent a
+        # `reasoning` key, so a model's DEFAULT behaviour was what you got and
+        # could not be changed from inside the app — filter_think strips <think>
+        # only AFTER those tokens are generated and billed. Measured on
+        # OpenRouter: deepseek-v4-flash defaults to "high" effort, and
+        # ling-3.0-flash / qwen3.7-flash carry "default_enabled": true, so they
+        # reasoned on every call at roughly a 4.5x multiplier on output billing.
+        #
+        # Reasoning also eats the OUTPUT budget before the JSON arrives, which is
+        # the failure JSON_MIN_TOKENS / JSON_RETRY_CEILING exist to survive.
+        #
+        # Config shape (generation.reasoning), all optional:
+        #   false / "off" / "none"  -> {"enabled": false}
+        #   "low"|"medium"|"high"|"minimal"|"xhigh" -> {"effort": ...}
+        #   a dict                  -> passed through verbatim
+        # Absent means send nothing, which is the old behaviour exactly.
+        block = _reasoning_block(g.get("reasoning"))
+        if block is not None and self._send_reasoning:
+            p.setdefault("extra_body", {})
+            p["extra_body"] = {**p["extra_body"], "reasoning": block}                 if p.get("extra_body") else {"reasoning": block}
         if g.get("repetition_penalty") is not None:
             eb = dict(p.get("extra_body") or {})
             eb.setdefault("repetition_penalty", g["repetition_penalty"])
@@ -268,6 +293,52 @@ JSON_MIN_TOKENS = 8192
 # Wall clock for ONE model request, seconds. Overridable per install via
 # generation.request_timeout_s for a very slow local model on a big fold.
 REQUEST_TIMEOUT_S = 300
+
+
+def _without_reasoning(kw: dict) -> dict:
+    """A copy of the request kwargs with the `reasoning` extension removed, for
+    the retry after a provider rejects it."""
+    eb = kw.get("extra_body")
+    if not isinstance(eb, dict) or "reasoning" not in eb:
+        return kw
+    trimmed = {k: v for k, v in eb.items() if k != "reasoning"}
+    out = dict(kw)
+    if trimmed:
+        out["extra_body"] = trimmed
+    else:
+        out.pop("extra_body", None)
+    return out
+
+
+REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+
+
+def _reasoning_block(raw) -> dict | None:
+    """Normalise `generation.reasoning` into the OpenRouter/OpenAI shape.
+
+    Returns None for "say nothing", which must stay the default: sending
+    `{"enabled": true}` where the user expressed no preference would turn
+    thinking ON for models that default it off.
+
+    Note what this CANNOT do. A model whose catalogue entry says
+    `{"mandatory": true}` (aion-labs/aion-2.0, aion-3.0) reasons regardless —
+    the key is accepted and ignored. Disabling only works where the provider
+    reports reasoning as optional.
+    """
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, bool):
+        return {"enabled": raw}
+    s = str(raw).strip().lower()
+    if s in ("off", "none", "false", "no", "disabled"):
+        return {"enabled": False}
+    if s in ("on", "true", "yes", "enabled"):
+        return {"enabled": True}
+    if s in REASONING_EFFORTS:
+        return {"effort": s}
+    return None                 # unrecognised -> behave as if unset
 
 
 def request_timeout(generation: dict | None) -> float:
