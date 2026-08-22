@@ -85,6 +85,13 @@ class LLM:
             except Exception:  # noqa: BLE001 — accounting must never kill a turn
                 pass
 
+    # TODO (ROADMAP.md "send a `reasoning` parameter", 2026-08-22): nothing here
+    # ever sends one, so a model's DEFAULT thinking behaviour is what we get and
+    # cannot be turned off from inside the app. filter_think strips <think> only
+    # after those tokens are generated and billed. Measured on OpenRouter:
+    # deepseek-v4-flash defaults to "high" effort, and several flash models carry
+    # "default_enabled": true. Thread `reasoning` in from generation config here,
+    # degrading the same way `_ask_usage` does when a provider rejects the key.
     def _create(self, want_usage: bool, **kw):
         if want_usage:
             kw["stream_options"] = {"include_usage": True}
