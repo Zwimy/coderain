@@ -977,15 +977,18 @@ class Engine:
             # ```rpg block, and keep the world/lore delta channel open.
             stream = sidecar_mod.filter_sidecar(stream, hidden)
             # Then drop any context scaffolding the model copied back at the top
-            # of its reply. messages[0] ONLY: that is where assemble() puts the
-            # sections, and matching against the transcript too would let a
-            # legitimately repeated line be deleted as an echo.
+            # of its reply. messages[0] is where assemble() puts the sections;
+            # the tail system messages are the directives we append ourselves.
+            # Both are engine-authored, so both are safe to match. The transcript
+            # is still excluded — matching it would let a legitimately repeated
+            # line be deleted as an echo.
             echoed: list[str] = []
             stream = streaming.filter_context_echo(
                 stream,
                 streaming.prompt_line_set(messages[0]["content"] if messages
                                           else ""),
-                echoed)
+                echoed,
+                streaming.system_line_set(messages))
             for piece in stream:
                 chunks.append(piece)
                 yield piece
