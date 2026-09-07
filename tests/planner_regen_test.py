@@ -39,6 +39,45 @@ from coderain.planner import ChapterPlanner, PlanError       # noqa: E402
 lib = Library(WORK / "lib")
 
 
+# Fully distinct goals, not one template with a swapped noun. Two constraints
+# now apply to stub output that did not when this suite was written: a one-line
+# goal is rejected as too thin (planner._too_thin), and a goal sharing three
+# consecutive content words with another chapter is rejected as a restatement
+# (planner._restates). "goal 1" / "goal 2" tripped BOTH, and every rejection
+# costs a retry — which consumed the call numbers this suite's call-count and
+# chapter-name assertions are built on.
+#
+# A first attempt at a fix swapped a single noun into a shared sentence skeleton
+# and STILL failed: the skeleton itself is the restatement. That is the check
+# working, so the fixtures now read like a real outline instead.
+GOALS = [
+    "Reach the ferryman before the ice closes the crossing. He owes a debt to "
+    "the people hunting her. By the end she is across, or she is bargaining.",
+    "Winter the box in a lighthouse nobody has staffed for years. Its keeper "
+    "left something behind that does not want company. Dawn decides whether "
+    "she stays.",
+    "Forge a customs seal good enough to pass a bored inspector. The only "
+    "engraver in town works for the garrison. The paperwork either clears or "
+    "names her.",
+    "Trade the last of the silver for a mule and silence. The stable boy talks "
+    "for money and everyone knows it. She leaves quietly or not at all.",
+    "Find out who emptied the salt mine of its workers. The foreman answers "
+    "questions with a shotgun. What she learns changes where she is going.",
+    "Ring the cathedral bell to scatter the search. Climbing it means passing "
+    "the sexton's rooms. Afterwards the whole valley knows someone is running.",
+    "Copy three pages from the border ledger without removing it. The clerk "
+    "sleeps in the same room. One smudge and the record is worthless.",
+    "Lose the pursuers in the crush of the winter fair. Crowds cut both ways "
+    "when your face is on a bill. She comes out thinner or she does not.",
+    "Cut the harbour crane loose to block the channel. Two watchmen share the "
+    "gantry every hour. The tide will not wait for her to decide.",
+]
+
+
+def _distinct_goal(n: int) -> str:
+    return GOALS[(n - 1) % len(GOALS)]
+
+
 class Stub:
     """One chapter per call; keeps every payload so we can inspect context."""
 
@@ -50,7 +89,7 @@ class Stub:
         self.systems.append(messages[0]["content"])
         self.payloads.append(messages[-1]["content"])
         return json.dumps({"title": f"Gen {self.calls}",
-                           "goal": f"goal {self.calls}"})
+                           "goal": _distinct_goal(self.calls)})
 
 
 def _planner(name, horizon=4, seed_rows=None, arc="", scene=""):

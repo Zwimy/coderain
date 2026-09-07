@@ -56,7 +56,11 @@ premise. Otherwise build on the real events, escalate the arc, and never repeat 
 stage the story has already been through.
 
 {rules}
-Concise goal (<= 30 words), forward-looking, no fixed dialogue or outcomes.
+Write the goal as 3-4 SENTENCES, not a one-line summary. Cover what the chapter
+must accomplish, what stands in its way, and what is different by the end. Stay
+concrete and forward-looking: no fixed dialogue, and no predetermined outcomes —
+the play decides those. Do not pad; if you have only one sentence of substance,
+the chapter is too thin and needs a real obstacle.
 
 Return ONLY a JSON object: {{"title": "Chapter title", "goal": "what it must accomplish"}}
 """.format(rules=DISTINCT_RULES)
@@ -70,7 +74,11 @@ lead into the chapter after it, and fit what has actually happened.
 Do not renumber, reorder, or touch any other chapter.
 
 {rules}
-Concise goal (<= 30 words), no fixed dialogue or outcomes.
+Write the goal as 3-4 SENTENCES, not a one-line summary. Cover what the chapter
+must accomplish, what stands in its way, and what is different by the end. Stay
+concrete and forward-looking: no fixed dialogue, and no predetermined outcomes —
+the play decides those. Do not pad; if you have only one sentence of substance,
+the chapter is too thin and needs a real obstacle.
 
 Return ONLY a JSON object: {{"title": "Chapter title", "goal": "what it must accomplish"}}
 """.format(rules=DISTINCT_RULES)
@@ -93,6 +101,13 @@ def _content_words(text: str) -> list[str]:
             if len(w) > 2 and w not in _STOP]
 
 
+# Above this many content words a goal is a 3-4 sentence paragraph, not a
+# one-liner, and a single shared trigram stops being evidence. The live
+# restatement pair had 13 and 14, so 25 leaves it comfortably in the
+# one-trigram regime.
+LONG_GOAL_WORDS = 25
+
+
 def _trigrams(words: list[str]) -> set[tuple[str, str, str]]:
     return {tuple(words[i:i + 3]) for i in range(len(words) - 2)}
 
@@ -113,16 +128,52 @@ def _restates(goal: str, others: list[str]) -> str:
     the meaning: the same words in the same order is a restatement, the same
     words scattered is just the same setting.
 
+    The bar SCALES WITH LENGTH. Goals were ~30 words when this was written; they
+    are now 3-4 sentences, which roughly triples the content words and therefore
+    the trigrams, and two chapters of the same story share incidental runs like
+    "golden dragons inner" without being the same chapter at all. One shared
+    trigram in a long pair is noise; in a short pair it is the signal that caught
+    the live case (13-14 content words each, exactly one shared run).
+
+    So: short goals need one shared trigram, long ones need two. LONG_GOAL_WORDS
+    sits above the live pair on purpose — lowering it would un-catch the case
+    this function exists for.
+
     Returns the offending phrase (for the retry nudge and the health line), or "".
     """
-    mine = _trigrams(_content_words(goal))
+    my_words = _content_words(goal)
+    mine = _trigrams(my_words)
     if not mine:
         return ""
     for other in others:
-        shared = mine & _trigrams(_content_words(other))
-        if shared:
-            return " ".join(sorted(shared)[0])
+        their_words = _content_words(other)
+        shared = mine & _trigrams(their_words)
+        if not shared:
+            continue
+        both_long = min(len(my_words), len(their_words)) > LONG_GOAL_WORDS
+        if both_long and len(shared) < 2:
+            continue                      # one incidental run in two long goals
+        return " ".join(sorted(shared)[0])
     return ""
+
+
+MIN_GOAL_SENTENCES = 3
+
+
+def _sentences(text: str) -> int:
+    return len([s for s in re.split(r"(?<=[.!?])\s+", str(text).strip())
+                if s.strip()])
+
+
+def _too_thin(goal: str) -> bool:
+    """A one-line goal, when the instruction asked for 3-4 sentences.
+
+    Measured on llama3.1:8b, 4 generations: three came back at 3 sentences and
+    one as a single 321-character run-on. Asking is not enough on a small model,
+    and thinness is the thing being fixed — this text is what the writer steers
+    by for a whole chapter, so it is worth the same one retry a restatement gets.
+    """
+    return _sentences(goal) < MIN_GOAL_SENTENCES
 
 
 class PlanError(ValueError):
@@ -301,7 +352,7 @@ class ChapterPlanner:
     def _plan_one(self, instruction: str, mark: int | None = None,
                   avoid: list[str] | None = None) -> dict | None:
         """One chapter, one LLM call — with one retry when it comes back as a
-        restatement of a chapter already in the outline.
+        restatement of a chapter already in the outline, or too thin to steer by.
 
         The retry is worth its cost because planning is rare (once per completed
         chapter, ~15-25 turns) and a duplicate is not a bad sentence you read
@@ -320,20 +371,28 @@ class ChapterPlanner:
                 obj = emit_json(self.llm, instruction, payload)
             if not isinstance(obj, dict) or not str(obj.get("title", "")).strip():
                 return None
-            echo = _restates(obj.get("goal", ""), avoid)
-            if not echo:
+            goal = str(obj.get("goal", "") or "")
+            echo = _restates(goal, avoid)
+            thin = _too_thin(goal)
+            if not echo and not thin:
                 return obj
             if attempt == 2:
+                why = (f"kept restating the outline ({echo!r})" if echo
+                       else f"came back as {_sentences(goal)} sentence(s)")
                 self.store.log_degraded(
-                    "chapter-plan",
-                    f"chapter kept restating the outline ({echo!r}) after a retry")
+                    "chapter-plan", f"chapter {why} after a retry")
                 return obj
-            payload += (
-                "\n\nREJECTED. Your last answer restated a chapter that is "
-                f"already in the outline above: \"{str(obj.get('goal')).strip()}\""
-                f"\nThe phrase \"{echo}\" is already there. That is the same "
-                "chapter twice. Write a DIFFERENT stage of the story: different "
-                "pressure, different place, different thing at stake.")
+            payload += "\n\nREJECTED. " + (
+                "Your last answer restated a chapter already in the outline "
+                f"above: \"{goal.strip()}\"\nThe phrase \"{echo}\" is already "
+                "there. That is the same chapter twice. Write a DIFFERENT stage "
+                "of the story: different pressure, different place, different "
+                "thing at stake." if echo else
+                f"Your last answer was {_sentences(goal)} sentence(s): "
+                f"\"{goal.strip()}\"\nThat is a one-line summary, not a chapter. "
+                f"Write {MIN_GOAL_SENTENCES}-4 SEPARATE sentences: what the "
+                "chapter must accomplish, what stands in its way, and what is "
+                "different by the end.")
         return obj
 
     def _goals(self, skip: int | None = None) -> list[str]:

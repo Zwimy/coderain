@@ -160,7 +160,10 @@ def _chapter_directive(store) -> str:
         or next((c for c in chapters if status(c) != "done"), None)
     if active is None:
         return ""
-    goal = " ".join(active.body.split())[:400]
+    # 900, not 400: chapter goals are 3-4 sentences now, and 400 clipped one
+    # mid-sentence — the directive then told the writer to steer toward half
+    # an instruction. _write_chapter's 2000-char bound is the real ceiling.
+    goal = " ".join(active.body.split())[:900]
     nxt = [c.title for c in chapters[chapters.index(active) + 1:][:1]]
     out = ["# THIS CHAPTER — steer toward it, do not wander off it",
            f"You are in: {active.title}",
