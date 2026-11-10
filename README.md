@@ -97,7 +97,7 @@ whether it can reach a model and, if not, opens a setup screen with both options
 ## Tech
 
 Python + FastAPI backend, a vanilla-JS single-page app, SSE streaming. The engine
-is provider-agnostic (one OpenAI-compatible client). 44 test suites, all offline
+is provider-agnostic (one OpenAI-compatible client). Over 100 test suites, all offline
 (`python run_tests.py`). A retro Win2000 Tkinter UI (`gui.py`) survives as an
 easter egg.
 
