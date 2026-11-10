@@ -31,3 +31,6 @@ SPEC-V2.md
 ROADMAP.md
 DISTRIBUTION-PLAN.md
 SILLYTAVERN-IMPROVEMENT-PLAN.md
+
+# --- private soak fixtures: they quote a real story, so they stay local ---
+soak/fixtures/local_*.py

@@ -2760,7 +2760,10 @@ class SaveLibrary:
                 if p.is_dir():
                     continue
                 rel = p.relative_to(src)
-                if ".snapshots" in rel.parts or p.suffix in (".tmp", ".db"):
+                # canon/ is the shadow ledger: derived from the transcript, rebuilt
+                # on demand, and not part of the story, so it does not travel.
+                if (".snapshots" in rel.parts or "canon" in rel.parts
+                        or p.suffix in (".tmp", ".db")):
                     continue
                 z.write(p, rel.as_posix())
         return str(dest)

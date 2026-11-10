@@ -297,6 +297,19 @@ class Engine:
                 self.retriever = None
                 store.log_degraded("semantic-recall",
                                    f"{type(e).__name__}: {e}")
+        # Opt-in shadow canon (config.yaml `canon: {shadow: true}`). OBSERVE ONLY: it
+        # reads the transcript on its own thread and writes <save>/canon/, and nothing
+        # it produces reaches a prompt (D-021). Imported only when enabled, so a default
+        # install pays nothing and never loads canon/.
+        self.canon_shadow = None
+        sec = (getattr(config, "raw", None) or {}).get("canon")
+        if isinstance(sec, dict) and sec.get("shadow") is True:
+            try:
+                from .canon_shadow import CanonShadow
+                self.canon_shadow = CanonShadow.from_config(config, store)
+            except Exception as e:  # noqa: BLE001 — never breaks the engine
+                store.log_degraded("canon-shadow",
+                                   f"could not start: {type(e).__name__}: {e}")
 
     def _messages(self, history, player_input):
         messages = self.store.assemble(history, player_input,
@@ -813,6 +826,11 @@ class Engine:
 
         Pass `on_stage` to see progress while it works; this runs after the prose
         has streamed, so a silent fold reads as a frozen turn."""
+        # Before the fold, so a fold that raises still lets the shadow see the turn.
+        # kick() returns at once and never raises; the pass runs on its own thread
+        # and waits for the turn to finish.
+        if self.canon_shadow is not None:
+            self.canon_shadow.kick()
         events = self._rpg_events + self.summarizer.maybe_fold(on_stage)
         self._rpg_events = []
         return events

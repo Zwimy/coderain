@@ -469,3 +469,497 @@ Tkinter dialogs are absent from it.
 build. The cheaper first move then is a second executable built from `gui.py`
 (`CoderainRetro.exe`), not a flag on the main one — it keeps the shipped app's
 entry point unchanged and lets the extra payload be opt-in.
+
+---
+
+## D-017 — `canon/` is a standalone package that nothing imports yet
+
+**Decided:** 2026-11-07. **Code:** `canon/` (ledger.py, state.py, store.py).
+**Test:** `tests/canon_ledger_test.py`.
+
+Phase 1 of the consistency design: an append-only, hash-chained ledger of every
+fact change, a pure projection of it into current and historical canon, and a
+snapshot that is only ever a cache. Nothing in `coderain/`, `srv/` or the web app
+imports it. That looks like dead code, and it is deliberate.
+
+**Why it is not wired in:** the ledger is meant to become the only truth, which
+means replacing the places the engine writes facts today (the fold's
+`merge_entry(rewrite=True)`, the sidecar deltas, `events.jsonl`). This repo's own
+record says wide changes to those paths regress: roughly one new defect per four
+fixes, and the worst clusters are exactly there (D-002, D-006, D-007). So the
+foundation was built and proven in isolation first (replay equals state, undo
+equals truncation, a rebuild reproduces canon, 14 mutations of its guards each
+caught by a test), and integration is a separate, reviewable step.
+
+**The tempting alternative:** put it under `coderain/` and start routing writes
+through it. Rejected for now because there is nothing yet to compare against: the
+Phase 0 harness (`soak/`) measures what today's engine keeps, and wiring in
+before that baseline is used would make the comparison impossible.
+
+**What would change it:** the Phase 2 Scribe and validator existing, so there is
+something that writes into the ledger. Integration then goes in behind a flag,
+with the Phase 0 baseline as the bar.
+
+---
+
+**Update 2026-11-09:** no longer true that nothing imports it. The engine now uses
+`canon/` in one place, `coderain/canon_shadow.py`, when `canon.shadow` is on (D-021).
+`canon/` itself is still standalone and imports nothing from the engine.
+
+## D-018 — Authority pins identity, not state
+
+**Decided:** 2026-11-07. **Code:** `canon/state.py` (`apply`,
+`_may_supersede_state`). **Test:** `canon_ledger_test.py` §6, §7.
+
+An author edit or a scenario-authored value does NOT stop narration from changing
+a state slot. A scenario can start a character in a travelling cloak, and the
+story must be able to put her in a coat. Authority only holds back `inferred`
+(a guess) from overwriting narrated or authored state.
+
+Identity slots are the opposite: first write wins, a different value from equal
+or lower authority is recorded as a conflict and not applied, and only a strictly
+higher authority or an explicit `retcon` / `author_edit` replaces it.
+
+**Why this looks wrong:** "author edit beats narration" reads as a single rule.
+Applied to state it would pin every authored starting value forever, and the first
+time a character changed clothes the ledger would record a conflict instead of the
+story. The layer is decided by the slot's name (`state.*` versus everything
+else), so no model decides which rule a fact gets.
+
+**What would change it:** a case where an author wants a state held against
+narration. The fix is a separate explicit "pin" record, not authority.
+
+## D-019 — A claim must be about someone the passage names, and only dreams are held back
+
+**Decided:** 2026-11-08. **Code:** `canon/validate.py` (`named_in_prose`,
+`_IRREALIS`, `_sentence_of`). **Test:** `canon_scribe_test.py` §16.
+
+Two deterministic checks sit in front of the ledger, because the Scribe is a small
+model and these are errors it makes that code can see.
+
+1. The entity has to be named in the passage (full name, first name or alias).
+   Given a passage about "you" and a list of characters, gemma3:4b wrote "your
+   coat soaked through" onto Odile Marsh. A wrong attribution is the most damaging
+   error because nothing downstream can tell. A consequence: a passage that uses
+   only pronouns yields nothing until the caller says who the scene is about.
+   That belongs to the scene frame in Phase 3, not to a looser check here.
+2. A claim whose own evidence sentence contains dream, nightmare, imagine,
+   pretend, "as if" or "as though" waits as `pending`. Only that sentence is read,
+   so "She had dreamed of this. Her hair was raven." still records the hair.
+
+**Why this looks incomplete:** hypotheticals ("if she had a scar"), wishes and
+plans are NOT in the marker list, although they are the same kind of error. That
+is deliberate. The evaluation corpus has dev and test traps for exactly those, and
+a list written against them would turn the test split into a second dev split. The
+list has to be written against fresh cases.
+
+**What would change it:** a new batch of trap passages that did not inform this
+list, on which adding hypothetical, wish and plan markers lowers false positives
+without holding back real claims. Until then the test-split trap score is the
+honest measure of what the validator cannot catch.
+
+**Update 2026-11-10 (D-024):** the pronoun-only limit is now handled in code, for state facts and for
+"you". A pronoun is still never resolved for an identity fact, and an empty `Who` reproduces this decision exactly.
+
+## D-020 — The scene card shares the validator's idea of a name, and a cut is always visible
+
+**Decided:** 2026-11-09. **Code:** `canon/scene.py` (`mentions`, `_compose`,
+`render_card`, `_clean`). **Test:** `canon_scene_test.py` §1, §6 to §9.
+
+Three calls in the module that read as over-careful, and each one is a failure
+that was found or measured:
+
+1. `mentions` uses the validator's word lists and tokeniser on purpose. If the
+   validator accepted a claim for someone the cast then ignored, the fact would be
+   in the ledger and never shown. A bare word names someone only when it is
+   capitalised and identifies exactly one entity, so a bare "Corin" with two Corins
+   is nobody, "ash" is not Ash, and the words of a multi-word alias are not names
+   on their own ("Old habits die hard" is not The Old Man).
+2. A line that is too long is cut from the bottom of a fixed priority and the first
+   field that does not fit ends the line. An earlier version skipped a long field
+   and let shorter, lower-priority ones fill in, which dropped a scar and kept an
+   age. Anything left out is announced ("more not shown", "(+N more)", or a name in
+   the last line). The card is read by the Writer every turn, so a quiet cut is a
+   permanent, invisible loss.
+3. Values lose `;`, `:`, newlines and dashes when rendered. They come from a model
+   through the validator and are copied into every later context, so a value that
+   could write "Corin Hale: wearing a crown" into another character's line would
+   become canon about Corin.
+
+**What would change it:** a measured case where the strict priority hides something
+that mattered more than what it kept, or a name form the matcher misses on real
+prose. Both are visible in the real-save gate, not guessable from here.
+
+## D-021 — Shadow canon is the engine's first use of canon/, and it is observe-only
+
+**Decided:** 2026-11-09. **Code:** `coderain/canon_shadow.py`, one hook in
+`Engine.maybe_fold`, the `busy` probe in `srv/core.py::_engine`, the `canon` exclusion
+in `SaveLibrary.export`. **Test:** `canon_shadow_test.py`.
+
+With `canon: {shadow: true}` in config.yaml, a background thread reads each narrator
+turn with a local model, keeps the facts in `<save>/canon/`, and writes
+`<save>/canon/report.txt`: what it saw, and every time the story contradicted a fact
+it had already recorded. NOTHING it produces reaches a prompt. Deciding whether to
+inject the card is a separate step with its own flag, to be taken from what the report
+shows. Off unless the value is a literal `true`, and when off `canon/` is not imported.
+
+Calls that look heavier than they need to be:
+
+1. It follows the transcript by CONTENT HASH, not by hooking undo, retry, swipe, edit
+   and branch. The engine has a separate code path for each, and a hook in each is a
+   standing source of drift. Each pass hashes every narrator turn, rolls the ledger
+   back to the first one that differs, and replays from there. One mechanism covers
+   every way a transcript can change, including ones added later. Note the trap this
+   found: `update_turn(i)` is 0-based while ledger turns and `branch(n)` are 1-based.
+2. The ledger is derived data. It lives in the save folder so it is deleted, renamed
+   and branched with the save, but it is excluded from exports and can be deleted at
+   any time and rebuilt from the transcript (invariant 7 holds: Markdown is the truth).
+3. LOCAL ONLY. A real story is read by a model nobody chose per call, so anything but
+   Ollama on this machine is refused (`canon.scribe.require_local`). A hosted Scribe is
+   a decision for later, with the person's say-so, not a default.
+4. It waits while a turn is generating (the server hands it the generation lock), runs
+   on its own thread, never raises into the engine, and reports each distinct failure
+   once to the health log (invariant 2). A down model is retried on the next turn, not
+   recorded as processed.
+5. A character met mid-story is seeded at the turn they are first met, not turn 0: a
+   ledger's turns never decrease, so turn 0 is refused and every claim about them would
+   silently go nowhere.
+6. The report and per-turn rows hold values and counts, never prose. The ledger keeps
+   the short quoted span behind each fact as provenance, inside the save folder.
+
+**What would change it:** the report showing the shadow is wrong about real play (too
+many held-back changes that are Scribe errors, not story drift), or a transcript change
+the hash does not catch. Fix the first in the validator, never by editing a prompt.
+
+
+## D-022 — A wrong first identity value is stopped at the door, not corrected later
+
+**Decided:** 2026-11-09. **Code:** `canon/shape.py`, called from `validate()` before the
+restatement rewrite, and `_shared_quotes` in `canon/validate.py`. **Tests:**
+`canon_shape_test.py`, and the named losses in `soak_scribe_corpus_test.py`.
+
+The real-save gate (976 narrator turns) showed that most identity values the Scribe
+proposed described something else. In a hand-labelled sample about 70% were wrong:
+a tattoo colour for hair, "violet" for hair (the quote was "her violet
+eyes"), a string of beads for hair, "dark, sharp, utterly unimpressed" for eyes. Identity is
+first write wins, so the first wrong value locked the slot and the real one (green
+eyes, narrated 11 times) was held back every time. The restatement logic made it worse:
+"the thin black fabric of her glove" was rewritten to the existing wording and counted
+as a second sighting of black hair.
+
+What it does now, in plain code, before anything reaches the ledger:
+
+1. **The quote must describe the slot.** For hair and eyes the slot's noun has to be in
+   the Scribe's own quote and the value has to be the words attached to it. A run of
+   descriptor words belongs to the noun after it ("violet eyes"), else to the noun
+   before it ("eyes, green like yours"), and stops at any other word. So "platinum
+   hair, violet eyes" gives platinum to hair and violet to eyes, and "glass beads click
+   in her hair" gives nothing to hair. Build must touch a body noun or the person
+   ("lean frame", "she's tall"), never a window, a stride or a verb. Age must be an age.
+   Marks and state slots are not covered.
+2. **It runs before the restatement rewrite**, so a misfit is rejected, not turned into
+   the existing value and counted as agreeing with it.
+3. **One quote filed under two people waits for both** (`pending`, `ambiguous_owner`).
+   At most one is right, and a wrong identity write is permanent. In the real ledger
+   this was 5 of 208 distinct quotes and each produced a wrong lock.
+
+Measured, with the rule written against a dev half and then checked on samples I had
+not tuned on (hand labels, small, mine, so treat as indicative):
+- dev (tuned): 20 of 20 valid kept, 48 of 48 invalid rejected.
+- second half (build rule adjusted after it showed one false accept): 25 of 25, 41 of 41.
+- fresh blind sample of 80, scored once: 20 of 24 valid kept, 52 of 52 invalid
+  rejected. Zero false accepts in 141 invalid, so the true rate is probably under 2%.
+- replaying the recorded gate ledger through it (no model): locked identity values
+  107 to 68, held-back changes 508 to 78. One character's raven hair stays locked against 9
+  later "platinum" sightings, which is the drift the system exists to flag. Another's
+  green eyes (x9) now lock instead of a facial expression.
+
+**What it costs, on purpose.** A true claim whose quote lacks the noun is refused:
+"the colour of straw", "small for his age", "Tall. Athletic.", "young, brunette", "the
+shaved head", and long phrases ("dark hair pulled back in a severe bun"). On the
+invented corpus 2 of 32 labelled claims (listed in `SHAPE_LOSSES`), on real text about
+1 in 6 valid claims. That is the right side to err on: a refused true value is narrated
+again and recorded then, a wrong first one is permanent. The vocabulary is general
+English (colours, gems, hair styles, builds), not this story's words.
+
+**Rejected, and why:**
+- **Majority vote or "most repeated value wins" to correct a wrong lock.** In the real
+  ledger the narrator wrote one character's hair as platinum 9 times and raven once. A vote
+  would replace the first narration with the drift, which is the exact failure the
+  redesign exists to catch. A correction has to come from a person (`author_edit`
+  already crosses the identity lock) or from evidence about WHO, not how often.
+- **A "tentative until repeated" lock.** Same flaw, and most true values are narrated
+  once or twice, so it would leave real characters blank.
+- **A rule that the quote must not name another character.** 60 of 204 accepted claims
+  tripped it, nearly all because characters carry colour words as aliases ("Amber",
+  "Silver", "Shade"), so "Amber eyes" looked like it named a character.
+- **A gender-agreement check** ("her" in the quote, a male character). Only 3 of 147
+  accepted claims disagreed once the shape rule had run, so it is not worth a rule yet.
+  It did catch the one real misattribution left (a man given a woman's raven hair).
+
+**Not done, and next:** misattribution in multi-character passages (the Scribe is not
+told who a pronoun refers to; same step as the 590 pronoun-only rejects); a Scribe
+prompt line asking for the noun in the quote ("her violet eyes", not "violet"), which
+would win back most of the refused claims but has to be measured with the real model;
+state lists that only grow. The real Scribe has not been re-run through this, so the
+end-to-end effect on a replay is a prediction from recorded proposals until it is.
+
+**What would change it:** a fresh labelled sample where the rule refuses more than a
+quarter of valid claims, or accepts a wrong value that then locks a slot. Widen the
+vocabulary first, never loosen the attachment rule.
+
+
+## D-023 — State lists take only what the slot is for, replace by kind, and age out
+
+**Decided:** 2026-11-10. **Code:** `canon/shape.py` (state rules), `canon/wardrobe.py`,
+`_plan` and `LIST_CAP` in `canon/validate.py`, `Interval.last_turn` and `Canon.last_seen`
+in `canon/state.py`, `FRESH_TURNS` and the `now` parameter in `canon/scene.py`.
+**Tests:** `canon_state_lists_test.py`.
+
+The real-save gate found three separate things wrong with outfit, held items and
+injuries, and decay alone would have fixed only one of them:
+
+1. **They were mostly not what the slot says.** The outfit lists held a plume of smoke,
+   a teacup, tattoos, bare feet and a stripe of rain. The held lists held thumbs,
+   fingers, a glow and a feeling. The injury lists held "bike", "soaked" and a
+   pounding heart. In a sample of 60, about 1 item in 6 was real.
+2. **They only grew.** The Scribe says a thing was taken off almost never (6 times in
+   1,646 turns), and a list at the cap of 16 REFUSED the newest item (386 refusals), so
+   a full list showed the oldest things in the story and nothing new. State is latest
+   wins; the old rule kept the oldest.
+3. **Nothing said when a value was last true.** A coat worn once at turn 75 was on the
+   card at turn 1,048.
+
+What it does now:
+
+- **Entry check per slot (`shape.problem`).** Outfit needs a garment: the last garment
+  word of the item's noun phrase, so "tuxedo vest sweated through" is a vest and "pistol
+  tucked in her belt" is a pistol. Held needs an object from a vocabulary of everyday
+  things (cup, datapad, towel, pistol), not a body part, a person or a phenomenon.
+  Injury needs a wound word; ambiguous ones ("broken", "burn", "cut") count only with a
+  body part in the value, "swollen" and "sore" only on a limb, a joint or the face, and
+  scars and tattoos are marks, not injuries.
+- **Replace by kind (`wardrobe.replaced_by`).** A new garment replaces the one of its
+  kind: boots replace boots, a dress takes the top and the bottom, jeans take a dress.
+  Things worn together (rings, a scarf, a belt) stay. The ledger keeps the old outfit,
+  so "what did she wear at turn 5" still has an answer.
+- **A full list drops its OLDEST item** instead of refusing the new one. Caps: outfit 10,
+  held 6, injury 6 (the ledger's own bound stays 16). Untuned.
+- **Saying an item again moves it to the newest place, with its old wording, and is
+  RECORDED**, as is a scalar restated unchanged. These used to be dropped as no-ops. The
+  record is what tells canon the story said it again just now, so `Canon.last_seen`
+  can say when. Cost: one ledger record per restatement.
+- **The card leaves out a value the story has not stated for too long** (`FRESH_TURNS`:
+  outfit and injury 120 ledger turns, location 40, held 30, mood 15; player turns count,
+  so 120 is about 60 narrator turns). Unknown is honest; a coat worn 900 turns ago is
+  not. `find_scene` ignores an old place when deciding who is "in the same room". The
+  parameter is `now`, and nothing expires when it is not given, so no existing caller
+  changed. The windows are guesses, so the shadow report now ends with the evidence for
+  moving them: per field, how many characters have a value, the median age, and how many
+  are past the window (`replay.state_ages`; counts and ages, never narration).
+
+Measured, by hand-labelling real items (small samples, my labels, so indicative):
+- Samples I tuned on (dev, test, fresh): 10 of 10, 12 of 12, 24 of 25 valid kept, and
+  all but 2, 0 and 0 of the invalid rejected. These are optimistic by construction.
+- A clean sample drawn after the rules were frozen, scored once: 12 of 15 valid kept and
+  47 of 50 invalid rejected. By slot: outfit 9 of 10 and 14 of 14, held 1 of 3 and 14 of
+  17, injury 2 of 2 and 19 of 19. One bug was found by it and fixed (a plural fallback
+  that read "tight" as "tights"); no vocabulary was added from it.
+- Replaying every recorded item of the real gate ledger (no model): final outfit lists
+  median 7 to 2, the 11 characters at the old cap of 16 to none; held median 4 to 1;
+  characters with an injury list 33 to 8. I read every accepted injury and held item
+  (not all 96 outfit items, only the lists of six characters, which read as wardrobes). Of 16
+  accepted injuries, 14 are wounds by my reading and 2 are not (a figurative "burn", a
+  "cut" that is a verb about lines). Of 49 accepted held items nearly all are
+  everyday objects, but some are in the scene and not in a hand (crates, a map).
+
+**What it costs, on purpose.** About 1 valid item in 5 is refused for want of a word
+(sweats, tourniquet, lumpia, "a modest curved silicone shape"); the vocabulary grows from
+what the shadow report shows, never by loosening the rule. Held is the weakest slot: an
+object mentioned but not held passes, and a holding verb cannot fix that (it kept 0 of 5
+valid in the first test, because real quotes say "palmed", "scoops up", "pull it from the
+rack"). The card shows a held item for only 30 turns, which is what bounds the harm; if
+the report shows it misleading, drop the field from the card before tuning it. The model
+of dress is wrong in known ways: a hoodie over a tee counts as one top, and a coat picked
+up to carry replaces the one worn. Each costs one item on a card, against a list that
+never lets go.
+
+**Rejected, and why:**
+- **Decay alone**, by age or by position. It would have rotated the same misfiles on and
+  off the card. The entry check had to come first.
+- **A holding verb as the test for a held item.** 0 of 5 on a fresh half.
+- **One slot per item** (as marks have), so each item carries its own age. A large change
+  to the projection, the card and every test, for something a restatement record gives at
+  the level of the list.
+- **Hiding stale items in the projection** (`Canon.current`). It would make the ledger's
+  own answers depend on when you ask. The window lives where the card is made.
+
+**What would change it:** the shadow report showing the windows are wrong (a coat that
+is still worn, dropped; a place that is still true, forgotten), the ledger growing
+faster than the restatement records justify, or a clean sample where the entry rules
+refuse more than a third of valid items. Widen the vocabulary first; move a window second;
+loosen the rule last.
+
+**Changed behaviour to know about:** a repeat is now a `commit` with reason `restated`
+(it was a `noop`), so a shadow or gate report's "committed" count includes restatements;
+`list_full` is gone; the real-save gate's `evaluate` still renders the card without `now`,
+so it shows every state value ever recorded.
+
+
+## D-024 — Code decides who "you", "she" and "he" mean: "you" always, a pronoun for state facts only
+
+**Decided:** 2026-11-10. **Code:** `canon/referents.py`, `Who` in `canon/validate.py`,
+`mention_spans` in `canon/scene.py`, `player_entity`, `player_gender`, `GenderVotes`,
+`reads_anyone` and `passage_who` in `canon/replay.py`, and their use in
+`coderain/canon_shadow.py` and `soak/canon_gate.py`. **Tests:** `canon_referents_test.py` and
+shadow tests 14 and 15.
+
+D-019 refused a claim about anyone the passage does not name, and refused a pronoun as the
+subject. That left almost nothing in a story told to "you": "you" is in 973 of 976 narrator
+turns of the real save, the protagonist is named in 117, and in a long scene "she" runs for
+dozens of turns after the name appeared once. The gate counted 590 refusals for a pronoun, and
+every fact about the player (a hoodie, a limp) was refused for naming nobody. player.md says
+"Name: ... male", and the character's sheet carries that name among its aliases.
+
+What it does, all in code, never by the Scribe:
+
+- **"you" is the player.** Exact, so it works for every slot. The player is the entity named by
+  config `canon.player`, else by the "Name:" line of player.md matched against a whole name or
+  alias, else the one character with a capitalised name word in the file; none or two is
+  "nobody", never a guess. (Matching every word of the file found a second character through
+  "well".)
+- **"she" and "he" resolve for STATE facts only.** The nearest earlier sentence that names
+  anyone the pronoun could mean decides, if it names exactly one; two is "unclear" and there is no
+  widening. It looks back up to 30 sentences, across the last 5 narrator turns. For an identity
+  fact the name has to be in the passage, as before.
+- **A name the Scribe gives that the passage does not contain** is accepted when the same rule
+  agrees from the turns before (state), or when the quote is in the second person and the name
+  is the player's.
+- **Gender mismatch.** A quote that uses only "her" is not a fact about a man whose gender is known.
+  Gender is read from the story (a sentence naming exactly one character and saying her or his; three
+  votes and an 80% share), and the player's comes from player.md. The votes live in each turn's row,
+  so an undo takes them away with the turn.
+- **What does not count as a name for this:** one AFTER a pronoun of that gender in its own sentence
+  (the object), one inside quoted speech (a third party), a pronoun inside quoted speech, a line that
+  starts with "#" (the scene header), a single word after "the" ("the Guild", "the Lantern Market"), and
+  the player.
+- **Which turns the Scribe reads:** one that names someone, or says "you" when the player is known, or
+  has a pronoun when the turns before name someone. In the real save 923 of 976 turns, now all 976.
+- `mentions()` now needs a capital at EACH occurrence ("Rowan" is a character, "the rowan tree" is not).
+  8 of 35,218 passages and sentences of the real save came out different, all a lowercase common word.
+- **Decision.via** records how a subject was found ("you", "pronoun", "context"), and the shadow report
+  and the gate report count them, because they rest on a rule that is not exact.
+
+Measured (hand-read, blind, small samples, my labels, so indicative). Of about 1,900 claim-like sentences
+(one gender of pronoun and a slot word), the final rules resolve 29% within 2 sentences and 77% within 30
+(only the 30 is used, for state facts); the rest are ambiguous or nobody is named. Precision on the cases
+the rule answered: the first sample (60) was 40 right, 10 wrong, 10 unclear, and produced the fixes above.
+The second sample came from an intermediate version (49 right, 5 wrong, 6 unclear) and the third from the
+version just before the contraction fix (53, 5, 2): together 102 of 112 decided right, 91%. Reach was not
+what separated good from bad (near 52 of 58, far 50 of 54). The contraction fix ("She'd") came after the
+last sample and is pinned by a test, so the final code has no sample of its own. Genders settled from the
+story: 34 women and 3 men of 54 characters (the sheets alone gave 29).
+
+What it costs, and does not do. About 1 resolved attribution in 11 is wrong, which is why identity is
+excluded; for state it corrects itself as items are replaced and age out (D-023). The remaining misses
+are a faction or an ink that shares a word with a character's alias ("the Guild", "indigo"), a name
+absent from the aliases, two people called "the Guild courier", and a listener taken for the
+speaker. Alias hygiene is not solved here. This save has few named men, so gender rarely decides
+anything in it. The real Scribe has not been re-run through this, so how it phrases second-person claims
+("you", the player's name, an alias) is handled both ways but unobserved.
+
+**Rejected, and why:**
+- **Telling the Scribe who the scene is about** (a prompt hint). It needs a measured run of the real
+  model, and the validator has to check the answer anyway.
+- **"Exactly one compatible character named in the last k turns."** Answers 5% to 13% of sentences in
+  this save, because several names are always in the window.
+- **Gender from the character sheets.** 29 of 54 known, against 37 from the story.
+- **Resolving a pronoun for identity facts, or at a short reach.** The two reaches were equally precise.
+
+**Next, because of what was found:** player.md states the protagonist's gender, height, hair and eyes
+("black hair, green eyes"), better than anything the Scribe extracted for that character; seeding the
+player's identity from it at scenario authority would give the first-write rule a true first write.
+
+**What would change it:** the report's count of `via` facts, checked by hand, being wrong more than 1 in 5;
+the real Scribe not naming the player at all in second-person text; or a clean sample where a rule above
+refuses most of what it should accept. Fix aliases and data first, then the rule.
+
+
+## D-025 — The protagonist's own file is the first write for their looks
+
+**Decided:** 2026-11-10. **Code:** `player_facts` and `seed_player` in `canon/replay.py`, called from
+`soak/canon_gate.py::run_gate` and `coderain/canon_shadow.py`, and a measurement allowance in
+`canon/shape.py` (a number before "tall"). **Tests:** `canon_player_seed_test.py`, gate test 7, shadow
+test 16.
+
+In a story told to "you" the Scribe's first sentences about the protagonist were about someone else's
+hair, so the protagonist's identity was a string of misfiles (hair "blank", eyes "pale gray", "hazel",
+"amber"). The person had already written the truth down: the real player.md says "Name: ...", "Info:
+200cm tall, male, black hair, green eyes, ...". D-024 made "you" resolve to the player; this gives the
+player a true first write.
+
+What it does. Plain code, no model, reads the file's looks into ledger facts at SCENARIO authority, which
+outranks narration: narration can agree with them, and a different narrated value is held back as a
+conflict (identity_locked) instead of becoming canon. Each candidate has to pass the same shape rules a
+Scribe claim does (D-022), so "black hair" is hair, "200cm tall" is build, "a 25-year-old" is an age, and
+"versed in chess", "well read" and "hair stylist" are nothing. At most one value per slot (the first the
+file states) and four marks, each as a short phrase ("thin scar over his left eye"). It is safe to repeat:
+a value already there is skipped, so is one an author set (an edit outranks the file), and a value the
+narration wrote first is replaced once by the higher authority. In the shadow it runs at the turn being
+processed, so an undo past it drops the facts and the next pass writes them again.
+
+What it does not do. It is not a parser of free prose: it reads comma and sentence clauses, the adjectives
+before "hair" and "eyes", an age ("25 years old", "aged 31"), a height ("200cm tall", 6'2" tall) and a
+short list of build words. A description it cannot read seeds nothing, which leaves the situation as it
+was. It does not decide gender (that is `player_gender`, D-024).
+
+**What would change it:** a player.md whose looks it misreads on real use. Add the phrase to the tests, then
+the pattern; never loosen the shape rule it passes through.
+
+
+## D-026 — A mark has to name a mark, and eyes have to name a colour
+
+**Decided:** 2026-11-10. **Code:** `_marks`, `_MARK_NOUNS`, `_MARK_ADJECTIVES`, `_MARK_AMBIGUOUS`, `_SITES` and the
+eyes colour rule (`_EYE_SHADES`) in `canon/shape.py`. **Tests:** `canon_shape_test.py` 11a, 11b, 12, 9c;
+two older suites changed (see the end).
+
+`identity.marks` was the one identity slot with no entry check. The second real-save gate held 87 marks and
+54 of them contained no mark word: a way of gripping, a way of speaking, an expression, an object hanging
+from a wrist, a bare colour, a pair of eyes, a sentence about something on the skin. A mark never ages off
+the Scene State Card, so each would have been shown to the Writer for the rest of the story. Two eye values
+were also modifiers, not colours ("cold", "wild").
+
+The rule is a vocabulary, like the others in this file. The value must name a mark: a scar, tattoo,
+birthmark, piercing, freckle, ink, sigil, glyph, rune or mandala. An adjective ("scarred", "tattooed") and a
+word that is only sometimes a mark ("mark", "brand", "mole", "line", "scale", "burn") count only when a part of
+the body is named in the value or in the quote, which is what keeps "bathroom scales", "the brand of whisky"
+and "she crossed the line" out. "ink" is in the first group on purpose: a person's ink is a tattoo. Eyes need a
+colour or a shade of one (dark, pale, light, deep, milky, icy). The first version asked for a colour only and
+refused "dark eyes" and "pale eyes" (8 of its 11 refusals in the real ledger were those); only "cold" and
+"wild" were wrong, and the shade list fixes that.
+
+**Measured, and what that does not show.** I labelled the 95 marks records in the gate-2 ledger (73 valid, 22
+not) BEFORE writing the rule. The rule keeps 63 of the 73 valid and refuses 21 of the 22 junk; characters
+holding at least one junk mark fall from 15 to 1, and one character is left with none of their valid marks.
+On the real ledger's 38 distinct (character, eyes value) pairs the eyes rule refuses 2, both the junk ones.
+Caveats, all of them real: the labels are mine; I had read all 95 while choosing the vocabulary, so this is a
+development number and not a blind test; and the ledger only holds claims that were committed, so what the
+Scribe proposed and the validator already refused is not in it, which means the recall cost against all Scribe
+proposals is unmeasured.
+
+Known losses. A valid mark that names none of those words is refused: a missing tooth, a puckered patch of
+skin, a pattern described without the word for it, and a bare "marks" or "scales" with no body in the quote.
+Those characters usually have the same mark restated elsewhere with a body, and the narration keeps
+restating, so the cost is a delay more than a loss. Known leaks: a "tan line" passes ('line' plus a body), and
+the rule does nothing about two entries for the same mark under different wording or a mark filed under the
+wrong person. Those are different defects.
+
+**What would change it:** a real run where valid marks are refused often enough to leave characters with
+none (the first thing to add is the word, with a test, not a looser rule), or a story whose marks are not a
+body noun at all.
+
+**Two tests encoded the old behaviour and were changed, not the rule.** `soak_gate_test.py` used a streak of
+hair colour as a stale mark and now uses a tattoo. `soak_scribe_corpus_test.py` lists a third oracle loss: the
+oracle builds each value from the first word a label's pattern matches, one label's pattern matches "raven"
+first in "a black raven tattooed on his forearm", and a bare "raven" names no mark. The label stays so earlier
+Scribe scores remain comparable.

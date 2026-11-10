@@ -1,0 +1,448 @@
+"""Shadow canon: the Scribe and the ledger run BESIDE the engine and change nothing.
+
+This is the first place engine code uses `canon/`. It is deliberately observe-only:
+it reads the transcript, asks a local model for the facts each narrator turn states,
+keeps them in a canon ledger, and writes a report of what it saw, including every
+time the story contradicted a fact it had already recorded. Nothing it produces is
+ever put into a prompt. Turning that on is a separate, later step with its own flag,
+and this exists to produce the evidence for deciding whether to.
+
+What makes that safe, each of which a test pins:
+
+  * Derived, not authoritative. The ledger lives in <save>/canon/ and is rebuilt
+    from the transcript, so deleting the folder loses nothing (invariant 7).
+  * It follows the transcript by CONTENT. Undo, retry, a swipe, an edit and a branch
+    all change the transcript, and the engine has a separate code path for each.
+    Hooking all of them would be a standing source of drift, so instead each pass
+    compares a hash of every narrator turn with what was processed, rolls the ledger
+    back to the first turn that differs, and replays from there. One mechanism for
+    every way a transcript can change.
+  * It never costs a turn anything. It runs on its own thread, waits while a turn is
+    generating, never raises into the engine, and reports a failure to the health log
+    (invariant 2: degrade, but never invisibly).
+  * It is LOCAL. A real story is read by a model nobody chose per call, so anything
+    but Ollama on this machine is refused (canon.scribe.require_local).
+  * Its report and per-turn rows hold values, counts and turn numbers, never
+    narration. The ledger keeps the short quoted span behind each fact as provenance;
+    it lives in the save folder, beside the transcript those spans came from, and
+    does not travel with an export.
+
+Off unless config.yaml says so:
+
+    canon:
+      shadow: true
+      model: gemma3:4b            # any local Ollama model
+      backfill: 200               # earlier narrator turns to read the first time, or "all"
+"""
+from __future__ import annotations
+
+import bisect
+import hashlib
+import json
+import os
+import re
+import shutil
+import threading
+import time
+from collections import Counter
+from pathlib import Path
+
+from canon import Store
+from canon.ledger import LedgerCorrupt
+from canon.pipeline import process_turn
+from canon.referents import gender_votes
+from canon.replay import (BEFORE_TURNS, GenderVotes, identity_table, passage_who,
+                          player_entity, player_gender, reads_anyone, seed_entities, seed_player,
+                          skipped_row,
+                          state_ages, totals, turn_row)
+from canon.scene import FRESH_TURNS, find_scene, render_card
+from canon.scribe import NotLocal, OllamaChat, Scribe, require_local
+
+STAGE = "canon-shadow"
+BACKFILL_ALL = 10 ** 9
+DEFAULTS = {"shadow": False, "model": "gemma3:4b", "host": "http://localhost:11434",
+            "num_ctx": 8192, "backfill": 200, "max_errors": 3}
+_ROWS_KEEP = 6000                    # rows.jsonl is trimmed to this many lines
+
+
+def _int(raw, default: int, lo: int, hi: int) -> int:
+    """A bounded int from config. bool is rejected (YAML `true` is not a number) and
+    so is anything int() cannot take, including `.inf`, which raises OverflowError,
+    not ValueError (see history_budget in config.py for the save that cost)."""
+    if isinstance(raw, bool):
+        return default
+    try:
+        n = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def settings(raw) -> dict:
+    """The `canon:` section of config.yaml, validated and bounded. Anything missing
+    or malformed falls back to the default, and `shadow` is on only for a literal
+    true: a typo must not start sending a story to a model."""
+    sec = raw.get("canon") if isinstance(raw, dict) else None
+    sec = sec if isinstance(sec, dict) else {}
+    out = dict(DEFAULTS)
+    out["shadow"] = sec.get("shadow") is True
+    for key, limit in (("model", 100), ("host", 200)):
+        v = sec.get(key)
+        if isinstance(v, str) and 0 < len(v.strip()) <= limit:
+            out[key] = v.strip()
+    out["num_ctx"] = _int(sec.get("num_ctx"), DEFAULTS["num_ctx"], 2048, 16384)
+    bf = sec.get("backfill", DEFAULTS["backfill"])
+    out["backfill"] = (BACKFILL_ALL if isinstance(bf, str) and bf.strip().lower() == "all"
+                       else _int(bf, DEFAULTS["backfill"], 0, 100_000))
+    out["max_errors"] = _int(sec.get("max_errors"), DEFAULTS["max_errors"], 1, 20)
+    pl = sec.get("player")
+    out["player"] = (pl.strip() if isinstance(pl, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", pl.strip())
+                     else None)                 # a character slug; otherwise worked out from player.md
+    return out
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
+
+
+def _short(value, n: int = 60) -> str:
+    s = " ".join(str(value).split())
+    return s if len(s) <= n else s[:n].rstrip() + "..."
+
+
+# One reconcile at a time per save folder, whatever objects exist for it. A settings
+# change rebuilds every Engine, so an old worker can still be running when a new
+# CanonShadow for the same save starts.
+_DIR_LOCKS: dict[str, threading.Lock] = {}
+_DIR_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    key = str(Path(path).resolve())
+    with _DIR_LOCKS_GUARD:
+        return _DIR_LOCKS.setdefault(key, threading.Lock())
+
+
+class CanonShadow:
+    def __init__(self, store, cfg: dict, *, scribe: Scribe | None = None, busy=None):
+        self.store = store                      # the engine's MemoryStore
+        self.cfg = cfg
+        self.dir = Path(store.dir) / "canon"
+        self.scribe = scribe                    # built lazily; tests inject a stub
+        self.busy = busy                        # () -> bool, True while a turn runs
+        self.enabled = True
+        self._guard = threading.Lock()          # protects _dirty and _worker
+        self._dirty = False
+        self._worker: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._cstore: Store | None = None
+        self._reported: set[str] = set()
+
+    @classmethod
+    def from_config(cls, config, store, **kw) -> "CanonShadow | None":
+        cfg = settings(getattr(config, "raw", None))
+        return cls(store, cfg, **kw) if cfg["shadow"] else None
+
+    # --- visibility ---------------------------------------------------------------
+    def _degrade(self, reason: str) -> None:
+        """Say so once per distinct reason: a down model must reach the Context panel,
+        but not as one line per turn forever."""
+        reason = reason[:200]
+        if reason in self._reported or len(self._reported) >= 20:
+            return
+        self._reported.add(reason)
+        try:
+            self.store.log_degraded(STAGE, reason)
+        except Exception:  # noqa: BLE001 - reporting a failure must not become one
+            pass
+
+    # --- running it ---------------------------------------------------------------
+    def kick(self) -> None:
+        """Ask for a pass and return at once. Never raises, never blocks."""
+        if not self.enabled:
+            return
+        try:
+            with self._guard:
+                self._dirty = True
+                if self._worker is not None and self._worker.is_alive():
+                    return
+                self._worker = threading.Thread(target=self._loop, daemon=True,
+                                                name="canon-shadow")
+                self._worker.start()
+        except Exception as exc:  # noqa: BLE001 - never breaks a turn
+            self._degrade(f"could not start: {type(exc).__name__}: {exc}")
+
+    def _loop(self) -> None:
+        while True:
+            with self._guard:
+                if not self._dirty or not self.enabled or self._stop.is_set():
+                    self._worker = None
+                    return
+                self._dirty = False
+            try:
+                self.reconcile()
+            except Exception as exc:  # noqa: BLE001 - a shadow must never matter to a turn
+                self._degrade(f"{type(exc).__name__}: {exc}")
+
+    def wait(self, timeout: float = 30.0) -> None:
+        """Block until the worker has drained. For tests and shutdown."""
+        worker = self._worker
+        if worker is not None:
+            worker.join(timeout)
+
+    def close(self) -> None:
+        self._stop.set()
+        self.wait(5.0)
+
+    def _mark_dirty(self) -> None:
+        with self._guard:
+            self._dirty = True
+
+    def _wait_idle(self) -> bool:
+        """Yield to a turn that is generating. Between turns only: a call already
+        under way is not interrupted."""
+        while self.busy is not None and not self._stop.is_set():
+            try:
+                if not self.busy():
+                    break
+            except Exception:  # noqa: BLE001 - a broken probe means "go ahead"
+                break
+            time.sleep(0.5)
+        return not self._stop.is_set()
+
+    # --- the model ----------------------------------------------------------------
+    def _get_scribe(self) -> Scribe:
+        if self.scribe is None:
+            self.scribe = Scribe(OllamaChat(self.cfg["model"], host=self.cfg["host"],
+                                            num_ctx=self.cfg["num_ctx"]))
+        require_local(self.scribe.llm)
+        return self.scribe
+
+    # --- state on disk ------------------------------------------------------------
+    def _alive(self) -> bool:
+        """The save still exists. A late worker must not recreate a deleted save's
+        folder by writing into it."""
+        return (Path(self.store.dir) / "meta.json").exists()
+
+    def _store(self) -> Store:
+        if self._cstore is None:
+            try:
+                self._cstore = Store(self.dir / "ledger")
+            except (LedgerCorrupt, OSError, ValueError) as exc:
+                self._reset(f"the shadow ledger was unreadable "
+                            f"({type(exc).__name__}); rebuilding it from the transcript")
+                self._cstore = Store(self.dir / "ledger")
+        return self._cstore
+
+    def _reset(self, why: str) -> None:
+        """The ledger is derived data, so the answer to a bad one is to start over."""
+        self._degrade(why)
+        shutil.rmtree(self.dir, ignore_errors=True)
+        self._cstore = None
+
+    def _load_state(self) -> dict:
+        try:
+            data = json.loads((self.dir / "shadow.json").read_text(encoding="utf-8"))
+            hashes = {int(k): str(v) for k, v in data["hashes"].items()}
+            first = data.get("first")
+            return {"first": first if isinstance(first, int) else None,
+                    "hashes": hashes}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return {"first": None, "hashes": {}}
+
+    def _save_state(self, state: dict) -> None:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        payload = {"version": 1, "first": state["first"],
+                   "hashes": {str(k): v for k, v in sorted(state["hashes"].items())}}
+        tmp = self.dir / "shadow.json.tmp"
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, self.dir / "shadow.json")
+
+    def _read_rows(self) -> dict[int, dict]:
+        rows: dict[int, dict] = {}
+        try:
+            lines = (self.dir / "rows.jsonl").read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return rows
+        for line in lines:
+            try:
+                row = json.loads(line)
+                rows[int(row["turn"])] = row
+            except (ValueError, KeyError, TypeError):
+                continue                  # a torn last line
+        return rows
+
+    def _write_rows(self, rows: dict[int, dict]) -> None:
+        keep = [rows[k] for k in sorted(rows)][-_ROWS_KEEP:]
+        tmp = self.dir / "rows.jsonl.tmp"
+        tmp.write_text("".join(json.dumps(r) + "\n" for r in keep), encoding="utf-8")
+        os.replace(tmp, self.dir / "rows.jsonl")
+
+    def _append_row(self, row: dict) -> None:
+        with (self.dir / "rows.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+
+    # --- the pass -----------------------------------------------------------------
+    def reconcile(self) -> dict:
+        with _lock_for(self.dir):
+            return self._reconcile()
+
+    def _first_index(self, ordered: list[int]) -> int:
+        """Where the first pass starts: `backfill` narrator turns before the latest,
+        or the very first with backfill "all"."""
+        return ordered[max(0, len(ordered) - 1 - self.cfg["backfill"])]
+
+    def _reconcile(self) -> dict:
+        out = {"processed": 0, "skipped": 0, "rolled_back_to": None, "errors": 0}
+        if not self.enabled or not self._alive():
+            return out
+        try:
+            self._get_scribe()
+        except NotLocal as exc:
+            self.enabled = False
+            self._degrade(f"shadow mode is off: {exc}")
+            return out
+        self.dir.mkdir(parents=True, exist_ok=True)
+        cstore = self._store()
+        turns = self.store.turns()
+        narr = {i: t["text"] for i, t in enumerate(turns, 1) if t["role"] == "narrator"}
+        state = self._load_state()
+        hashes = state["hashes"]
+
+        # 1. Follow the transcript: roll back to the first narrator turn that is gone
+        #    or reads differently from what was processed.
+        bad = sorted(i for i, h in hashes.items()
+                     if i not in narr or _hash(narr[i]) != h)
+        if bad:
+            d = bad[0]
+            cstore.undo_to(d - 1)
+            for i in [i for i in hashes if i >= d]:
+                del hashes[i]
+            rows = {k: v for k, v in self._read_rows().items() if k < d}
+            self._write_rows(rows)
+            out["rolled_back_to"] = d - 1
+            if state["first"] is not None and d < state["first"]:
+                state["first"] = d          # replay resumes at the divergence
+
+        # 2. Process what is new.
+        ordered = sorted(narr)
+        if not ordered:
+            self._save_state(state)
+            return out
+        if state["first"] is None:
+            state["first"] = self._first_index(ordered)
+        todo = [i for i in ordered if i >= state["first"] and i not in hashes]
+        votes = GenderVotes(self._read_rows().values())
+        errors, since_report = 0, 0
+        for idx in todo:
+            if not self._wait_idle():
+                break
+            now = self.store.turns()                       # it may have moved meanwhile
+            if (idx > len(now) or now[idx - 1]["role"] != "narrator"
+                    or _hash(now[idx - 1]["text"]) != _hash(narr[idx])):
+                self._mark_dirty()
+                break
+            if not self._alive():
+                break
+            prose = narr[idx]
+            entries = self.store.entries("characters.md")
+            seed_entities(cstore, entries, turn=idx)
+            player_text = self.store.read("player.md") or ""
+            player = player_entity(entries, player_text, self.cfg.get("player"))
+            seed_player(cstore, player, player_text, turn=idx)       # D-025
+            at = bisect.bisect_left(ordered, idx)
+            before = [narr[i] for i in ordered[max(0, at - BEFORE_TURNS):at]]
+            if not reads_anyone(cstore.canon, prose, player, "\n".join(before)):
+                row = skipped_row(idx)
+                out["skipped"] += 1
+            else:
+                who = passage_who(cstore.canon, prose, votes=votes, player=player,
+                                  before=before, player_is=player_gender(player_text))
+                rep = process_turn(cstore, idx, prose, self._get_scribe(),
+                                   create_unknown=False, record_contradictions=True, who=who)
+                v = gender_votes(cstore.canon, prose, player)
+                row = turn_row(idx, rep, v)
+                if rep.extraction.status == "error":
+                    # The model could not be reached. Not recorded as done, so the next
+                    # pass tries this turn again, and a down server is not hammered.
+                    errors += 1
+                    out["errors"] += 1
+                    if errors >= self.cfg["max_errors"]:
+                        self._degrade(
+                            f"the Scribe could not be reached {errors} times in a row; "
+                            f"shadow mode will retry after the next turn "
+                            f"({rep.extraction.error[:100]})")
+                        break
+                    continue
+                errors = 0
+                votes.add(v)
+                row.update(self._observe(cstore, rep, idx, narr))
+                out["processed"] += 1
+            hashes[idx] = _hash(prose)
+            self._append_row(row)
+            self._save_state(state)
+            since_report += 1
+            if since_report >= 25:
+                self._write_report(cstore)
+                since_report = 0
+        self._save_state(state)
+        self._write_report(cstore)
+        return out
+
+    def _observe(self, cstore: Store, rep, idx: int, narr: dict[int, str]) -> dict:
+        """What the engine could learn from this turn, as values only: each time the
+        story contradicted a fact canon already held, and the cast and card canon
+        WOULD show for the next turn (never shown)."""
+        held_back = [{"entity": d.entity, "slot": d.claim.slot,
+                      "held": _short(cstore.canon.current(d.entity, d.claim.slot)),
+                      "proposed": _short(d.claim.value)}
+                     for d in rep.decisions if d.status == "contradiction" and d.entity]
+        recent = [narr[i] for i in sorted(narr) if i <= idx][-3:]
+        scene = find_scene(cstore.canon, recent)
+        extra = {"next_cast": list(scene.cast)[:8],
+                 "next_card_chars": len(render_card(cstore.canon, scene))}
+        if held_back:
+            extra["held_back"] = held_back[:6]
+        return extra
+
+    # --- the report ---------------------------------------------------------------
+    def _write_report(self, cstore: Store) -> None:
+        rows = self._read_rows()
+        t = totals(rows, cstore.canon)
+        held = [(r["turn"], h) for r in rows.values() for h in r.get("held_back", [])]
+        held.sort(key=lambda x: x[0])
+        lines = [
+            "Canon shadow report. Observe only: nothing here reaches a prompt.",
+            f"Scribe: {self.cfg['model']} at {self.cfg['host']}; first read "
+            f"{self.cfg['backfill'] if self.cfg['backfill'] < BACKFILL_ALL else 'all'} "
+            "earlier narrator turns.",
+            f"Narrator turns seen {t['narrator_turns']}: {t['sent_to_model']} read by the "
+            f"model, {t['skipped_nobody_named']} named nobody canon knows. Scribe statuses "
+            f"{t['scribe_status']}. Mean {t['seconds_mean']} s a turn.",
+            f"Ledger: {t['ledger_records']} records over {t['entities']} entities, "
+            f"{t['entities_with_identity']} with identity facts. Decisions "
+            f"{t['decisions']}.",
+            f"Facts whose subject the code found, not a name in the passage (right about 9 "
+            f"in 10 on hand-read samples): {sum(t['via'].values())} {t['via'] or ''}".rstrip(),
+            f"Times the story contradicted a recorded fact (held back, canon unchanged): "
+            f"{len(held)}.",
+        ]
+        for turn, h in held[-25:]:
+            lines.append(f"  turn {turn}: {h['entity']} {h['slot']} held {h['held']!r}, "
+                         f"story said {h['proposed']!r}")
+        now = max((r["turn"] for r in rows.values()), default=0)
+        lines += ["", f"State values and how long ago the story last stated them (turn {now}); "
+                      "a card leaves a value out past its window:"]
+        for key, a in state_ages(cstore.canon, now, FRESH_TURNS).items():
+            lines.append(f"  {key}: {a['values']} characters have one, median age "
+                         f"{a['median_age']}, {a['past_window']} past the {a['window']}-turn window")
+        table = identity_table(cstore.canon)
+        lines += ["", f"Every identity value canon holds ({len(table)} characters):"]
+        for row in table:
+            parts = [f"{k} {v[0]} (turn {v[1]}, x{v[2]})" for k, v in row["fields"].items()]
+            if row["marks"]:
+                parts.append("marks: " + "; ".join(row["marks"][:6]))
+            lines.append(f"  {row['name']}: " + ", ".join(parts))
+        tmp = self.dir / "report.txt.tmp"
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(tmp, self.dir / "report.txt")

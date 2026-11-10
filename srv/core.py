@@ -159,7 +159,10 @@ def _engine(slug: str) -> Engine:
             store = lib.saves.store(slug)
         except FileNotFoundError:
             raise HTTPException(404, f"no such save: {slug}")
-        _engines[slug] = Engine(_cfg, store)
+        eng = Engine(_cfg, store)
+        if eng.canon_shadow is not None:
+            eng.canon_shadow.busy = _gen_lock.locked    # shadow mode yields to a turn
+        _engines[slug] = eng
     return _engines[slug]
 
 
