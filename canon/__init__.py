@@ -20,6 +20,9 @@ Phase 2, which writes into it:
 Phase 3, which reads canon back out for the Writer:
   scene.py     who is in the scene (pinned, named, same place), each character's
                identity line, and the bounded Scene State Card
+  card.py      what the Writer is shown: identity lines plus the card, built from an
+               immutable snapshot of the ledger and cut back to the turns the
+               transcript still has (D-027)
 
 Standard library only.
 """

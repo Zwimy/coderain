@@ -1,11 +1,17 @@
-"""Shadow canon: the Scribe and the ledger run BESIDE the engine and change nothing.
+"""Shadow canon: the Scribe and the ledger run BESIDE the engine.
 
-This is the first place engine code uses `canon/`. It is deliberately observe-only:
+This is the first place engine code uses `canon/`. By default it is observe-only:
 it reads the transcript, asks a local model for the facts each narrator turn states,
 keeps them in a canon ledger, and writes a report of what it saw, including every
-time the story contradicted a fact it had already recorded. Nothing it produces is
-ever put into a prompt. Turning that on is a separate, later step with its own flag,
-and this exists to produce the evidence for deciding whether to.
+time the story contradicted a fact it had already recorded. With `shadow: true` alone
+nothing it produces is ever put into a prompt.
+
+Putting canon in front of the Writer is a second, separate flag (`inject`, D-027). It
+has three states: "off" (the default), "preview" (the card is built and logged each
+turn but NOT sent, so a person can read it first) and true (it is sent). The card is
+built from an immutable snapshot this thread publishes, never from the live ledger,
+so a turn never waits for it, and it is cut back to the turns the transcript still
+has, so an undone reply's facts never reach the Writer (canon/card.py).
 
 What makes that safe, each of which a test pins:
 
@@ -33,11 +39,16 @@ Off unless config.yaml says so:
       shadow: true
       model: gemma3:4b            # any local Ollama model
       backfill: 200               # earlier narrator turns to read the first time, or "all"
+      inject: preview             # off (default) | preview | true. Needs shadow: true
+      card_chars: 2400            # the most the card may add to a prompt (about 600 tokens)
+      inject_state: true          # false: identity only (hair, eyes, marks), no clothing etc.
+
+What a turn's card did is in <save>/canon/injections.jsonl (one row of counts per turn)
+and <save>/canon/card-last.txt (the last card in full, marked sent or preview).
 """
 from __future__ import annotations
 
 import bisect
-import hashlib
 import json
 import os
 import re
@@ -48,6 +59,7 @@ from collections import Counter
 from pathlib import Path
 
 from canon import Store
+from canon.card import Card, Snapshot, build_card, content_hash
 from canon.ledger import LedgerCorrupt
 from canon.pipeline import process_turn
 from canon.referents import gender_votes
@@ -61,8 +73,11 @@ from canon.scribe import NotLocal, OllamaChat, Scribe, require_local
 STAGE = "canon-shadow"
 BACKFILL_ALL = 10 ** 9
 DEFAULTS = {"shadow": False, "model": "gemma3:4b", "host": "http://localhost:11434",
-            "num_ctx": 8192, "backfill": 200, "max_errors": 3}
+            "num_ctx": 8192, "backfill": 200, "max_errors": 3,
+            "inject": "off", "card_chars": 2400, "inject_state": True}
 _ROWS_KEEP = 6000                    # rows.jsonl is trimmed to this many lines
+RECENT_FOR_CARD = 4                  # latest turns whose names pick the cast
+_INJECT_LOG_BYTES = 120_000          # injections.jsonl is cut to its newest half past this
 
 
 def _int(raw, default: int, lo: int, hi: int) -> int:
@@ -95,14 +110,22 @@ def settings(raw) -> dict:
     out["backfill"] = (BACKFILL_ALL if isinstance(bf, str) and bf.strip().lower() == "all"
                        else _int(bf, DEFAULTS["backfill"], 0, 100_000))
     out["max_errors"] = _int(sec.get("max_errors"), DEFAULTS["max_errors"], 1, 20)
+    # Injection (D-027). "on" only for a literal true, like shadow: a typo must not start
+    # putting canon into prompts. "preview" builds and logs the card but sends nothing,
+    # the step to take first. It means nothing without shadow, which builds the ledger.
+    inj = sec.get("inject")
+    out["inject"] = ("on" if inj is True
+                     else "preview" if isinstance(inj, str) and inj.strip().lower() == "preview"
+                     else "off")
+    out["card_chars"] = _int(sec.get("card_chars"), DEFAULTS["card_chars"], 600, 4000)
+    out["inject_state"] = sec.get("inject_state") is not False
     pl = sec.get("player")
     out["player"] = (pl.strip() if isinstance(pl, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", pl.strip())
                      else None)                 # a character slug; otherwise worked out from player.md
     return out
 
 
-def _hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
+_hash = content_hash        # one definition for the reader and for the card that compares them
 
 
 def _short(value, n: int = 60) -> str:
@@ -137,6 +160,7 @@ class CanonShadow:
         self._stop = threading.Event()
         self._cstore: Store | None = None
         self._reported: set[str] = set()
+        self._snap: Snapshot | None = None      # what the card is built from (D-027)
 
     @classmethod
     def from_config(cls, config, store, **kw) -> "CanonShadow | None":
@@ -209,6 +233,73 @@ class CanonShadow:
                 break
             time.sleep(0.5)
         return not self._stop.is_set()
+
+    # --- the card (D-027) -----------------------------------------------------------
+    def _publish(self, cstore: Store, state: dict) -> None:
+        """Hand the card builder an immutable copy of what has been read so far. One
+        reference assignment, so a turn being prepared sees the old snapshot or the new
+        one, never a half-written one, and never waits for this thread."""
+        try:
+            player = player_entity(self.store.entries("characters.md"),
+                                   self.store.read("player.md") or "", self.cfg.get("player"))
+            self._snap = Snapshot(tuple(cstore.ledger.records), dict(state["hashes"]),
+                                  state["first"], player)
+        except Exception as exc:  # noqa: BLE001 - publishing must never break the reader
+            self._degrade(f"could not publish the card snapshot: {type(exc).__name__}: {exc}")
+
+    def _load_snapshot(self) -> Snapshot | None:
+        """After a restart nothing has been published yet, so read what is on disk. Only
+        when the reader is not mid-pass: the lock is tried, never waited for, because a
+        turn must not wait on a model call."""
+        lock = _lock_for(self.dir)
+        if not lock.acquire(blocking=False):
+            return None
+        try:
+            if not (self.dir / "shadow.json").exists():
+                return None
+            self._publish(self._store(), self._load_state())
+        finally:
+            lock.release()
+        return self._snap
+
+    def card(self, turns: list[dict]) -> Card:
+        """The card for the turn about to be written, or a Card with no text and the
+        reason. Never raises and never waits for the reader."""
+        if not self.enabled or self.cfg.get("inject", "off") == "off":
+            return Card(reason="off")
+        try:
+            snap = self._snap or self._load_snapshot()
+            narr = {i: _hash(t["text"]) for i, t in enumerate(turns, 1)
+                    if t["role"] == "narrator"}
+            return build_card(snap, narr, [t["text"] for t in turns[-RECENT_FOR_CARD:]],
+                              now=len(turns) + 1, max_chars=self.cfg["card_chars"],
+                              state=self.cfg["inject_state"])
+        except Exception as exc:  # noqa: BLE001 - a card must never cost a turn
+            self._degrade(f"no card this turn: {type(exc).__name__}: {exc}")
+            return Card(reason="error")
+
+    def record_injection(self, card: Card, mode: str, turn: int) -> None:
+        """What was put in front of the Writer, or in preview mode WOULD have been: a
+        row of values and counts each turn, and the last card in full. For a person to
+        read before turning injection on and to audit afterwards. Never raises."""
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            log = self.dir / "injections.jsonl"
+            with log.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"turn": turn, "mode": mode, **card.row()}) + "\n")
+            if log.stat().st_size > _INJECT_LOG_BYTES:
+                keep = log.read_text(encoding="utf-8").splitlines()[-300:]
+                tmp = self.dir / "injections.jsonl.tmp"
+                tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
+                os.replace(tmp, log)
+            if card.text:
+                tmp = self.dir / "card-last.txt.tmp"
+                sent = "Sent." if mode == "on" else "Preview only: NOT sent."
+                tmp.write_text(f"Turn {turn}, mode {mode}. {sent}\n\n{card.text}\n",
+                               encoding="utf-8")
+                os.replace(tmp, self.dir / "card-last.txt")
+        except Exception as exc:  # noqa: BLE001 - a log must never cost a turn
+            self._degrade(f"could not write the injection log: {type(exc).__name__}: {exc}")
 
     # --- the model ----------------------------------------------------------------
     def _get_scribe(self) -> Scribe:
@@ -323,11 +414,13 @@ class CanonShadow:
             out["rolled_back_to"] = d - 1
             if state["first"] is not None and d < state["first"]:
                 state["first"] = d          # replay resumes at the divergence
+            self._publish(cstore, state)    # a card must not show what was just undone
 
         # 2. Process what is new.
         ordered = sorted(narr)
         if not ordered:
             self._save_state(state)
+            self._publish(cstore, state)
             return out
         if state["first"] is None:
             state["first"] = self._first_index(ordered)
@@ -381,11 +474,13 @@ class CanonShadow:
             hashes[idx] = _hash(prose)
             self._append_row(row)
             self._save_state(state)
+            self._publish(cstore, state)
             since_report += 1
             if since_report >= 25:
                 self._write_report(cstore)
                 since_report = 0
         self._save_state(state)
+        self._publish(cstore, state)
         self._write_report(cstore)
         return out
 

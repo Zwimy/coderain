@@ -602,6 +602,7 @@ turn with a local model, keeps the facts in `<save>/canon/`, and writes
 it had already recorded. NOTHING it produces reaches a prompt. Deciding whether to
 inject the card is a separate step with its own flag, to be taken from what the report
 shows. Off unless the value is a literal `true`, and when off `canon/` is not imported.
+(That second step now exists: D-027. With `shadow: true` alone this still holds.)
 
 Calls that look heavier than they need to be:
 
@@ -963,3 +964,71 @@ hair colour as a stale mark and now uses a tattoo. `soak_scribe_corpus_test.py` 
 oracle builds each value from the first word a label's pattern matches, one label's pattern matches "raven"
 first in "a black raven tattooed on his forearm", and a bare "raven" names no mark. The label stays so earlier
 Scribe scores remain comparable.
+
+
+## D-027 — Canon reaches the Writer through a flag with a preview mode, from a snapshot, and never from a turn that is gone
+
+**Context.** D-021 made the shadow observe-only on purpose and said injecting the card would be a separate
+step "taken from what the report shows". The report now shows enough to take it: on the real save the
+held-back identity changes fell from 509 to 54 (D-022), outfit lists from a median of 7 to 2 (D-023), and
+marks from 54 junk of 87 to 1 of 64 (D-026). It also shows what stays wrong: about one identity value in
+twelve, and state lists that still hold the odd non-wound. Putting that in front of the Writer is the first
+time canon changes what a story says, so the step is built around how it can go wrong.
+
+**Decision.** `canon: {inject: off | preview | true}`, needing `shadow: true`. It is on only for a literal
+`true`; the word `preview` builds and logs the card each turn and sends nothing, and everything else is off.
+`card_chars` (600 to 4000, default 2400, about 600 tokens) bounds it, and a literal `inject_state: false`
+sends identity only (hair, eyes, build, age, marks) and no clothing, items or injuries. The card is a system
+message appended AFTER the player's action and BEFORE the chapter directive, in `_generate_and_store`, so
+every way into a turn (turn, continue, swipe, opening) gets it and the chapter goal is still the last thing
+read. Being a system message in `messages`, the echo filter also drops a model copying it into its prose.
+What it carries: an identity line per character in the scene who has any identity facts, then the Scene
+State Card (D-020) for the same people. The scene is the player (pinned), anyone named in the last four
+turns, and anyone canon puts in the same place. What each turn did is in `<save>/canon/injections.jsonl`
+(counts only) and the last card in full in `<save>/canon/card-last.txt`, marked sent or preview.
+
+**Calls that look heavier than they need to be:**
+
+1. **A snapshot, not the live ledger.** The reader appends to the ledger on its own thread, and a turn must
+   never wait for it or read half of a write. After each turn it has read, the reader publishes an immutable
+   copy (the frozen records and a hash of each narrator turn read) with one reference assignment, and the
+   card is built only from that. `canon/card.py` holds no lock and changes nothing.
+2. **The ledger is cut back by content, not by waiting.** After an undo, a retry or a swipe the ledger still
+   holds what the discarded reply stated until the reader catches up, which is seconds on a local model. The
+   card compares the hash of each narrator turn with the transcript as it is now, cuts the ledger back to
+   the turn before the first that differs, and projects only that. A retry (the turn is gone) keeps the
+   state, because nothing is unread; an edit of an older turn shows only what came before it, and no state.
+3. **State only when nothing is unread.** What someone wears or holds changes every few turns, and the last
+   turns ride the prompt verbatim. A card that is one turn behind would say the old coat beside a turn that
+   says the new one. Identity does not change, so it is always shown, from the trusted part of the ledger.
+4. **A lock that is tried, never waited for.** After a restart nothing is published, so the first card reads
+   the snapshot from disk, but only if the reader is not mid-pass. A held lock means no card that turn, and
+   the log row says `not_ready`.
+5. **Preview before on.** The card repeats whatever canon holds, including a wrong first value, which first
+   write wins and which then reaches the Writer as an instruction. About one identity value in twelve was
+   wrong on the real save, and one replay of the card at turn 1300 showed an injury list holding a phrase that
+   is not a wound. A person should read the cards for their own story first, and `inject_state: false` is the
+   cautious second step.
+
+**Measured, and what that does not show.** A replay of the recorded real-save ledger, with no model: the
+card the Writer would have been given at eight points (turn 59 to 1639) was 629 to 1273 characters (157 to
+318 tokens), took 5 to 7 ms to build, and held 2 to 6 characters. That is size and cost only. It says nothing
+about whether the Writer stays more consistent with the card than without it: there is no A/B yet, and the
+simulated-player soak against the Phase 0 baseline is what would show it.
+
+**Not known:** whether a wrong value makes the Writer worse than no value (it may defend it harder than the
+prose it replaces); whether a story that keeps changing a look on purpose (a dye, a transformation) fights
+the card, since an author edit that overrides a held value does not exist yet; and how a hosted Writer with a
+prompt cache behaves (the card sits after the history, so the cached prefix is untouched, but this has not
+been run).
+
+**What would change it:** previews that show wrong facts often enough that the first step has to be
+correcting them (an author edit that outranks the ledger, which the design already has a place for); a soak
+that shows no gain, which means removing it; or a Writer that obeys a card line so literally that stories go
+stiff, which would mean fewer fields or a softer header.
+
+**Tests.** `canon_card_test.py` (the builder: coverage, cut-back, state only when caught up, the cast, the
+size cap, purity) and `canon_inject_test.py` (the engine: what the model receives, ordering against the
+chapter directive, preview sends nothing, a held lock, a restart, a card builder that explodes, a retry, an
+edit, `inject` without the shadow, the echo filter). 24 guard mutations are caught. The mutation pass found
+two gaps in the size-cap test, which never made a footer land against the cap, and closed them.

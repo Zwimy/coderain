@@ -310,6 +310,35 @@ class Engine:
             except Exception as e:  # noqa: BLE001 — never breaks the engine
                 store.log_degraded("canon-shadow",
                                    f"could not start: {type(e).__name__}: {e}")
+        # `inject` only means something with the shadow, which builds the ledger. Saying
+        # so beats a config that looks on and does nothing (invariant 2).
+        want = sec.get("inject") if isinstance(sec, dict) else None
+        if self.canon_shadow is None and want not in (None, False, "off"):
+            store.log_degraded("canon-inject",
+                               "canon.inject needs canon.shadow: true; nothing is injected")
+
+    def _canon_card(self) -> str:
+        """The canon card for the turn about to be written (D-027), or "".
+
+        "preview" builds and logs the card and sends nothing: the step to take first, so
+        a person can read what the Writer would be told. A turn is never delayed or
+        broken by this: the shadow builds the card from a snapshot it published and never
+        waits for its own thread, and anything unexpected is reported once and means no
+        card."""
+        shadow = self.canon_shadow
+        if shadow is None:
+            return ""
+        mode = shadow.cfg.get("inject", "off")
+        if mode == "off":
+            return ""
+        try:
+            turns = self.store.turns()
+            card = shadow.card(turns)
+            shadow.record_injection(card, mode, len(turns) + 1)
+        except Exception as e:  # noqa: BLE001 — a card must never cost a turn
+            shadow._degrade(f"no card this turn: {type(e).__name__}: {e}")
+            return ""
+        return card.text if mode == "on" else ""
 
     def _messages(self, history, player_input):
         messages = self.store.assemble(history, player_input,
@@ -949,6 +978,14 @@ class Engine:
                 if directive:
                     messages = [*messages,
                                 {"role": "system", "content": directive}]
+        # Canon (D-027, off unless config.yaml says so): who the people in the scene are
+        # and what they are doing now, restated where it binds. BEFORE the chapter
+        # directive, so the chapter goal stays the last thing read. It is a system
+        # message in `messages`, so the echo filter below also catches a model copying
+        # it back into its prose.
+        card = self._canon_card()
+        if card:
+            messages = [*messages, {"role": "system", "content": card}]
         # The active chapter, restated where it binds. Costs no extra call: the
         # plan is already on disk. Placed AFTER any continuity directive so the
         # chapter goal is the last thing read before writing.
