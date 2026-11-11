@@ -209,11 +209,15 @@ class Canon:
     def resolve(self, name: str) -> str | None:
         """Entity id for a name, alias or id; None when unknown OR ambiguous. A
         wrong merge is worse than a duplicate, so ambiguity is never guessed."""
-        key = " ".join(name.lower().split())
-        found = {eid for eid, e in self.entities.items()
-                 if key == eid or key == e["name"].lower()
-                 or key in (a.lower() for a in e["aliases"])}
+        found = self.named(name)
         return next(iter(found)) if len(found) == 1 else None
+
+    def named(self, name: str) -> set[str]:
+        """Every entity id a name, alias or id matches: none for an unknown name, several for an ambiguous one."""
+        key = " ".join(name.lower().split())
+        return {eid for eid, e in self.entities.items()
+                if key == eid or key == e["name"].lower()
+                or key in (a.lower() for a in e["aliases"])}
 
     # --- plain-data form: equality, snapshots ------------------------------
     def as_dict(self) -> dict:

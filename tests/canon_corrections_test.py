@@ -17,6 +17,10 @@ promise below is about the ways it could quietly stop working. Each assertion pi
  7) the card applies them itself: it shows the author's value and hides a retracted one even when the ledger
     has not been told yet, and after an undo has cut off the records that carried them
  8) `held_values` lists what canon holds for a person to read: open values only, with whose word it is
+ 9) removing a "=" line releases what it set and only that (the story's own values and an author edit made
+    another way stay), changing a value is a replacement, a retraction is not undone by removing its line, a
+    name that matches nobody shields no other release and an ambiguous one shields both characters
+10) with the last line removed the card drops the author's value at once, not after the reader's next pass
 """
 import shutil
 import sys
@@ -278,10 +282,114 @@ def test_held_values():
     print("8. held_values lists the open identity values with whose word each is, and leaves out what was retracted")
 
 
+def test_removing_a_line_releases_what_it_set():
+    # a "=" line locked the value in as the author's; removing the line must let go, or the panel would show
+    # "yours" next to no correction and the story could never say anything else about that slot
+    s = store()
+    say(s, "Odile", "identity.hair", "set", "platinum", "her platinum hair", 1)
+    say(s, "Tamsin", "identity.marks", "add", "tattoo of a heron", "a tattoo of a heron", 1)
+    write(s, parse("- Odile: hair = raven\n- Tamsin: marks = scar on her chin")[0])
+    assert s.canon.current("odile", "identity.hair") == "raven"
+    assert s.canon.current("tamsin", "identity.marks.scar-on-her-chin") == "scar on her chin"
+    recs, _ = write(s, [])
+    assert sorted((r["entity"], r["slot"], r["value"]) for r in recs) == \
+        [("odile", "identity.hair", None), ("tamsin", "identity.marks.scar-on-her-chin", None)], recs
+    assert s.canon.current("odile", "identity.hair") is None, "the author's value stayed after its line went"
+    assert s.canon.current("tamsin", "identity.marks.tattoo-of-a-heron") == "tattoo of a heron", \
+        "a value the story set was released with the author's"
+    assert write(s, [])[0] == [], "releasing twice wrote something"
+    d = say(s, "Odile", "identity.hair", "set", "auburn", "her auburn hair", 7)
+    assert d.status == "commit" and s.canon.current("odile", "identity.hair") == "auburn", \
+        "the slot was not free for the story afterwards"
+    assert write(s, [])[0] == [], "the story's own value was released as if it were the author's"
+    # the history keeps what was believed, closed by the release
+    h = s.canon.history("odile", "identity.hair")
+    assert [x["value"] for x in h] == ["platinum", "raven", "auburn"] and h[1]["end_id"] is not None, h
+
+    # changing the value is a replacement, not a release followed by a second write
+    s = store()
+    write(s, parse("- Odile: hair = raven")[0], turn=1)
+    recs, _ = write(s, parse("- Odile: hair = auburn")[0], turn=2)
+    assert [(r["slot"], r["value"]) for r in recs] == [("identity.hair", "auburn")], recs
+    assert s.canon.current("odile", "identity.hair") == "auburn"
+    # a mark that is swapped for another: the old one goes and the new one comes
+    write(s, parse("- Tamsin: marks = scar on her chin")[0], turn=2)
+    recs, _ = write(s, parse("- Tamsin: marks = tattoo of a heron")[0], turn=3)
+    assert sorted((r["slot"], r["value"]) for r in recs) == \
+        [("identity.marks.scar-on-her-chin", None), ("identity.marks.tattoo-of-a-heron", "tattoo of a heron")], recs
+    assert write(s, parse("- Tamsin: marks = tattoo of a heron")[0])[0] == []
+
+    # an author value turned into "is not that value" is retracted ONCE: the retraction the wrong line plans
+    # and the release of the value the old line set are the same act
+    s = store()
+    write(s, parse("- Odile: hair = raven")[0], turn=1)
+    recs, _ = write(s, parse("- Odile: hair is not raven")[0], turn=2)
+    assert [(r["slot"], r["value"]) for r in recs] == [("identity.hair", None)], recs
+    assert s.canon.conflicts == [], "a second retraction found nothing to clear: " + str(s.canon.conflicts)
+
+    # a retraction is not undone when its line is removed: the ledger no longer holds the value, and the
+    # story may say it again if it is true
+    s = store()
+    say(s, "Corin", "identity.eyes", "set", "green", "his green eyes", 1)
+    write(s, parse("- Corin: eyes is not green")[0])
+    assert write(s, [])[0] == [] and s.canon.current("corin", "identity.eyes") is None
+    d = say(s, "Corin", "identity.eyes", "set", "green", "his green eyes", 5)
+    assert d.status == "commit" and s.canon.current("corin", "identity.eyes") == "green"
+
+    # only this file's own words are released: an author edit that came another way stays
+    s = store()
+    s.append(kind="author_edit", entity="finn", slot="identity.age", value="thirty", authority="author",
+             turn=1, span="a hand edit")
+    s.append(kind="author_edit", entity="finn", slot="identity.hair", value="black", authority="author",
+             turn=1, span="corrections.md")
+    recs, _ = write(s, [])
+    assert [(r["slot"], r["value"]) for r in recs] == [("identity.hair", None)], recs
+    assert s.canon.current("finn", "identity.age") == "thirty"
+
+    # a name that matches nobody shields nothing: a line about a character who has not appeared yet must not
+    # hold up another line's release
+    s = store()
+    write(s, parse("- Odile: hair = raven")[0])
+    recs, pr = write(s, parse("- Nobody: hair = red")[0])
+    assert [(r["entity"], r["value"]) for r in recs] == [("odile", None)] and len(pr) == 1, (recs, pr)
+    # but a name that now matches two characters shields both: it may be the line that set their value, and a
+    # value must not be wiped by a guess
+    s = store()
+    write(s, parse("- Odile Marsh: hair = raven")[0])
+    s.append(kind="entity_created", entity="odile-2", slot="character", value="Odile", authority="scenario",
+             turn=2, aliases=[])                                   # "Odile" now answers to two characters
+    recs, pr = write(s, parse("- Odile: eyes = grey")[0])
+    assert recs == [] and len(pr) == 1 and s.canon.current("odile", "identity.hair") == "raven", (recs, pr)
+    recs, _ = write(s, [])
+    assert [(r["entity"], r["value"]) for r in recs] == [("odile", None)], "with no lines left, nothing shields it"
+    print("9. removing a line releases what it set (and only that), a changed value is a replacement, a "
+          "retraction is not undone, an unresolved name shields no one and an ambiguous one shields both")
+
+
+def test_the_card_drops_a_released_value_at_once():
+    s = store()
+    say(s, "Odile", "identity.hair", "set", "platinum", "her platinum hair", 1)
+    say(s, "Odile", "identity.eyes", "set", "violet", "her violet eyes", 1)
+    write(s, parse("- Odile: hair = raven")[0])
+    H = {1: content_hash("turn 1")}
+    snap = Snapshot(tuple(s.ledger.records), dict(H), 1, "finn")
+    recent = ["Odile Marsh stepped in."]
+    held = build_card(snap, H, recent, now=2, corrections=parse("- Odile: hair = raven")[0])
+    assert "hair: raven" in held.text, held.text
+    gone = build_card(snap, H, recent, now=2, corrections=[])
+    assert "raven" not in gone.text and "eyes: violet" in gone.text, \
+        "the line is gone but the card still tells the Writer the author's value: " + gone.text
+    assert "hair: raven" in build_card(snap, H, recent, now=2).text, \
+        "no corrections argument means 'do not apply', so the ledger is shown as it is"
+    print("10. with the last line removed the card drops the author's value before the reader has written the "
+          "release, and a card built without corrections shows the ledger as it is")
+
+
 try:
     for fn in (test_the_file, test_writing_a_line, test_plan_returns_only_what_is_needed, test_it_is_idempotent,
                test_authority_and_history, test_a_refused_value_is_refused,
-               test_the_card_applies_corrections_itself, test_held_values):
+               test_the_card_applies_corrections_itself, test_held_values,
+               test_removing_a_line_releases_what_it_set, test_the_card_drops_a_released_value_at_once):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

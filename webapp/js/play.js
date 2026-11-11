@@ -1,6 +1,7 @@
 /* The play view: transcript, composer, sheet, book plan, context
    inspector, companion drawer. */
 import {$, api, esc, guard, renderProse, sse, toast, view} from "./util.js";
+import {canonModal} from "./canon.js";
 import {
   closeModal,
   confirmModal,
@@ -302,6 +303,8 @@ export async function renderPlay(slug) {
           >Plan</button>
         <button id="ctx-btn" title="what the model actually receives this turn"
           >Context</button>
+        <button id="canon-btn" title="what the story remembers about each person, and your corrections to it"
+          >Canon</button>
         <button id="talk-btn" ${s.companions.length ? "" : "disabled"}
           title="${s.companions.length ? "private companion chat"
                  : "no companions yet"}">Talk</button>
@@ -997,6 +1000,7 @@ export async function renderPlay(slug) {
 
   $("#plan-btn").addEventListener("click", () => outlineModal(slug));
   $("#ctx-btn").addEventListener("click", () => contextModal(slug));
+  $("#canon-btn").addEventListener("click", () => canonModal(slug));
   $("#talk-btn").addEventListener("click", () => talkDrawer(slug, s.companions));
   $("#edit-btn").addEventListener("click", () => { location.hash = `#edit/${slug}`; });
   $("#note-btn").addEventListener("click", async () => {          // ST-21 author's note

@@ -22,6 +22,10 @@ survive three things the rest of the ledger does not.
     value, and the story can then establish it. The refusal list stops the Scribe re-proposing the same wrong
     value on every turn that mentions it, which would otherwise be retracted and re-locked forever.
 
+Removing a line releases what it set: the value is retracted and the story may say it again. Whatever the line
+replaced or retracted is not brought back, because the ledger no longer holds it as open; the story can state
+it again, and the history keeps it.
+
 Identity only (hair, eyes, build, age, marks): state changes every few turns and is the story's to say.
 Standard library only, plus the rest of canon/.
 """
@@ -151,12 +155,18 @@ def plan(canon: Canon, corrections, *, turn: int) -> tuple[list[dict], list[dict
     an empty list, which is what makes it safe to run again after every turn and after every rollback."""
     out: list[dict] = []
     problems: list[dict] = []
+    wanted: set[tuple[str, str]] = set()          # (entity, slot) a "=" line still asks for
+    unsettled: set[str] = set()                   # characters a line names ambiguously: nothing of theirs is released
     for c in corrections:
         eid = canon.resolve(c.who)
         if eid is None:
+            unsettled |= canon.named(c.who)
             problems.append({"line": c.line, "text": c.text()[:100],
                              "why": f"no single character is called {c.who!r} (yet)"})
             continue
+        if c.op == "set":
+            wanted.add((eid, f"identity.marks.{_slugify(c.value)}" if c.slot == "marks"
+                        else f"identity.{c.slot}"))
         if c.slot == "marks":
             if c.op == "set":
                 slot = f"identity.marks.{_slugify(c.value)}"
@@ -176,6 +186,24 @@ def plan(canon: Canon, corrections, *, turn: int) -> tuple[list[dict], list[dict
                 out.append(_record(eid, slot, c.value, turn))
         elif cur is not None and same_value(str(cur), c.value):
             out.append(_record(eid, slot, None, turn))
+    # RELEASE. A value this file wrote earlier and no line asks for any more (the author removed the line, or
+    # changed it to another slot) must not stay locked in: it is retracted, so the slot is empty again and the
+    # story may say what it is. Only a value that carries this file's own provenance is ever released, so an
+    # edit made any other way is untouched. A line that names someone ambiguously (two characters now answer to
+    # the name) shields both: it may be the line that wrote their value, and a value must not be wiped by a guess.
+    # A name that matches nobody shields no one, so a line about a character who has not appeared yet does not
+    # hold up the release of anything else.
+    planned = {(r["entity"], r["slot"]) for r in out}
+    for eid in canon.entities:
+        if eid in unsettled:
+            continue
+        for slot, ivs in canon.slots.get(eid, {}).items():
+            if not slot.startswith("identity.") or not ivs:
+                continue
+            iv = ivs[-1]
+            if (iv.end_id is None and iv.authority == "author" and iv.span == SPAN
+                    and (eid, slot) not in wanted and (eid, slot) not in planned):
+                out.append(_record(eid, slot, None, turn))
     return out, problems
 
 

@@ -14,7 +14,9 @@ promise:
  4) an unknown save is a 404, and a slug that is not a clean id is refused
  5) corrections.md travels with an export, because it is the author's and cannot be rebuilt
  6) with the shadow on, GET shows what canon holds with the corrections applied and whose word each value is,
-    and a correction added through POST shows at once and reaches the ledger on the reader's next pass
+    and a correction added through POST shows at once and reaches the ledger on the reader's next pass; the
+    file put back without that line (what the panel's Remove does) releases the value in the view at once and
+    in the ledger at the next pass
 """
 import json
 import os
@@ -153,6 +155,20 @@ def test_with_the_shadow():
             "the view must show the correction at once"
         sh.wait()                                           # the reader's pass that the POST kicked
         assert sh._store().canon.current("odile", "identity.hair") == "auburn", "it never reached the ledger"
+        # the panel's Remove: take the line out of the file and PUT the file back. The value it set is released
+        # (the slot is empty, it is not shown as held, and it is not "yours" next to no correction), and the
+        # story's earlier value is not brought back, because the ledger no longer holds it as open
+        text = c.get(f"/api/saves/{slug}/canon").json()["text"]
+        kept = "\n".join(ln for ln in text.split("\n") if "auburn" not in ln)
+        assert kept != text, text
+        r = c.put(f"/api/saves/{slug}/canon/corrections", json={"text": kept})
+        assert r.status_code == 200, r.text
+        r = r.json()
+        assert r["corrections"] == [], r["corrections"]
+        assert not any(x["who"] == "Odile Marsh" and x["slot"] == "hair" for x in r["values"]), \
+            "the removed correction's value is still shown as held: " + str(r["values"])
+        sh.wait()
+        assert sh._store().canon.current("odile", "identity.hair") is None, "the release never reached the ledger"
         r = c.post(f"/api/saves/{slug}/canon/corrections",
                    json={"who": "Nobody Here", "slot": "eyes", "op": "set", "value": "grey"}).json()
         assert any("Nobody Here" in p["why"] for p in r["problems"]), r["problems"]
@@ -160,7 +176,8 @@ def test_with_the_shadow():
         server.core._cfg.raw.pop("canon", None)
         server.core._engines.clear()
     print("6. with the shadow on, GET shows canon with the corrections applied and whose word each value is; "
-          "a POST shows at once and reaches the ledger; an unknown character is reported")
+          "a POST shows at once and reaches the ledger; removing the line (the panel's Remove) releases the "
+          "value at once and in the ledger; an unknown character is reported")
 
 
 try:

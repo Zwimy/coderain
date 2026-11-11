@@ -317,9 +317,8 @@ class CanonShadow:
 
     def _apply_corrections(self, cstore: Store, corr) -> int:
         """Write into the ledger whatever the corrections still need (author-level records), which is
-        nothing once it is in line. Never raises: a correction that cannot be written is reported once."""
-        if not corr:
-            return 0
+        nothing once it is in line. Never raises: a correction that cannot be written is reported once.
+        An EMPTY list is applied too: with no lines left, what a removed line set is released."""
         try:
             last = cstore.ledger.records[-1].turn if cstore.ledger.records else 0
             recs, _unresolved = plan_corrections(cstore.canon, corr, turn=last)

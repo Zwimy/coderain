@@ -1077,8 +1077,10 @@ dropped. A name is a character's name, alias or id, matched exactly and never gu
 
 Routes: `GET /api/saves/{slug}/canon` (what canon holds, with the corrections applied, whose word each value
 is, the file, the lines that could not be applied), `PUT .../canon/corrections` (replace the file) and
-`POST .../canon/corrections` (add one). There is no interface in the app yet; the routes are what a button
-next to a wrong value would call.
+`POST .../canon/corrections` (add one). The Canon panel in the play screen (`webapp/js/canon.js`) is a thin
+client over these routes: a held value with Wrong and Change buttons, a form for a fact, the list of corrections
+with Remove, the file itself, and the last card. Every button changes the one file, so the panel and a hand edit
+are the same thing.
 
 **Calls that look heavier than they need to be:**
 
@@ -1101,6 +1103,18 @@ next to a wrong value would call.
    another as the same. On the real ledger one "is not" line for a mark retracted two near-duplicates of it,
    which is wanted. The risk is the other direction: "is not raven" also refuses a narrated "black". The
    author's own `=` value is never refused.
+7. **Removing a line releases what it set.** The file is the truth, so a value the file wrote and no line asks
+   for any more is retracted at the next pass, and the card drops it at once. Without this the panel's Remove
+   button would leave the ledger holding the author's value as "yours" next to no correction, locked for good.
+   What counts as "this file's own value" is the provenance on the record (author authority and the span
+   `corrections.md`), so an author edit that arrived any other way, and everything the story set, is never
+   released. Changing a value is a replacement, not a release plus a write. A retraction made by a `is not` line
+   is NOT undone when the line is removed: the ledger no longer holds the old value, so removing the line only
+   means the story may say it again. An EMPTY file is applied like any other (the reader and the card used to
+   skip an empty list, which would have made the last Remove do nothing). A name that matches nobody shields no
+   one, so a line about a character who has not appeared yet does not hold up another line's release; a name
+   that now matches two characters shields both, because it may be the line that set their value and a value
+   must not be wiped by a guess.
 
 **Measured, and what that does not show.** On the recorded real-save ledger (1,295 records) planning four
 corrections took 0.2 ms and wrote three records; the two corrections that were already true needed nothing,
@@ -1109,17 +1123,20 @@ the card's line for that character no longer carries it. That is the card, not t
 after this change, so the Writer's behaviour with the value gone (which should be the no-card baseline for
 that slot) is expected and not measured.
 
-**Not done:** an interface (a list of what canon holds with a "wrong" and a "set" button is the next step and
-belongs with the web-app work); state corrections (what someone wears is the story's to say); and a way to
-protect a correction from a rebuild that renames a character, since the file names people.
+**Not done:** state corrections (what someone wears is the story's to say); a way to protect a correction from a
+rebuild that renames a character, since the file names people; and a way to ask "restore what the story said
+before my correction" (the ledger keeps the history, but nothing brings a retracted value back).
 
 **What would change it:** corrections that people write and then keep contradicting (the format is too hard),
 a refusal that blocks a true value often enough to need exact matching, or a story whose looks change on
 purpose often enough that the author wants a correction that ends at a turn.
 
-**Tests.** `canon_corrections_test.py` (the file, the plan, idempotence, authority, refusal, the card),
+**Tests.** `canon_corrections_test.py` (the file, the plan, idempotence, authority, refusal, the card, release),
 `canon_ledger_test.py` 6b (retraction), `canon_shadow_test.py` 18 (the reader: outranking, refusal from the
-first turn, a hand edit, an undo, a late character, the view), `canon_inject_test.py` 9 (the next turn, and
-after an undo) and `canon_api_test.py` (the routes, every refused input, export). 29 guard mutations are
-caught; the pass found two gaps (a duplicated line and the author's own values in the refusal list) that no
-test could see, and closed them.
+first turn, a hand edit, an undo, a late character, the view), 19 (the last line removed) and 20 (a `canon:`
+block survives the real config file and the Settings rewrite: the first sandbox found the reader silently off
+because a config whose active profile could not be built falls back to the shipped defaults, which have no
+`canon:` key, and no test had ever gone through the file), `canon_inject_test.py` 9 (the next turn, and after an
+undo) and `canon_api_test.py` (the routes, every refused input, export). 43 guard mutations are caught; the
+passes found two gaps (a duplicated line and the author's own values in the refusal list) that no test could
+see, and closed them.

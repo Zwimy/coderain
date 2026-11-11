@@ -782,6 +782,67 @@ def test_the_reader_applies_the_authors_corrections():
           "is corrected once present")
 
 
+def test_removing_the_last_correction_releases_its_value():
+    """D-028. The panel's Remove button deletes a line from corrections.md and nothing else. If the reader only
+    acted while the file had lines in it, the author's value would stay in the ledger as "yours" next to no
+    correction at all, and the story could never say anything else about that slot. An EMPTY file is a state
+    like any other: the reader puts the ledger in line with it, which retracts what the file set earlier."""
+    store = new_save()
+    store.write("corrections.md", "- Odile Marsh: hair = auburn\n")
+    story(store, M1, M2)
+    sh, _ = shadow(store)
+    sh.reconcile()
+    assert sh._store().canon.current("odile", "identity.hair") == "auburn"
+    assert sh.view(store.turns())["values"], "nothing held"
+    store.write("corrections.md", "")                       # what Remove does to the only line
+    sh.reconcile()
+    assert sh._store().canon.current("odile", "identity.hair") is None, "the author's value outlived its line"
+    v = sh.view(store.turns())
+    assert not any(r["who"] == "Odile Marsh" and r["slot"] == "hair" for r in v["values"]), v["values"]
+    assert v["corrections"] == [] and v["problems"] == []
+    n = len(sh._store().ledger)
+    sh.reconcile()
+    assert len(sh._store().ledger) == n, "a pass with nothing new wrote records"
+    story(store, M3)                                         # and the story may say what it is again
+    sh.reconcile()
+    assert sh._store().canon.current("odile", "identity.hair") == "platinum", \
+        sh._store().canon.current("odile", "identity.hair")
+    assert sh._store().canon.history("odile", "identity.hair")[-1]["authority"] == "narration"
+    print("19. removing the last correction releases its value at the next pass, writes nothing after that, "
+          "and leaves the slot free for the story")
+
+
+def test_canon_settings_survive_the_config_file():
+    """The first sandbox for the Canon panel showed the memory reader silently OFF although config.yaml asked
+    for it: the file's active profile could not be built, so load_config fell back to the shipped defaults,
+    which have no `canon:` key. Nothing in the tests ever went through the real config file, they all set
+    `cfg.raw["canon"]` in memory. This pins the path a person actually uses: a valid file with a `canon:` block
+    is read whole, builds the shadow with those settings, and survives the rewrite the Settings page does
+    (`save_yaml(cfg.raw)`) with the block intact."""
+    import copy
+    from coderain.config import save_yaml
+    raw = copy.deepcopy(load_config().raw)
+    assert "canon" not in raw, "the shipped defaults must not switch the reader on"
+    raw["canon"] = {"shadow": True, "inject": "preview", "backfill": "all", "card_chars": 1800}
+    path = WORK / "cfgtest" / "config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_yaml(raw, path)
+    cfg = load_config(path)
+    assert cfg.raw["canon"] == raw["canon"], cfg.raw.get("canon")
+    sh = CanonShadow.from_config(cfg, new_save())
+    assert sh is not None, "a canon block in a valid config did not create the reader"
+    assert sh.cfg["inject"] == "preview" and sh.cfg["backfill"] == BACKFILL_ALL and sh.cfg["card_chars"] == 1800, sh.cfg
+    save_yaml(cfg.raw, path)                                 # what the Settings page does on every save
+    again = load_config(path)
+    assert again.raw["canon"] == raw["canon"], "the Settings rewrite lost the canon block"
+    assert CanonShadow.from_config(again, new_save()) is not None
+    del raw["canon"]                                         # and taking the block out turns it off
+    save_yaml(raw, path)
+    assert CanonShadow.from_config(load_config(path), new_save()) is None
+    print("20. a canon block in a valid config.yaml is read whole, creates the reader with those settings, "
+          "survives the Settings rewrite, and is off once removed")
+
+
 try:
     for fn in (test_settings, test_off_by_default_costs_nothing, test_observe_only,
                test_a_pass_and_its_report, test_it_follows_every_kind_of_change,
@@ -793,7 +854,9 @@ try:
                test_gender_votes_follow_the_transcript,
                test_the_player_is_seeded_from_player_md,
                test_the_report_says_what_the_flag_does_and_warns_about_a_partial_read,
-               test_the_reader_applies_the_authors_corrections):
+               test_the_reader_applies_the_authors_corrections,
+               test_removing_the_last_correction_releases_its_value,
+               test_canon_settings_survive_the_config_file):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

@@ -137,7 +137,7 @@ def _identity_block(canon, cast, budget: int) -> str:
 
 def build_card(snap: Snapshot | None, narr: dict[int, str], recent: list[str], *,
                now: int, max_chars: int = CARD_CHARS, state: bool = True,
-               limit: int = DEFAULT_LIMIT, corrections=()) -> Card:
+               limit: int = DEFAULT_LIMIT, corrections=None) -> Card:
     """The text to put in front of the Writer for the turn about to be written, or a
     Card with an empty text and the reason. `recent` is the latest prose, oldest first;
     `now` is the index of the turn being written (it ages values out of the card).
@@ -148,7 +148,7 @@ def build_card(snap: Snapshot | None, narr: dict[int, str], recent: list[str], *
         return Card(reason="not_ready")
     trusted, unread = coverage(snap, narr)
     canon = project(r for r in snap.records if r.turn <= trusted)
-    if corrections:
+    if corrections is not None:         # an empty list still counts: it releases what a removed line set
         apply_to(canon, corrections, turn=trusted)
     if not canon.entities:
         return Card(reason="no_canon", unread=unread, trusted_through=trusted)
