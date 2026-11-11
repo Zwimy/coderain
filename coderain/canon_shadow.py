@@ -59,8 +59,11 @@ from collections import Counter
 from pathlib import Path
 
 from canon import Store
-from canon.card import Card, Snapshot, build_card, content_hash
-from canon.ledger import LedgerCorrupt
+from canon.card import Card, Snapshot, build_card, content_hash, coverage
+from canon.corrections import FILE as CORRECTIONS_FILE
+from canon.corrections import apply_to, describe, held_values, parse as parse_corrections, plan as plan_corrections, refusals
+from canon.ledger import LedgerCorrupt, LedgerError
+from canon.state import project
 from canon.pipeline import process_turn
 from canon.referents import gender_votes
 from canon.replay import (BEFORE_TURNS, GenderVotes, identity_table, passage_who,
@@ -273,7 +276,8 @@ class CanonShadow:
                     if t["role"] == "narrator"}
             return build_card(snap, narr, [t["text"] for t in turns[-RECENT_FOR_CARD:]],
                               now=len(turns) + 1, max_chars=self.cfg["card_chars"],
-                              state=self.cfg["inject_state"])
+                              state=self.cfg["inject_state"],
+                              corrections=self.corrections()[0])
         except Exception as exc:  # noqa: BLE001 - a card must never cost a turn
             self._degrade(f"no card this turn: {type(exc).__name__}: {exc}")
             return Card(reason="error")
@@ -300,6 +304,58 @@ class CanonShadow:
                 os.replace(tmp, self.dir / "card-last.txt")
         except Exception as exc:  # noqa: BLE001 - a log must never cost a turn
             self._degrade(f"could not write the injection log: {type(exc).__name__}: {exc}")
+
+    # --- the author's corrections (D-028) --------------------------------------------
+    def corrections(self):
+        """(corrections, problems) from <save>/corrections.md, read fresh each time: a person edits that
+        file by hand, and the next pass and the next card must see the edit."""
+        try:
+            text = self.store.read(CORRECTIONS_FILE) or ""
+        except OSError:
+            text = ""
+        return parse_corrections(text)
+
+    def _apply_corrections(self, cstore: Store, corr) -> int:
+        """Write into the ledger whatever the corrections still need (author-level records), which is
+        nothing once it is in line. Never raises: a correction that cannot be written is reported once."""
+        if not corr:
+            return 0
+        try:
+            last = cstore.ledger.records[-1].turn if cstore.ledger.records else 0
+            recs, _unresolved = plan_corrections(cstore.canon, corr, turn=last)
+            for fields in recs:
+                cstore.append(**fields)
+            return len(recs)
+        except (LedgerError, OSError) as exc:
+            self._degrade(f"could not apply an author correction: {type(exc).__name__}: {exc}")
+            return 0
+
+    def view(self, turns: list[dict] | None = None) -> dict:
+        """What canon holds about each character, what the author has said, and what could not be applied,
+        for the app to show (D-028). Built from the published snapshot with the corrections applied, so it
+        shows what the card would, and never waits for the reader."""
+        try:
+            text = self.store.read(CORRECTIONS_FILE) or ""
+        except OSError:
+            text = ""
+        corr, _ = parse_corrections(text)
+        out = {"shadow": True, "inject": self.cfg.get("inject", "off"), **describe(text),
+               "values": [], "unread": None, "card": ""}
+        snap = self._snap or self._load_snapshot()
+        if snap is not None:
+            canon = project(snap.records)
+            last = snap.records[-1].turn if snap.records else 0
+            _recs, unresolved = apply_to(canon, corr, turn=last)
+            out["problems"] += unresolved
+            out["values"] = held_values(canon)
+            if turns is not None:
+                narr = {i: _hash(t["text"]) for i, t in enumerate(turns, 1) if t["role"] == "narrator"}
+                out["unread"] = coverage(snap, narr)[1]
+        try:
+            out["card"] = (self.dir / "card-last.txt").read_text(encoding="utf-8")
+        except OSError:
+            pass
+        return out
 
     # --- the model ----------------------------------------------------------------
     def _get_scribe(self) -> Scribe:
@@ -416,6 +472,12 @@ class CanonShadow:
                 state["first"] = d          # replay resumes at the divergence
             self._publish(cstore, state)    # a card must not show what was just undone
 
+        # 1b. The author's corrections (D-028). Read fresh, because a person edits the file by
+        #     hand, and put in line with the ledger again here, because a rollback may just have
+        #     cut the records that carried them.
+        corr, _bad = self.corrections()
+        self._apply_corrections(cstore, corr)
+
         # 2. Process what is new.
         ordered = sorted(narr)
         if not ordered:
@@ -443,6 +505,7 @@ class CanonShadow:
             player_text = self.store.read("player.md") or ""
             player = player_entity(entries, player_text, self.cfg.get("player"))
             seed_player(cstore, player, player_text, turn=idx)       # D-025
+            refused = refusals(cstore.canon, corr)                   # D-028: values the author called wrong
             at = bisect.bisect_left(ordered, idx)
             before = [narr[i] for i in ordered[max(0, at - BEFORE_TURNS):at]]
             if not reads_anyone(cstore.canon, prose, player, "\n".join(before)):
@@ -452,7 +515,8 @@ class CanonShadow:
                 who = passage_who(cstore.canon, prose, votes=votes, player=player,
                                   before=before, player_is=player_gender(player_text))
                 rep = process_turn(cstore, idx, prose, self._get_scribe(),
-                                   create_unknown=False, record_contradictions=True, who=who)
+                                   create_unknown=False, record_contradictions=True, who=who,
+                                   refused=refused)
                 v = gender_votes(cstore.canon, prose, player)
                 row = turn_row(idx, rep, v)
                 if rep.extraction.status == "error":
@@ -471,6 +535,7 @@ class CanonShadow:
                 votes.add(v)
                 row.update(self._observe(cstore, rep, idx, narr))
                 out["processed"] += 1
+            self._apply_corrections(cstore, corr)        # an entity may have just appeared
             hashes[idx] = _hash(prose)
             self._append_row(row)
             self._save_state(state)
@@ -501,6 +566,16 @@ class CanonShadow:
         return extra
 
     # --- the report ---------------------------------------------------------------
+    def _corrections_line(self, cstore: Store) -> str:
+        corr, problems = self.corrections()
+        _recs, unresolved = plan_corrections(cstore.canon, corr, turn=0)
+        bad = problems + unresolved
+        line = f"Author corrections ({CORRECTIONS_FILE}): {len(corr)} in force"
+        if bad:
+            line += f", {len(bad)} not applied: " + "; ".join(
+                f"line {b['line']}: {b['why'][:60]}" for b in bad[:3])
+        return line + "."
+
     def _write_report(self, cstore: Store) -> None:
         rows = self._read_rows()
         t = totals(rows, cstore.canon)
@@ -533,6 +608,7 @@ class CanonShadow:
             f"Ledger: {t['ledger_records']} records over {t['entities']} entities, "
             f"{t['entities_with_identity']} with identity facts. Decisions "
             f"{t['decisions']}.",
+            self._corrections_line(cstore),
             f"Facts whose subject the code found, not a name in the passage (right about 9 "
             f"in 10 on hand-read samples): {sum(t['via'].values())} {t['via'] or ''}".rstrip(),
             f"Times the story contradicted a recorded fact (held back, canon unchanged): "

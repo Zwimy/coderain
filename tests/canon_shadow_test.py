@@ -694,6 +694,94 @@ def test_the_report_says_what_the_flag_does_and_warns_about_a_partial_read():
     print("17. the report says whether the card is sent, and names a partial first read")
 
 
+def test_the_reader_applies_the_authors_corrections():
+    """D-028. The author's corrections live in <save>/corrections.md, outside canon/, because nothing derives
+    them. The reader puts the ledger in line with them at the start of a pass and after each turn (an entity
+    may have just appeared), hands the validator the values the author called wrong, and re-applies after a
+    rollback, since an undo cuts the records that carried them."""
+    def corr(store, text):
+        store.write("corrections.md", text)
+
+    # a) the author's value outranks narration, and a later different narration is held back
+    store = new_save()
+    corr(store, "- Odile Marsh: hair = auburn\n")
+    story(store, M1, M2, M3)
+    sh, _ = shadow(store)
+    sh.reconcile()
+    c = sh._store().canon
+    assert c.current("odile", "identity.hair") == "auburn", c.current("odile", "identity.hair")
+    assert c.history("odile", "identity.hair")[-1]["authority"] == "author"
+    assert any(x["slot"] == "identity.hair" and x["proposed"] == "platinum" and x["reason"] == "identity_locked"
+               for x in c.conflicts), "narration was not held back against the author"
+    rep = (Path(store.dir) / "canon" / "report.txt").read_text(encoding="utf-8")
+    assert "Author corrections (corrections.md): 1 in force." in rep, rep[:400]
+
+    # b) a value called wrong is refused from the first turn, so the story can establish the real one
+    store = new_save()
+    corr(store, "- Odile: hair is not raven\n")
+    story(store, M1, M2, M3)
+    sh, _ = shadow(store)
+    sh.reconcile()
+    assert sh._store().canon.current("odile", "identity.hair") == "platinum"
+    refused = [r for r in sh._read_rows().values() if "author_refused" in r.get("reasons", {})]
+    assert refused, "the refusal never reached a turn's row"
+
+    # c) an edit made by hand AFTER the value was held is picked up by the next pass
+    store = new_save()
+    story(store, M1, M2)
+    sh, _ = shadow(store)
+    sh.reconcile()
+    assert sh._store().canon.current("odile", "identity.hair") == "raven"
+    corr(store, "- Odile: hair is not raven\n")
+    sh.reconcile()
+    assert sh._store().canon.current("odile", "identity.hair") is None, "the retraction was not applied"
+    n = len(sh._store().ledger)
+    sh.reconcile()
+    assert len(sh._store().ledger) == n, "a pass with nothing new wrote records"
+
+    # d) it survives an undo and a replay
+    store = new_save()
+    corr(store, "- Odile Marsh: hair = auburn\n")
+    story(store, M1, M2, M3)
+    sh, _ = shadow(store)
+    sh.reconcile()
+    store.drop_last_turns(4)                                   # back to M1 only: rolls the ledger back
+    sh.reconcile()
+    assert sh._store().canon.current("odile", "identity.hair") == "auburn", "an undo lost the correction"
+    story(store, M3)
+    sh.reconcile()
+    assert sh._store().canon.current("odile", "identity.hair") == "auburn"
+    from canon import Store
+    fresh = Store(sh._store().dir)                             # and a reopen of the ledger agrees
+    assert fresh.canon.current("odile", "identity.hair") == "auburn"
+
+    # e) a character who appears later is corrected once they exist, and until then it is reported
+    store = new_save(PEOPLE[:1])
+    story(store, M1)
+    sh, _ = shadow(store)
+    sh.reconcile()
+    store.upsert_entry("characters.md", Entry(title="Corin Hale", slug="corin"))
+    corr(store, "- Corin Hale: eyes = hazel\n")
+    v = sh.view(store.turns())
+    assert any("Corin Hale" in p["why"] for p in v["problems"]), v["problems"]
+    story(store, M2)
+    sh.reconcile()
+    assert sh._store().canon.current("corin", "identity.eyes") == "hazel", "applied once they exist"
+    rep = (Path(store.dir) / "canon" / "report.txt").read_text(encoding="utf-8")
+    assert "1 in force." in rep and "not applied" not in rep, rep[:500]
+
+    # f) the view is what the app shows: values with whose word, the file, the problems
+    v = sh.view(store.turns())
+    by = {(r["who"], r["slot"]): r for r in v["values"]}
+    assert by[("Corin Hale", "eyes")]["value"] == "hazel" and by[("Corin Hale", "eyes")]["by"] == "author"
+    assert by[("Odile Marsh", "hair")]["value"] == "raven" and by[("Odile Marsh", "hair")]["by"] == "narration"
+    assert v["shadow"] is True and v["unread"] == 0 and "eyes = hazel" in v["text"]
+    assert v["corrections"][0]["who"] == "Corin Hale" and v["problems"] == []
+    print("18. the reader applies the author's corrections: they outrank narration, a wrong value is refused "
+          "from the first turn, a hand edit is picked up, an undo does not lose them, and a late character "
+          "is corrected once present")
+
+
 try:
     for fn in (test_settings, test_off_by_default_costs_nothing, test_observe_only,
                test_a_pass_and_its_report, test_it_follows_every_kind_of_change,
@@ -704,7 +792,8 @@ try:
                test_a_second_person_story_and_a_pronoun_reach_canon,
                test_gender_votes_follow_the_transcript,
                test_the_player_is_seeded_from_player_md,
-               test_the_report_says_what_the_flag_does_and_warns_about_a_partial_read):
+               test_the_report_says_what_the_flag_does_and_warns_about_a_partial_read,
+               test_the_reader_applies_the_authors_corrections):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

@@ -335,11 +335,48 @@ def test_the_echo_filter_catches_a_copied_card():
     print("8. a model that copies a card line into its reply has it dropped, and it is reported")
 
 
+def test_a_correction_reaches_the_writer_on_the_next_turn():
+    """D-028. The wrong value the first Writer test found being repeated can now be corrected by hand. The
+    card applies corrections.md itself, so the very next turn is right, before the reader has written
+    anything, and it stays right after an undo cuts off the ledger records that carried the correction."""
+    with configured(inject=True) as cfg:
+        store, eng = ready(cfg)
+        sh = eng.canon_shadow
+        assert sh._store().canon.current("odile", "identity.hair") == "raven"
+        store.write("corrections.md", "- Odile Marsh: hair = auburn\n- Corin Hale: eyes is not grey\n")
+        list(eng.turn("I look around"))                       # no pass has run since the edit
+        card = cards(eng.llm.msgs)[0]
+        assert "hair: auburn" in card and "raven" not in card, card
+        assert "eyes: grey" not in card, "a value the author called wrong reached the Writer"
+        assert "wearing grey coat" in card and "holding lantern" in card, "the rest of the card is unchanged"
+        assert sh._store().canon.current("odile", "identity.hair") == "raven", \
+            "the ledger was changed by a card: the overlay must be on the projection only"
+        # the reader then writes them into the ledger
+        sh.reconcile()
+        assert sh._store().canon.current("odile", "identity.hair") == "auburn"
+        assert sh._store().canon.current("corin", "identity.eyes") is None
+        # an undo back to the first reply cuts the author's records off the ledger's trusted prefix
+        store.drop_last_turns(4)
+        eng.llm = Cap()
+        list(eng.turn("I look around again"))
+        card = cards(eng.llm.msgs)[0]
+        assert "hair: auburn" in card and "raven" not in card, card
+        # a hand edit that says nothing sensible costs nothing: the bad line is reported, the card still builds
+        store.write("corrections.md", "- Odile Marsh: hair = auburn\n- not a correction at all\n")
+        eng.llm = Cap()
+        list(eng.turn("I look around once more"))
+        assert "hair: auburn" in cards(eng.llm.msgs)[0]
+        assert [p["line"] for p in sh.view(store.turns())["problems"]] == [2]
+    print("9. a correction reaches the Writer on the very next turn without touching the ledger, survives an "
+          "undo, and a bad line is reported without costing the card")
+
+
 try:
     for fn in (test_settings, test_off_by_default, test_preview_logs_and_sends_nothing,
                test_on_sends_it_in_the_right_place, test_a_turn_is_never_delayed_or_broken,
                test_retry_and_edit_never_show_what_was_discarded, test_inject_without_the_shadow,
-               test_the_echo_filter_catches_a_copied_card):
+               test_the_echo_filter_catches_a_copied_card,
+               test_a_correction_reaches_the_writer_on_the_next_turn):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

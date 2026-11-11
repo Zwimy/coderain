@@ -168,6 +168,15 @@ def make_record(rid: int, **f) -> Record:
         if f.get("value") is not None:
             raise LedgerError("state_cleared takes no value")
         value = None
+    elif f.get("value") is None and kind in OVERRIDE_KINDS:
+        # A RETRACTION: the author says the identity fact held here is wrong and
+        # nothing replaces it, so the story may establish the real one later. Only
+        # identity has this, because a state slot already has state_cleared, and
+        # only an explicit override can do it: narration cannot retract a fact.
+        if cls != "identity":
+            raise LedgerError(f"{kind} with no value retracts an identity fact; "
+                              f"{slot!r} is a state slot (use state_cleared)")
+        value = None
     else:
         raw = f.get("value")
         if isinstance(raw, (list, tuple)):

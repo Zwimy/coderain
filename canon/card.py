@@ -39,6 +39,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from canon.corrections import apply_to
 from canon.scene import (CARD_CHARS, DEFAULT_LIMIT, MIN_CARD_CHARS, bible, find_scene,
                          render_card)
 from canon.state import project
@@ -136,14 +137,19 @@ def _identity_block(canon, cast, budget: int) -> str:
 
 def build_card(snap: Snapshot | None, narr: dict[int, str], recent: list[str], *,
                now: int, max_chars: int = CARD_CHARS, state: bool = True,
-               limit: int = DEFAULT_LIMIT) -> Card:
+               limit: int = DEFAULT_LIMIT, corrections=()) -> Card:
     """The text to put in front of the Writer for the turn about to be written, or a
     Card with an empty text and the reason. `recent` is the latest prose, oldest first;
-    `now` is the index of the turn being written (it ages values out of the card)."""
+    `now` is the index of the turn being written (it ages values out of the card).
+    `corrections` are the author's (canon/corrections.py): they are applied to the
+    projection, so the card honours them whether or not the reader has written them
+    to the ledger yet, and right after an undo has cut off the records that did."""
     if snap is None or (snap.first is None and not snap.hashes):
         return Card(reason="not_ready")
     trusted, unread = coverage(snap, narr)
     canon = project(r for r in snap.records if r.turn <= trusted)
+    if corrections:
+        apply_to(canon, corrections, turn=trusted)
     if not canon.entities:
         return Card(reason="no_canon", unread=unread, trusted_through=trusted)
     pinned = (snap.player,) if snap.player in canon.entities else ()

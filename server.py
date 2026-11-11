@@ -23,7 +23,7 @@ from fastapi import HTTPException  # noqa: F401 — re-exported
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from srv import (authoring, core, defaults, files, outline, play, saves,
+from srv import (authoring, canon_api, core, defaults, files, outline, play, saves,
                  scenarios, settings, transfer, world)
 # Re-exports, so `server.lib` and friends keep resolving. Everything here is
 # read-only from this module's point of view — the routers own the writes.
@@ -41,7 +41,7 @@ from srv.pieces import _entry_from_dict, _save_store, _scen_store  # noqa: F401
 ASSETS = Path(__file__).resolve().parent
 
 for _mod in (saves, outline, play, scenarios, world, authoring, transfer,
-             defaults, files, settings):
+             defaults, files, settings, canon_api):
     app.include_router(_mod.router)
 
 

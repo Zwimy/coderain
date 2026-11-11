@@ -1053,3 +1053,73 @@ size cap, purity) and `canon_inject_test.py` (the engine: what the model receive
 chapter directive, preview sends nothing, a held lock, a restart, a card builder that explodes, a retry, an
 edit, `inject` without the shadow, the echo filter). 24 guard mutations are caught. The mutation pass found
 two gaps in the size-cap test, which never made a footer land against the cap, and closed them.
+
+
+## D-028 — The author can say what is true and what is false about a character, and it outranks the story
+
+**Context.** First write wins (D-017), so a wrong first value is permanent: it is defended against the right
+ones. Once the card is injected (D-027) the Writer repeats it, and the first Writer test showed both halves: a
+wrong value (another character's colour, filed under a man whose hair the story never states) was used every
+time he was described, and the card did not always beat the context. D-023 to D-026 stop most wrong values at
+the door, about one in twelve still gets through, and nothing let a person fix one.
+
+**Decision.** `<save>/corrections.md`, a Markdown file a person can read and edit, which travels with an
+export and is never inside `canon/`. Each correction is a bullet, `- Name: slot = value` (the author's value)
+or `- Name: slot is not value` (that value is wrong), for hair, eyes, build, age and marks. Anything that is
+not a bullet is a note and is ignored; a bullet that does not parse is reported with its line and never
+dropped. A name is a character's name, alias or id, matched exactly and never guessed. Three effects:
+
+1. `=` is written into the ledger as an author-level `author_edit`, which crosses the identity lock on purpose
+   and outranks narration, so a later different narrated value is held back as a conflict.
+2. `is not` RETRACTS the value if it is held (a new ledger capability, below) and the validator REFUSES it
+   when the Scribe proposes it again (`author_refused`), for that character and slot only.
+3. The card applies the corrections to its own projection, so the Writer is right on the very next turn.
+
+Routes: `GET /api/saves/{slug}/canon` (what canon holds, with the corrections applied, whose word each value
+is, the file, the lines that could not be applied), `PUT .../canon/corrections` (replace the file) and
+`POST .../canon/corrections` (add one). There is no interface in the app yet; the routes are what a button
+next to a wrong value would call.
+
+**Calls that look heavier than they need to be:**
+
+1. **A file, not a ledger record.** The ledger is derived and is rebuilt or rolled back from the transcript; a
+   correction is derived from nothing. Kept only as ledger records, an undo past it or a rebuild would lose
+   it. The file is the truth and the ledger holds its effect.
+2. **`plan` remembers nothing.** It compares the corrections with the canon it is given and returns only the
+   records still needed, which is none once it is in line. That is what makes it safe to run at the start of
+   every pass, after every turn and on a throwaway projection for a card, and why an undo cannot lose a
+   correction: the next pass writes it again.
+3. **A retraction, not a replacement.** The author often does not know the right value, only that this one is
+   wrong. An `author_edit` or `retcon` with no value now retracts an identity fact (the ledger refused this,
+   and state already had `state_cleared`): it closes the value and opens nothing, history is kept, and the
+   story may then establish the real one. It is refused on a state slot and for ordinary narration.
+4. **A refusal as well as a retraction.** A retraction alone ping-pongs: the Scribe re-proposes the same wrong
+   value on the next turn that mentions it, the slot is empty, and it locks again.
+5. **The card applies the corrections itself.** Between an edit and the reader's next pass, and right after an
+   undo cuts off the records that carried them, the ledger does not have them. The card must not wait.
+6. **Matching is generous on purpose.** `same_value` treats "black" as "raven" and one wording that contains
+   another as the same. On the real ledger one "is not" line for a mark retracted two near-duplicates of it,
+   which is wanted. The risk is the other direction: "is not raven" also refuses a narrated "black". The
+   author's own `=` value is never refused.
+
+**Measured, and what that does not show.** On the recorded real-save ledger (1,295 records) planning four
+corrections took 0.2 ms and wrote three records; the two corrections that were already true needed nothing,
+and a second plan on the corrected canon was empty. At the scene where the Writer repeated the wrong hair,
+the card's line for that character no longer carries it. That is the card, not the Writer: no model was run
+after this change, so the Writer's behaviour with the value gone (which should be the no-card baseline for
+that slot) is expected and not measured.
+
+**Not done:** an interface (a list of what canon holds with a "wrong" and a "set" button is the next step and
+belongs with the web-app work); state corrections (what someone wears is the story's to say); and a way to
+protect a correction from a rebuild that renames a character, since the file names people.
+
+**What would change it:** corrections that people write and then keep contradicting (the format is too hard),
+a refusal that blocks a true value often enough to need exact matching, or a story whose looks change on
+purpose often enough that the author wants a correction that ends at a turn.
+
+**Tests.** `canon_corrections_test.py` (the file, the plan, idempotence, authority, refusal, the card),
+`canon_ledger_test.py` 6b (retraction), `canon_shadow_test.py` 18 (the reader: outranking, refusal from the
+first turn, a hand edit, an undo, a late character, the view), `canon_inject_test.py` 9 (the next turn, and
+after an undo) and `canon_api_test.py` (the routes, every refused input, export). 29 guard mutations are
+caught; the pass found two gaps (a duplicated line and the author's own values in the refusal list) that no
+test could see, and closed them.

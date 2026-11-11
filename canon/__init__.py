@@ -23,6 +23,9 @@ Phase 3, which reads canon back out for the Writer:
   card.py      what the Writer is shown: identity lines plus the card, built from an
                immutable snapshot of the ledger and cut back to the turns the
                transcript still has (D-027)
+  corrections.py  what the author says is true or false about a character, kept in
+               corrections.md (outside canon/), outranking the story, and applied
+               by a pure plan that is safe to repeat (D-028)
 
 Standard library only.
 """

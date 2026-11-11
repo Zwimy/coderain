@@ -233,6 +233,46 @@ def test_identity_is_first_write_wins():
           "authority and explicit overrides supersede; history is kept")
 
 
+def test_an_author_can_retract_an_identity_fact():
+    """First write wins, so a wrong first value used to be permanent. Retraction is the way out: an
+    author_edit or retcon with no value closes the fact and opens nothing, and the story may then
+    establish the real one. State already has state_cleared; narration cannot retract at all."""
+    s = Store(_dir())
+    _create(s, "odile", "Odile")
+    _fact(s, "odile", "identity.hair", "raven", 1)
+    s.append(kind="author_edit", entity="odile", slot="identity.hair", value=None,
+             authority="author", turn=2, span="the author says this is wrong")
+    assert s.canon.current("odile", "identity.hair") is None, "the retracted value is still held"
+    h = s.canon.history("odile", "identity.hair")
+    assert len(h) == 1 and h[0]["value"] == "raven" and h[0]["end_turn"] == 2, h
+    assert s.canon.value_at_turn("odile", "identity.hair", 1) == "raven", "history is kept"
+    assert s.canon.value_at_turn("odile", "identity.hair", 2) is None
+    _fact(s, "odile", "identity.hair", "silver", 3)                  # the story may now say what it is
+    assert s.canon.current("odile", "identity.hair") == "silver"
+    # retcon retracts too (scenario or author), and nothing to retract is a conflict, not a crash
+    s.append(kind="retcon", entity="odile", slot="identity.hair", value=None, authority="scenario", turn=4)
+    assert s.canon.current("odile", "identity.hair") is None
+    n = len(s.canon.conflicts)
+    s.append(kind="author_edit", entity="odile", slot="identity.hair", value=None, authority="author", turn=5)
+    assert s.canon.conflicts[-1]["reason"] == "nothing_to_clear" and len(s.canon.conflicts) == n + 1
+    # what it refuses: a state slot (it has state_cleared), narration, a plain fact with no value
+    _expect(LedgerError, s.append, kind="author_edit", entity="odile", slot="state.outfit",
+            value=None, authority="author", turn=6)
+    _expect(LedgerError, s.append, kind="retcon", entity="odile", slot="identity.hair",
+            value=None, authority="narration", turn=6)
+    _expect(LedgerError, s.append, kind="author_edit", entity="odile", slot="identity.hair",
+            value=None, authority="scenario", turn=6)
+    _expect(LedgerError, s.append, kind="fact_established", entity="odile", slot="identity.hair",
+            value=None, authority="author", turn=6)
+    # replay, reopen and undo all agree
+    assert project(s.ledger.records).as_dict() == s.canon.as_dict()
+    assert Store(s.dir).canon.as_dict() == s.canon.as_dict()
+    s.undo_to(1)
+    assert s.canon.current("odile", "identity.hair") == "raven", "undo past the retraction restores it"
+    print("6b. an author can retract an identity fact: nothing replaces it, history is kept, the story "
+          "can establish the real one; state slots, narration and valueless facts are refused")
+
+
 def test_state_is_latest_wins_with_history():
     s = Store(_dir())
     _create(s, "odile", "Odile")
@@ -513,6 +553,7 @@ try:
                test_torn_write_is_recovered_once,
                test_bounds_reject_and_leave_the_ledger_alone,
                test_the_layer_rule, test_identity_is_first_write_wins,
+               test_an_author_can_retract_an_identity_fact,
                test_state_is_latest_wins_with_history,
                test_conflicts_are_recorded_not_raised, test_story_time_queries,
                test_alias_resolution, test_replay_equals_state,

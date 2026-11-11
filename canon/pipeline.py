@@ -48,11 +48,12 @@ def roster_for(canon: Canon, prose: str, limit: int = 40) -> list[dict]:
 def process_turn(store: Store, turn: int, prose: str, scribe: Scribe, *,
                  record_contradictions: bool = False, min_confidence: str = "medium",
                  create_unknown: bool = True, world_time: int | None = None,
-                 roster_limit: int = 40, who: Who | None = None) -> TurnReport:
+                 roster_limit: int = 40, who: Who | None = None,
+                 refused: dict | None = None) -> TurnReport:
     ext = scribe.extract(prose, roster_for(store.canon, prose, roster_limit))
     decisions = validate(
         store.canon, ext.claims, prose, turn=turn, next_id=len(store.ledger) + 1,
         min_confidence=min_confidence, create_unknown=create_unknown,
-        world_time=world_time, who=who)
+        world_time=world_time, who=who, refused=refused)
     written = commit(store, decisions, record_contradictions=record_contradictions)
     return TurnReport(turn, ext, decisions, written)

@@ -84,6 +84,12 @@ class Canon:
 
         if rec.kind in OVERRIDE_KINDS:
             # Explicit, so it crosses the identity rule on purpose.
+            if value is None:                    # a retraction: close it, open nothing
+                if iv is None:
+                    self._conflict(rec, "nothing_to_clear", None)
+                else:
+                    self._close(iv, rec)
+                return
             if iv is not None and iv.value == value:
                 self._restated(iv, rec)
                 return

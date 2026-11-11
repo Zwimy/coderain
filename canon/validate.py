@@ -430,7 +430,11 @@ def _shared_quotes(canon: Canon, claims: list[Claim], prose: str, floor: int) ->
 def validate(canon: Canon, claims: list[Claim], prose: str, *, turn: int,
              next_id: int, min_confidence: str = "medium",
              create_unknown: bool = True, world_time: int | None = None,
-             who: Who | None = None) -> list[Decision]:
+             who: Who | None = None,
+             refused: dict | None = None) -> list[Decision]:
+    """`refused` maps (entity id, claim slot) to the values the author has said are wrong (D-028): a
+    claim that states one is rejected as `author_refused`, so the Scribe cannot put back, turn after
+    turn, a value that was retracted by hand."""
     who = who or Who()
     scratch = copy.deepcopy(canon)
     floor = CONFIDENCE.index(min_confidence)
@@ -499,6 +503,10 @@ def validate(canon: Canon, claims: list[Claim], prose: str, *, turn: int,
             d.reason = "gender_mismatch"              # a sentence about a woman is not about him
             continue
         d.entity = eid
+        if refused and c.op in ("set", "add") and any(
+                same_value(c.value, w) for w in refused.get((eid, c.slot), ())):
+            d.reason = "author_refused"
+            continue
         planned, skip = _plan(scratch, eid, c, turn, world_time)
         if skip:
             d.status, d.reason = skip
