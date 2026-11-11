@@ -506,11 +506,27 @@ class CanonShadow:
         t = totals(rows, cstore.canon)
         held = [(r["turn"], h) for r in rows.values() for h in r.get("held_back", [])]
         held.sort(key=lambda x: x[0])
+        mode = self.cfg.get("inject", "off")
         lines = [
-            "Canon shadow report. Observe only: nothing here reaches a prompt.",
+            "Canon shadow report. Observe only: nothing here reaches a prompt." if mode == "off"
+            else ("Canon shadow report. Injection is ON (D-027): the card is sent to the Writer; "
+                  "see injections.jsonl and card-last.txt." if mode == "on"
+                  else "Canon shadow report. Injection is in PREVIEW (D-027): the card is built and "
+                       "logged each turn but NOT sent; see injections.jsonl and card-last.txt."),
             f"Scribe: {self.cfg['model']} at {self.cfg['host']}; first read "
             f"{self.cfg['backfill'] if self.cfg['backfill'] < BACKFILL_ALL else 'all'} "
             "earlier narrator turns.",
+        ]
+        if self.cfg["backfill"] < BACKFILL_ALL:
+            # Found in the first preview run on a real save: with a 120-turn read, 3 of 8 identity
+            # values differed from a full read, because first write wins on whatever the window
+            # stated first, which can be a later change (a dye) or another character's value.
+            lines.append(
+                f"Note: only the last {self.cfg['backfill']} narrator turns were read the first time, so an "
+                "identity value is what that window stated first (first write wins), which can be a "
+                "later change and not the original. For a story that already exists, backfill: all "
+                "reads it from the start.")
+        lines += [
             f"Narrator turns seen {t['narrator_turns']}: {t['sent_to_model']} read by the "
             f"model, {t['skipped_nobody_named']} named nobody canon knows. Scribe statuses "
             f"{t['scribe_status']}. Mean {t['seconds_mean']} s a turn.",

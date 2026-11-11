@@ -672,6 +672,28 @@ def test_the_player_is_seeded_from_player_md():
           "value is held back, and a repeat pass writes nothing")
 
 
+def test_the_report_says_what_the_flag_does_and_warns_about_a_partial_read():
+    """The report said "Observe only: nothing here reaches a prompt" whatever the config, which became
+    false the moment injection existed. It now says what is true, and a partial first read (found in
+    the first preview on a real save: 3 of 8 identity values differed from a full read) is named."""
+    def report(**over):
+        store = new_save()
+        story(store, M1, M2, M3, M4)
+        sh, _ = shadow(store, **over)
+        sh.reconcile()
+        return (Path(store.dir) / "canon" / "report.txt").read_text(encoding="utf-8")
+    off = report()
+    assert "Observe only: nothing here reaches a prompt." in off and "Injection is" not in off
+    assert "Note: only the last" not in off, "a full read has nothing to warn about"
+    partial = report(backfill=2)
+    assert "only the last 2 narrator turns were read the first time" in partial and "first write wins" in partial
+    prev = report(inject="preview")
+    assert "Injection is in PREVIEW" in prev and "NOT sent" in prev and "Observe only" not in prev, prev[:200]
+    on = report(inject=True)
+    assert "Injection is ON" in on and "Observe only" not in on, on[:200]
+    print("17. the report says whether the card is sent, and names a partial first read")
+
+
 try:
     for fn in (test_settings, test_off_by_default_costs_nothing, test_observe_only,
                test_a_pass_and_its_report, test_it_follows_every_kind_of_change,
@@ -681,7 +703,8 @@ try:
                test_the_server_lets_the_shadow_yield_to_a_turn,
                test_a_second_person_story_and_a_pronoun_reach_canon,
                test_gender_votes_follow_the_transcript,
-               test_the_player_is_seeded_from_player_md):
+               test_the_player_is_seeded_from_player_md,
+               test_the_report_says_what_the_flag_does_and_warns_about_a_partial_read):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

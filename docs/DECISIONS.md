@@ -1012,15 +1012,36 @@ turns, and anyone canon puts in the same place. What each turn did is in `<save>
 
 **Measured, and what that does not show.** A replay of the recorded real-save ledger, with no model: the
 card the Writer would have been given at eight points (turn 59 to 1639) was 629 to 1273 characters (157 to
-318 tokens), took 5 to 7 ms to build, and held 2 to 6 characters. That is size and cost only. It says nothing
-about whether the Writer stays more consistent with the card than without it: there is no A/B yet, and the
-simulated-player soak against the Phase 0 baseline is what would show it.
+318 tokens), took 5 to 7 ms to build, and held 2 to 6 characters. That is size and cost only.
 
-**Not known:** whether a wrong value makes the Writer worse than no value (it may defend it harder than the
-prose it replaces); whether a story that keeps changing a look on purpose (a dye, a transformation) fights
-the card, since an author edit that overrides a held value does not exist yet; and how a hosted Writer with a
-prompt cache behaves (the card sits after the history, so the cached prefix is untouched, but this has not
-been run).
+**A first look at the Writer, and what it does not show.** The first session with the local model (the
+reader on a copy of the real save, then a Writer test). On the real save's 14,000-token prompts, which still
+hold the drifted character sheet and the narrator's own drift, a local 4B Writer was asked to describe a
+character in late scenes: seven probes, 8 seeds each, with and without the card from an otherwise identical
+prompt. Of the replies that stated a colour, 90% matched canon with the card (37 of 41) and 26% without (7 of
+27), and with the card the Writer stated the attribute more often (41 of 56 replies, against 27 of 56). The
+drift from the real story reproduced and was stopped: where the sheet and the narrator had written platinum
+hair, the Writer said platinum 8 of 8 times without the card and raven 8 of 8 with it. Two results matter
+more than the wins. A WRONG value is repeated: one character's hair is never stated in the story, the ledger
+held another character's colour (filed under him at turn 34), and with the card the Writer used it every time
+it described his hair (2 of 2), where without it it invented a different colour (6 of 6). And the card does
+not always win: for a character whose sheet agrees with the card, the Writer still gave another character's
+colour in 4 of 8 replies with the card. Caveats: one small local model, not the Writer anyone uses; seven
+single-turn probes that ask directly for the attribute, so this measures whether the Writer follows the card
+and not whether a long story stays consistent; and the colour scorer is a heuristic, checked against the
+printed snippets. The simulated-player soak against the Phase 0 baseline is still what would show the long
+run.
+
+**A partial first read locks the wrong values.** The first preview read the last 120 narrator turns of the
+real save, and 3 of the 8 identity values it held differed from a full read: first write wins on whatever the
+window stated first, which can be a later change or another character's value. The shadow report now says so
+whenever the first read was partial. For a story that already exists, `backfill: all` reads it from the
+start (about two hours of local model for 976 narrator turns).
+
+**Not known:** whether a story that keeps changing a look on purpose (a dye, a transformation) fights the
+card, since an author edit that overrides a held value does not exist yet (the experiment shows the Writer
+would follow the card over the story); and how a hosted Writer with a prompt cache behaves (the card sits
+after the history, so the cached prefix is untouched, but this has not been run).
 
 **What would change it:** previews that show wrong facts often enough that the first step has to be
 correcting them (an author edit that outranks the ledger, which the design already has a place for); a soak
