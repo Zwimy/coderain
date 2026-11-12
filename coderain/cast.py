@@ -54,6 +54,22 @@ def clean(field: str, value) -> str:
     return text
 
 
+def fit(field: str, value) -> str:
+    """The same normalisation for a value a MODEL wrote (the character generator): one line, cut at a word boundary to
+    the field's limit instead of refused, because a character with a slightly long strength is better than none.
+    Anything that is not text is nothing."""
+    if not isinstance(value, str):
+        return ""
+    text = " ".join(value.split())
+    limit = LIMITS[field]
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    if text[limit] != " " and " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.strip(" ,;:.")
+
+
 def _sources(store: MemoryStore) -> list[tuple[str, str, Entry]]:
     """(key, file, entry): the protagonist first when player.md has a sheet, then everyone in characters.md."""
     out: list[tuple[str, str, Entry]] = []

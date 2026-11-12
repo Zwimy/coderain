@@ -1361,8 +1361,10 @@ one line, refused (not cut) when over.
   `GET /api/saves/{slug}/cast` and `PUT /api/saves/{slug}/cast/{key}` (`player` for the protagonist), 404 for an unknown
   character, 400 for a bad field or value, nothing written on a refusal.
 
-**Not done.** The generator that writes a new character from a prompt does not fill the four fields in (an author can add
-them after). Nothing checks that the prose honours them: they steer the Writer and the plan, they are not a rule the
+**The generator** that writes a new character from a prompt asks for the four fields too and writes them, cut to the limit at
+a word boundary rather than refused (`cast.fit`: a character with a slightly long strength beats none; non-text is nothing).
+
+**Not done.** Nothing checks that the prose honours them: they steer the Writer and the plan, they are not a rule the
 validator enforces. Not measured with a model: whether a 4B Writer shows a weakness or a goal more often with these lines
 than without; the lines are one more thing in a sheet that is sent every turn the character is in play, so a long set of
 them has a cost the limits only bound.

@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from . import templates
+from . import cast, templates
 from .llm import emit_json_ex
 from .memory import Entry, MemoryStore
 
@@ -127,6 +127,10 @@ _CHAR_SHAPE = (
     '"voice": "how they talk + one sample line in quotes", '
     '"wants": "their goal RIGHT NOW, one concrete line (what they are trying to get)", '
     '"motivation": "why they want it — the driver underneath (debt, fear, revenge, love)", '
+    '"strengths": "what they are good at, one short line (a talent or trait that wins scenes)", '
+    '"weaknesses": "what costs them, one short line (a fear, a flaw, a blind spot)", '
+    '"personality": "a type or a few words, for example ISTJ or a stoic who keeps promises", '
+    '"goals": "what they want over the WHOLE story, one line (their wants line is just for right now)", '
     '"skills": [{"name": "skill", "stat": "strength|agility|intelligence|knowledge|willpower|charisma"}], '
     '"stats": {"strength": 1-5, "agility": 1-5, "intelligence": 1-5, "knowledge": 1-5, '
     '"willpower": 1-5, "charisma": 1-5}, '
@@ -267,6 +271,11 @@ def _character_entry(d: dict) -> Entry | None:
     # memory pass keeps them current as the fiction changes what they are after.
     for key in ("wants", "motivation"):
         val = _s(d.get(key))
+        if val:
+            e.attrs[key] = val
+    # The author-owned traits (D-032), bounded: what a model wrote is cut to the limit, never trusted to be short.
+    for key in cast.FIELDS:
+        val = cast.fit(key, d.get(key))
         if val:
             e.attrs[key] = val
     facets = []

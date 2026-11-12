@@ -222,7 +222,29 @@ def test_the_writer_is_given_them():
     print("8. the strengths and goals of a character in play, and the protagonist's personality, are in the Writer's prompt")
 
 
+def test_the_generator_fills_them_in_bounded():
+    """9. A character written from a prompt gets the four fields too, but what a model wrote is cut to the limit
+    (never refused: a slightly long strength beats no character), one line, and anything that is not text is nothing."""
+    from coderain import generator
+    for f in cast.FIELDS:
+        assert f'"{f}"' in generator._CHAR_SHAPE, f"the character prompt does not ask for {f}"
+    e = generator._character_entry({"slug": "odile", "title": "Odile Marsh", "importance": 4,
+                                    "strengths": "  fast with a knife" + chr(10) + " and quiet ", "weaknesses": "word " * 200,
+                                    "personality": 5, "goals": ["not", "text"], "wants": "the ledger"})
+    assert e.attrs["strengths"] == "fast with a knife and quiet", e.attrs
+    assert len(e.attrs["weaknesses"]) <= cast.LIMITS["weaknesses"] and e.attrs["weaknesses"].endswith("word"), e.attrs["weaknesses"]
+    assert "personality" not in e.attrs and "goals" not in e.attrs, "a non-string is nothing"
+    assert e.attrs["wants"] == "the ledger", "the live goal is still written"
+    bare = generator._character_entry({"slug": "corin", "title": "Corin Hale"})
+    assert not any(f in bare.attrs for f in cast.FIELDS), "a model that said nothing adds nothing"
+    assert cast.fit("personality", "x" * 200) == "x" * 80 and cast.fit("goals", None) == ""
+    cut = cast.fit("goals", "abcdefg " * 100)                        # the limit falls inside a word: back up to a whole one
+    assert len(cut) <= cast.LIMITS["goals"] and cut.endswith(" abcdefg") and not cut.endswith("abcd"), cut[-12:]
+    print("9. a generated character gets the four fields, cut to the limit, one line, text only")
+
+
 for fn in (test_set_clear_and_leave_the_rest_alone, test_refusals_write_nothing, test_the_fold_keeps_them,
-           test_the_planner_is_told, test_the_api, test_the_rules, test_the_writer_is_given_them):
+           test_the_planner_is_told, test_the_api, test_the_rules, test_the_writer_is_given_them,
+           test_the_generator_fills_them_in_bounded):
     fn()
 print("ALL OK")
