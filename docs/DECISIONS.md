@@ -1277,3 +1277,55 @@ that cannot be undone without the backup); a button in the app; a merge of one c
 
 **Tests.** `dedupe_test.py` (4 numbered assertions; 15 guard mutations caught, and it found a real bug on the way: two
 applies in the same second shared a backup folder).
+
+## D-031 — The card shows a look only when it matters, because offering every look every turn makes the Writer restate them
+
+**Context.** D-029's final pair showed the card keeping the colours right (24 of 25 against 3 of 15 without it) and
+a cost: with the card the Writer named a hair or eye colour in 3.5 sentences a turn (0.3 without) and 27% of the
+wording of a turn repeated the previous turn's (2% without) over the first 120 turns. Of the wording repeated from one
+turn to the next, 64% sat in look sentences with the card, 5% without. The card was telling the Writer every look
+of everyone in the scene on every turn, and a 4B Writer treats what it is shown last as something to say.
+
+**What did not work.** Leaving out a look the recent turns already state for that character (`identity_seen`, since
+removed) cut it only to 2.8 look sentences a turn and 22% repeated wording; the skip fired on 2.7 fields a turn and the Writer
+kept restating from its own history. Rewording the headers to "reference only, do not restate" made it worse, on the
+same real prompt, 10 seeds, 3 scenes: 3.7 look sentences a reply against 2.9 for the shipped wording and 1.4 with no
+card at all (the history of that save was already primed by the card runs). Telling a small model not to say a thing
+puts the thing in front of it.
+
+**Decision.** `canon/scene.py` `identity_needed`: a character's identity fields go in the card only when one of
+three things holds. (1) They are not named anywhere in the verbatim turns the prompt carries nor in the player's
+action: the Writer has nothing recent about them, which is what the card is for. (2) The player's action names them and
+asks about looks (a hair or eye word, "study", "describe", "face", a mark): the card is the answer to the question.
+(3) The recent turns state a different colour for them in a sentence that names that character and nobody else
+(`same_value` decides, so "black" is "raven"): drift in the context is corrected where it is read. Otherwise the
+look is left out, and `Card.hidden` counts the fields left out in the injection log. The engine passes the card the
+verbatim turns and the player's input. `canon: {identity: always}` restores the old behaviour; `needed` is the default.
+State lines (outfit, held items, mood, place) are unchanged.
+
+**Measured** (the same invented story and player script, 120 turns, local gemma3:4b, all fixes in):
+
+| card | look sentences / turn | repeated wording | direct-ask colour right |
+|---|---|---|---|
+| off | 0.3 | 2% | 3 of 15 (240 turns) |
+| every look, every turn | 3.5 | 27% | 24 of 25 (240 turns) |
+| skip what the turns already state | 2.8 | 22% | 15 of 15 |
+| only when it matters | 1.0 | 18% | 14 of 14 |
+
+The card averaged 484 characters instead of 869. **The cost:** colours the Writer volunteers (not asked for) were right 43
+of 56 times (77%), against 97% when every look was in front of it, because a look that is not offered cannot correct a
+first drifted mention; the card corrects it the turn after (3). The number of contradicted statements is about
+the same (14 against 19 in the first 120 turns, 5 with the card off), so a reader meets about as many, and many fewer
+look sentences. All but one of the 121 cards left out 5 or more identity fields (a mean of 10 a turn).
+
+**Not done.** The repetition is not gone (1.0 against 0.3, 18% against 2%): half of that is the Writer's own history
+teaching itself (a save primed by the card runs gave 1.4 look sentences a reply with no card at all). Whether a card
+placed earlier in the prompt (less salient, less binding) keeps the colours with less repetition was not tested. State
+lines have their own near-duplicates ("spectacles, glasses, spectacles and glasses") and were not touched. One 4B model,
+one story, one script.
+
+**What would change it.** A hosted model that does not restate (the card would then lose nothing by listing every
+look: `identity: always`); volunteered colours that need to be right more than the prose needs to be varied.
+
+**Tests.** `canon_scene_test.py` 12 (what shows and what does not, drift attribution), `canon_card_test.py` 9,
+`canon_inject_test.py` 10 (the engine passes the window and the action; the setting). 21 guard mutations are caught.

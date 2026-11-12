@@ -29,6 +29,9 @@ line, and a Scene State Card, all bounded and none of them quiet about what was 
     240 turns) copied that label syntax into its prose in 183 of 240 turns once the card was sent, from
     turn 39 on; the same story with phrases ("black hair; dark eyes") had 0 copies in the first 80 turns
     (33 with labels over the same turns)
+12) identity_needed: a look is shown only when it matters (the character is absent from the recent turns, the
+    player's action asks about them, or the recent turns state a different colour), because a card that listed every
+    look every turn made a 4B Writer restate looks about ten times as often as without it
 """
 import json
 import random
@@ -43,7 +46,7 @@ WORK = Path(tempfile.mkdtemp(prefix="cr-scene-"))
 
 from canon import Store                                                    # noqa: E402
 from canon.pipeline import process_turn                                    # noqa: E402
-from canon.scene import (CARD_HEADER, DEFAULT_LIMIT, Scene, bible, bibles,  # noqa: E402
+from canon.scene import (CARD_HEADER, DEFAULT_LIMIT, Scene, bible, bibles, identity_needed,  # noqa: E402
                          card_line, find_scene, mention_spans, mentions, render_card)
 from canon.scribe import Scribe                                            # noqa: E402
 
@@ -417,6 +420,54 @@ def test_identity_reads_as_phrases_not_labels():
     print("11. identity is phrases, not labels, and a value that names the feature is not doubled")
 
 
+def test_identity_needed():
+    """12. A look is shown only when it matters. The first long soak: a card that listed every look every turn
+    made a 4B Writer name a hair or eye colour in 3.5 sentences a turn (0.3 with the card off); leaving out
+    what the recent turns already state only cut that to 2.8; rewording the header made it worse (3.7 a reply
+    against 2.9). Shown when the character is absent from the recent turns, when the player's action asks
+    about them, or when the recent turns state a different colour."""
+    c = world([("odile", "Odile Marsh", ["The Courier"]), ("corin", "Corin Hale", []), ("tamsin", "Tamsin Reeve", [])], [
+        ("odile", "identity.hair", "raven"), ("odile", "identity.eyes", "grey"),
+        ("odile", "identity.marks.thin-scar", "thin scar"), ("odile", "identity.build", "slim"),
+        ("corin", "identity.hair", "short grey"), ("corin", "identity.age", "about forty")])
+    cast = ("odile", "corin", "tamsin")
+    need = lambda texts, action="": identity_needed(c, cast, texts, action)        # noqa: E731
+    everything = {"odile": {"hair", "eyes", "marks", "build"}, "corin": {"hair", "age"}, "tamsin": set()}
+    # absent from the recent turns (or no recent turns at all): everything, the Writer has nothing recent
+    assert need([]) == everything and need(["The street was empty."]) == everything
+    assert need(["Odile Marsh waited."])["odile"] == set(), "named in the recent turns and nothing contradicts her"
+    assert need(["Odile Marsh waited."])["corin"] == {"hair", "age"}, "Corin is not named: shown"
+    # named and nothing contradicts: nothing is shown, whether or not the look was ever stated
+    assert need(["Odile Marsh waited.", "Corin Hale shrugged."]) == {"odile": set(), "corin": set(), "tamsin": set()}
+    assert need(["Odile Marsh pushed back her raven hair.", "Corin Hale shrugged."])["odile"] == set()
+    # the player asks about looks and names the character: shown; asks about nobody or someone else: not
+    both = ["Odile Marsh waited.", "Corin Hale shrugged."]
+    assert need(both, "I study Odile Marsh's hair.")["odile"] == {"hair", "eyes", "marks", "build"}
+    assert need(both, "I study Odile Marsh's hair.")["corin"] == set()
+    assert need(both, "I look around.")["odile"] == set(), "a look word that names nobody asks about nobody"
+    assert need(both, "I ask Odile Marsh about the ford.")["odile"] == set(), "naming her is not asking about her looks"
+    # drift in the recent turns is corrected: a different colour for that character, in a sentence about her alone
+    drift = need(["Odile Marsh pushed back her black hair.", "Corin Hale shrugged."])
+    assert drift["odile"] == set(), "'black' is 'raven' for the validator: not a drift"
+    drift = need(["Odile Marsh pushed back her red hair.", "Corin Hale shrugged."])
+    assert drift["odile"] == {"hair"} and drift["corin"] == set(), drift
+    drift = need(["The Courier's blue eyes narrowed.", "Corin Hale shrugged."])
+    assert drift["odile"] == {"eyes"}, "an alias names her too"
+    # not attributed: a pronoun, two people in one sentence, the other person's sentence
+    for text in ("She pushed back her red hair.", "Odile Marsh, beside Corin Hale, had red hair.", "Corin Hale had red hair."):
+        assert need([text, "Odile Marsh waited."])["odile"] == set(), text
+    assert need(["Corin Hale had red hair.", "Odile Marsh waited."])["corin"] == {"hair"}, "that sentence IS about Corin"
+    # only colours drift: a different build or age is not called a drift
+    assert need(["Odile Marsh was stocky.", "Corin Hale was twenty."])["odile"] == set()
+    # bible(hide=...) leaves a field out, and a character with nothing left is just a name
+    full = bible(c, "odile")
+    cut = bible(c, "odile", hide={"hair", "marks"})
+    assert "raven hair" in full and "raven hair" not in cut and "grey eyes" in cut and "scar" not in cut, cut
+    assert bible(c, "corin", hide={"hair", "age"}) == "Corin Hale", bible(c, "corin", hide={"hair", "age"})
+    print("12. a look is shown when the character is absent from the recent turns, when the player asks about them, "
+          "or when the recent turns say a different colour; otherwise it is left out")
+
+
 try:
     for fn in (test_names, test_cast_order_and_the_present_cast_guarantee,
                test_ranking_is_recency_then_count_then_creation,
@@ -424,7 +475,7 @@ try:
                test_identity_line, test_card_fields_and_cuts,
                test_values_cannot_forge_or_carry_dashes,
                test_the_card_never_exceeds_its_budget, test_end_to_end_through_the_scribe,
-               test_identity_reads_as_phrases_not_labels):
+               test_identity_reads_as_phrases_not_labels, test_identity_needed):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

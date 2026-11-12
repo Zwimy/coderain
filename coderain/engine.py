@@ -317,7 +317,7 @@ class Engine:
             store.log_degraded("canon-inject",
                                "canon.inject needs canon.shadow: true; nothing is injected")
 
-    def _canon_card(self) -> str:
+    def _canon_card(self, messages=()) -> str:
         """The canon card for the turn about to be written (D-027), or "".
 
         "preview" builds and logs the card and sends nothing: the step to take first, so
@@ -333,7 +333,12 @@ class Engine:
             return ""
         try:
             turns = self.store.turns()
-            card = shadow.card(turns)
+            # The verbatim turns this prompt already carries: what the card need not repeat.
+            visible = [str(m.get("content") or "") for m in list(messages)[1:]
+                       if m.get("role") in ("user", "assistant")]
+            action = next((str(m.get("content") or "") for m in reversed(list(messages))
+                           if m.get("role") == "user"), "")
+            card = shadow.card(turns, visible=visible, action=action)
             shadow.record_injection(card, mode, len(turns) + 1)
         except Exception as e:  # noqa: BLE001 — a card must never cost a turn
             shadow._degrade(f"no card this turn: {type(e).__name__}: {e}")
@@ -983,7 +988,7 @@ class Engine:
         # directive, so the chapter goal stays the last thing read. It is a system
         # message in `messages`, so the echo filter below also catches a model copying
         # it back into its prose.
-        card = self._canon_card()
+        card = self._canon_card(messages)
         if card:
             messages = [*messages, {"role": "system", "content": card}]
         # The active chapter, restated where it binds. Costs no extra call: the

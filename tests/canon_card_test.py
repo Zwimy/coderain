@@ -21,6 +21,8 @@ must NOT reach it. Each numbered assertion pins one promise:
  7) it is pure: the same input gives the same card, and a snapshot is not changed by
     the live ledger growing after it was taken
  8) the reader and the card use one hash function
+ 9) a look is shown only when it matters (absent from the recent turns, asked about, contradicted) and
+    left out and counted otherwise
 """
 import random
 import shutil
@@ -243,11 +245,41 @@ def test_one_hash_for_both_sides():
     print("8. the reader and the card compare turns with one hash function")
 
 
+def test_a_look_is_shown_only_when_it_matters():
+    """9. The card restores what scrolled out of context and corrects drift; it does not offer every look every
+    turn (first soak: that made a 4B Writer restate looks about ten times as often as without the card)."""
+    s = story()
+    p = snap(s, hashes(1, 2, 3))
+    plain = build_card(p, hashes(1, 2, 3), RECENT, now=4)
+    assert "raven hair" in plain.text and "grey eyes" in plain.text and plain.hidden == 0
+    # the recent turns name Odile and Corin and say nothing against canon: their looks are left out, and counted
+    window = ["Odile Marsh stepped in, her raven hair damp.", "Corin Hale shrugged. Finn waited."]
+    got = build_card(p, hashes(1, 2, 3), RECENT, now=4, visible=window, action="I wait.")
+    assert "raven hair" not in got.text and "grey eyes" not in got.text and "black hair" not in got.text, got.text
+    assert got.hidden == 3 and got.row()["hidden"] == 3, got.hidden
+    assert IDENTITY_HEADER not in got.text and CARD_HEADER in got.text, "no identity header when nothing is shown"
+    # someone not named in the recent turns is shown (Tamsin is in the scene, the Writer has nothing recent)
+    away = build_card(p, hashes(1, 2, 3), ["Tamsin Reeve ran in."], now=4, visible=window, action="I wait.")
+    assert "red hair" in away.text and "raven hair" not in away.text, away.text
+    # the player asks about a look: that character's looks are shown
+    asked = build_card(p, hashes(1, 2, 3), RECENT, now=4, visible=window, action="I study Odile Marsh's hair.")
+    assert "raven hair" in asked.text and "grey eyes" not in asked.text, asked.text
+    # the recent turns say a different colour: the card corrects it
+    drift = build_card(p, hashes(1, 2, 3), RECENT, now=4,
+                       visible=["Odile Marsh stepped in, her red hair damp.", "Corin Hale shrugged."], action="I wait.")
+    assert "raven hair" in drift.text and "grey eyes" not in drift.text, drift.text
+    for action in ("I wait.", "Odile Marsh waits."):
+        assert build_card(p, hashes(1, 2, 3), RECENT, now=4, visible=(), action=action).text == plain.text, \
+            "no window known: nothing is hidden, even for someone the action names"
+    print("9. a look is shown when the character is absent, asked about or contradicted, and left out and counted otherwise")
+
+
 try:
     for fn in (test_coverage, test_nothing_to_show_is_said,
                test_identity_always_state_only_when_caught_up,
                test_a_discarded_turn_is_never_shown, test_the_cast, test_bounded,
-               test_pure_and_isolated_from_the_live_ledger, test_one_hash_for_both_sides):
+               test_pure_and_isolated_from_the_live_ledger, test_one_hash_for_both_sides,
+               test_a_look_is_shown_only_when_it_matters):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

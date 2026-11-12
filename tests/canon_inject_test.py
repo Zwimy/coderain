@@ -112,7 +112,10 @@ def configured(canon=True, **sec):
     cfg.generation["use_memory_tool"] = False
     cfg.generation["think"] = False
     cfg.generation["chapter_outline"] = True
-    cfg.raw["canon"] = {"shadow": True, "backfill": "all", **sec} if canon else sec
+    # identity "always" by default HERE: these tests pin what the card says, and their stories' recent turns
+    # name everyone and contradict nobody, so the default ("needed") would rightly leave the looks out.
+    # test 10 turns it on.
+    cfg.raw["canon"] = {"shadow": True, "backfill": "all", "identity": "always", **sec} if canon else sec
     try:
         yield cfg
     finally:
@@ -209,7 +212,7 @@ def test_on_sends_it_in_the_right_place():
         assert "raven" not in raw and "Odile" not in raw and "stepped in" not in raw, \
             "the log row must hold counts, never the story"
         assert set(r[0]) == {"turn", "mode", "chars", "reason", "state", "cast", "unread",
-                             "trusted_through"}, set(r[0])
+                             "trusted_through", "hidden"}, set(r[0])
     with configured(inject=True, inject_state=False) as cfg:
         store, eng = ready(cfg)
         list(eng.turn("I look around"))
@@ -247,7 +250,7 @@ def test_a_turn_is_never_delayed_or_broken():
         last = rows(store)[-1]
         assert last["state"] is False and last["unread"] >= 1, last
         # a card builder that explodes costs nothing but the card
-        eng2.canon_shadow.card = lambda turns: (_ for _ in ()).throw(RuntimeError("card exploded"))
+        eng2.canon_shadow.card = lambda turns, **kw: (_ for _ in ()).throw(RuntimeError("card exploded"))
         eng2.llm = Cap()
         out = "".join(eng2.turn("I wait a third time"))
         assert out == "The door swings open." and not cards(eng2.llm.msgs)
@@ -371,12 +374,40 @@ def test_a_correction_reaches_the_writer_on_the_next_turn():
           "undo, and a bad line is reported without costing the card")
 
 
+def test_a_look_is_shown_only_when_it_matters():
+    """10. The engine hands the card the verbatim turns the prompt already carries and the player's action. A look
+    is shown only when the character is absent from those turns, the action asks about them, or the turns say a
+    different colour (first soak: offering every look every turn made the Writer restate looks about ten times as
+    often); the log row counts what was left out, and `identity: always` turns it off."""
+    sec = lambda **k: settings({"canon": {"shadow": True, **k}})["identity"]                    # noqa: E731
+    assert sec() == "needed" and sec(identity="always") == "always" and sec(identity="ALWAYS ") == "always"
+    assert sec(identity="no") == "needed" and sec(identity=True) == "needed" and sec(identity=0) == "needed"
+    with configured(inject=True, identity="needed") as cfg:
+        store, eng = ready(cfg)                       # the window holds T1 and T2, which name everyone, no clash
+        list(eng.turn("I look around"))
+        card = [m["content"] for m in eng.llm.msgs if m["role"] == "system" and m["content"].startswith("Scene state")]
+        assert len(card) == 1 and "wearing grey coat" in card[0], card
+        assert not cards(eng.llm.msgs), "nobody is absent, asked about or contradicted: no identity block at all"
+        assert rows(store)[-1]["hidden"] == 2, rows(store)[-1]
+        eng.llm = Cap()                               # now the player asks about her hair
+        list(eng.turn("I study Odile Marsh's hair"))
+        asked = cards(eng.llm.msgs)
+        assert len(asked) == 1 and "raven hair" in asked[0] and "grey eyes" not in asked[0], asked
+    with configured(inject=True, identity="always") as cfg:
+        store, eng = ready(cfg)
+        list(eng.turn("I look around"))
+        assert "raven hair" in cards(eng.llm.msgs)[0] and "grey eyes" in cards(eng.llm.msgs)[0]
+        assert rows(store)[-1]["hidden"] == 0
+    print("10. a look is shown only when it matters, the log counts what was left out, and `identity: always` turns it off")
+
+
 try:
     for fn in (test_settings, test_off_by_default, test_preview_logs_and_sends_nothing,
                test_on_sends_it_in_the_right_place, test_a_turn_is_never_delayed_or_broken,
                test_retry_and_edit_never_show_what_was_discarded, test_inject_without_the_shadow,
                test_the_echo_filter_catches_a_copied_card,
-               test_a_correction_reaches_the_writer_on_the_next_turn):
+               test_a_correction_reaches_the_writer_on_the_next_turn,
+               test_a_look_is_shown_only_when_it_matters):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

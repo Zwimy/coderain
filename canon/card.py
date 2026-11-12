@@ -41,7 +41,7 @@ from dataclasses import dataclass
 
 from canon.corrections import apply_to
 from canon.scene import (CARD_CHARS, DEFAULT_LIMIT, MIN_CARD_CHARS, bible, find_scene,
-                         render_card)
+                         _identity_raw, identity_needed, render_card)
 from canon.state import project
 
 IDENTITY_HEADER = "Who they are (fixed canon; match it and do not contradict it):"
@@ -72,12 +72,13 @@ class Card:
     cast: tuple = ()
     unread: int = 0                # narrator turns the reader has not read yet
     trusted_through: int = 0       # the last turn the ledger is trusted through
+    hidden: int = 0                # identity fields left out because the Writer can already read them
 
     def row(self) -> dict:
         """Values and counts only, for the log: never a sentence of the story."""
         return {"chars": len(self.text), "reason": self.reason, "state": self.state,
                 "cast": list(self.cast)[:8], "unread": self.unread,
-                "trusted_through": self.trusted_through}
+                "trusted_through": self.trusted_through, "hidden": self.hidden}
 
 
 def coverage(snap: Snapshot, narr: dict[int, str]) -> tuple[int, int]:
@@ -97,19 +98,24 @@ def coverage(snap: Snapshot, narr: dict[int, str]) -> tuple[int, int]:
     return trusted, unread
 
 
-def _identity_block(canon, cast, budget: int) -> str:
-    """One line per character who has any identity facts, within `budget`. A name with
-    nothing known is left out (an "unknown" would invite the Writer to invent), and a
-    character who does not fit is named rather than dropped without a word."""
+def _identity_block(canon, cast, budget: int, needed=None) -> tuple[str, int]:
+    """(text, fields left out): one line per character who has any identity facts, within
+    `budget`. A name with nothing known is left out (an "unknown" would invite the Writer to
+    invent), and a character who does not fit is named rather than dropped without a word.
+    `needed` (scene.identity_needed) says which fields to show per character this turn; the
+    rest are left out, so the card restores what has scrolled away and corrects drift without
+    prompting a restatement of every look every turn. None shows everything."""
     if budget < len(IDENTITY_HEADER) + FOOTER_ROOM + 2:
-        return ""              # too small to hold the header and an honest "not shown" line
-    lines = []
+        return "", 0           # too small to hold the header and an honest "not shown" line
+    lines, hidden = [], 0
     for eid in cast:
-        line = bible(canon, eid, max_chars=IDENTITY_LINE_CHARS)
+        hide = (set(_identity_raw(canon, eid)) - needed.get(eid, set())) if needed is not None else set()
+        line = bible(canon, eid, max_chars=IDENTITY_LINE_CHARS, hide=hide)
+        hidden += len(hide)
         if ": " in line:                      # anything beyond the name
             lines.append((eid, line))
     if not lines:
-        return ""
+        return "", hidden
 
     def fit(reserve: int):
         body, used, left = [], len(IDENTITY_HEADER), []
@@ -125,25 +131,28 @@ def _identity_block(canon, cast, budget: int) -> str:
     if left:
         body, left = fit(FOOTER_ROOM + 1)     # room for the line that names the rest
     if not body and not left:
-        return ""
+        return "", hidden
     out = [IDENTITY_HEADER, *body]
     if left:
         names = [canon.entities[e]["name"][:40] for e in left]
         text = "Also present, identity not shown for space: " + ", ".join(names) + "."
         out.append(text if len(text) <= FOOTER_ROOM else
                    f"Also present, identity not shown for space: {len(names)} more.")
-    return "\n".join(out)
+    return "\n".join(out), hidden
 
 
 def build_card(snap: Snapshot | None, narr: dict[int, str], recent: list[str], *,
                now: int, max_chars: int = CARD_CHARS, state: bool = True,
-               limit: int = DEFAULT_LIMIT, corrections=None) -> Card:
+               limit: int = DEFAULT_LIMIT, corrections=None, visible=(), action: str = "") -> Card:
     """The text to put in front of the Writer for the turn about to be written, or a
     Card with an empty text and the reason. `recent` is the latest prose, oldest first;
     `now` is the index of the turn being written (it ages values out of the card).
     `corrections` are the author's (canon/corrections.py): they are applied to the
     projection, so the card honours them whether or not the reader has written them
-    to the ledger yet, and right after an undo has cut off the records that did."""
+    to the ledger yet, and right after an undo has cut off the records that did.
+    `visible` is the prose the Writer is about to be sent anyway (the verbatim turns) and `action` the
+    player's input: together they decide which identity fields are worth showing (scene.identity_needed).
+    Without `visible` every field is shown."""
     if snap is None or (snap.first is None and not snap.hashes):
         return Card(reason="not_ready")
     trusted, unread = coverage(snap, narr)
@@ -155,8 +164,10 @@ def build_card(snap: Snapshot | None, narr: dict[int, str], recent: list[str], *
     pinned = (snap.player,) if snap.player in canon.entities else ()
     scene = find_scene(canon, recent, pinned=pinned, now=now, limit=limit)
     show_state = state and unread == 0
-    identity = _identity_block(canon, scene.cast,
-                               max_chars if not show_state else int(max_chars * IDENTITY_SHARE))
+    needed = identity_needed(canon, scene.cast, [*visible, action], action) if visible else None
+    identity, hidden = _identity_block(canon, scene.cast,
+                                       max_chars if not show_state else int(max_chars * IDENTITY_SHARE),
+                                       needed)
     state_text = ""
     if show_state:
         room = max_chars - (len(identity) + 2 if identity else 0)
@@ -165,6 +176,6 @@ def build_card(snap: Snapshot | None, narr: dict[int, str], recent: list[str], *
     text = "\n\n".join(p for p in (identity, state_text) if p)
     if not text:
         return Card(reason="nothing_to_say", cast=scene.cast, unread=unread,
-                    trusted_through=trusted)
+                    trusted_through=trusted, hidden=hidden)
     return Card(text=text, state=bool(state_text), cast=scene.cast, unread=unread,
-                trusted_through=trusted)
+                trusted_through=trusted, hidden=hidden)

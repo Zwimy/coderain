@@ -42,6 +42,7 @@ Off unless config.yaml says so:
       inject: preview             # off (default) | preview | true. Needs shadow: true
       card_chars: 2400            # the most the card may add to a prompt (about 600 tokens)
       inject_state: true          # false: identity only (hair, eyes, marks), no clothing etc.
+      identity: needed            # needed (default): a look is shown only when it matters; always: every turn
 
 What a turn's card did is in <save>/canon/injections.jsonl (one row of counts per turn)
 and <save>/canon/card-last.txt (the last card in full, marked sent or preview).
@@ -77,7 +78,8 @@ STAGE = "canon-shadow"
 BACKFILL_ALL = 10 ** 9
 DEFAULTS = {"shadow": False, "model": "gemma3:4b", "host": "http://localhost:11434",
             "num_ctx": 8192, "backfill": 200, "max_errors": 3,
-            "inject": "off", "card_chars": 2400, "inject_state": True}
+            "inject": "off", "card_chars": 2400, "inject_state": True,
+            "identity": "needed"}
 _ROWS_KEEP = 6000                    # rows.jsonl is trimmed to this many lines
 RECENT_FOR_CARD = 4                  # latest turns whose names pick the cast
 _INJECT_LOG_BYTES = 120_000          # injections.jsonl is cut to its newest half past this
@@ -122,6 +124,7 @@ def settings(raw) -> dict:
                      else "off")
     out["card_chars"] = _int(sec.get("card_chars"), DEFAULTS["card_chars"], 600, 4000)
     out["inject_state"] = sec.get("inject_state") is not False
+    out["identity"] = "always" if isinstance(sec.get("identity"), str) and sec["identity"].strip().lower() == "always" else "needed"
     pl = sec.get("player")
     out["player"] = (pl.strip() if isinstance(pl, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", pl.strip())
                      else None)                 # a character slug; otherwise worked out from player.md
@@ -265,7 +268,7 @@ class CanonShadow:
             lock.release()
         return self._snap
 
-    def card(self, turns: list[dict]) -> Card:
+    def card(self, turns: list[dict], visible=(), action: str = "") -> Card:
         """The card for the turn about to be written, or a Card with no text and the
         reason. Never raises and never waits for the reader."""
         if not self.enabled or self.cfg.get("inject", "off") == "off":
@@ -277,7 +280,8 @@ class CanonShadow:
             return build_card(snap, narr, [t["text"] for t in turns[-RECENT_FOR_CARD:]],
                               now=len(turns) + 1, max_chars=self.cfg["card_chars"],
                               state=self.cfg["inject_state"],
-                              corrections=self.corrections()[0])
+                              corrections=self.corrections()[0],
+                              visible=visible if self.cfg["identity"] == "needed" else (), action=action)
         except Exception as exc:  # noqa: BLE001 - a card must never cost a turn
             self._degrade(f"no card this turn: {type(exc).__name__}: {exc}")
             return Card(reason="error")

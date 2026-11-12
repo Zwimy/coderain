@@ -317,19 +317,97 @@ def _identity(canon: Canon, eid: str) -> dict[str, str]:
     return {k: v for k, v in out.items() if v}
 
 
-def bible(canon: Canon, eid: str, *, max_chars: int = BIBLE_CHARS) -> str:
+def bible(canon: Canon, eid: str, *, max_chars: int = BIBLE_CHARS,
+          hide: frozenset | set = frozenset()) -> str:
     """One character's identity as a line. Fields nobody has stated are left out,
     not marked unknown: an "unknown" invites the Writer to invent, and the first
-    thing it invents becomes canon."""
+    thing it invents becomes canon. `hide` names fields to leave out because the
+    Writer does not need them this turn (see identity_needed)."""
     if max_chars < MIN_LINE_CHARS:
         raise ValueError(f"max_chars must be at least {MIN_LINE_CHARS}")
     e = canon.entities[eid]
     aliases = [_clean(a, 40) for a in e["aliases"][:3] if _clean(a, 40)]
     head = _clean(e["name"], 60) + (f" (also called {', '.join(aliases)})" if aliases else "")
-    have = _identity(canon, eid)
+    have = {k: v for k, v in _identity(canon, eid).items() if k not in hide}
     if not have:
         return head
     return _compose(head, have, _IDENTITY_PRIORITY, _IDENTITY_ORDER, max_chars)
+
+
+# --- identity only when it matters -------------------------------------------------
+_LOOK_NOUNS = {"hair": ("hair", "haired"), "eyes": ("eyes", "eye", "eyed")}
+_ASKS_ABOUT_LOOKS = re.compile(
+    r"\b(hair|eyes?|face|looks?|looking|stud(?:y|ies|ying)|appearance|describe|notice|stares?|staring|gaze|"
+    r"examine|scars?|tattoos?|marks?)\b", re.IGNORECASE)
+
+
+def _identity_raw(canon: Canon, eid: str) -> dict[str, list[str]]:
+    """The values behind `_identity`, not yet turned into phrases: field -> values."""
+    out: dict[str, list[str]] = {}
+    for key in ("hair", "eyes", "build", "age"):
+        v = canon.current(eid, f"identity.{key}")
+        if v:
+            out[key] = [str(v)]
+    marks = [ivs[-1].value for slot, ivs in canon.slots[eid].items()
+             if slot.startswith("identity.marks.") and ivs and ivs[-1].end_id is None]
+    if marks:
+        out["marks"] = [str(m) for m in marks]
+    return out
+
+
+def _drifted(canon: Canon, eid: str, texts) -> set[str]:
+    """Hair or eyes that `texts` state for this character with a colour that is not canon's: a sentence
+    that names exactly this character and nobody else, a hair or eye word, and a colour near it that
+    says something else (same_value is generous: "black" is "raven"). Only colours are judged: a build
+    or an age is worded too many ways to call a difference a drift."""
+    from canon.shape import _COLOURS
+    from canon.validate import same_value
+    out: set[str] = set()
+    for slot, nouns in _LOOK_NOUNS.items():
+        value = canon.current(eid, f"identity.{slot}")
+        if not value:
+            continue
+        for text in texts:
+            for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
+                words = _tokens(sentence)
+                colours = {w for k, n in enumerate(words) if n in nouns
+                           for w in words[max(0, k - 4):k + 9] if w in _COLOURS}
+                if colours and not any(same_value(str(value), c) for c in colours) \
+                        and mentions(canon, sentence) == {eid}:
+                    out.add(slot)
+    return out
+
+
+def identity_needed(canon: Canon, cast, texts, action: str = "") -> dict[str, set[str]]:
+    """Per character, the identity fields the card should show THIS turn. Everything else is left out.
+
+    The card exists to restore what has scrolled out of context and to correct drift, so a look is shown
+    only when one of these holds: the character is not named anywhere in `texts` (the verbatim turns the
+    prompt already carries, plus the player's action), so the Writer has nothing recent about them; the
+    player's action names them and asks about looks ("I study Odile's hair"); or `texts` state a
+    different colour for them (drift in the context is corrected where it is read).
+
+    Why not list the looks every turn: in the first long soak, a card that listed every look every turn
+    made a 4B Writer name a hair or eye colour in 3.5 sentences a turn (0.3 with the card off) and
+    27% of the wording of a turn repeated the previous turn's (2% off). Leaving out the ones that were
+    already stated in the recent turns cut that only to 2.8 and 22%; what the Writer did not need to be told
+    was most of them. Rewording the header ("reference only, do not restate") made it WORSE (3.7 look
+    sentences a reply against 2.9, and 1.4 with no card), so the lever is whether a look is offered at all."""
+    texts = [t for t in texts if t]
+    named: set[str] = set()
+    for t in texts:
+        named |= mentions(canon, t)
+    asked = mentions(canon, action) if action and _ASKS_ABOUT_LOOKS.search(action) else set()
+    out: dict[str, set[str]] = {}
+    for eid in cast:
+        raw = set(_identity_raw(canon, eid))
+        if not raw:
+            out[eid] = set()
+        elif eid not in named or eid in asked:
+            out[eid] = raw
+        else:
+            out[eid] = _drifted(canon, eid, texts) & raw
+    return out
 
 
 def bibles(canon: Canon, scene: Scene) -> str:
