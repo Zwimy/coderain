@@ -273,12 +273,15 @@ class Summarizer:
         ledger from 6 characters to 15, and a name that two entries answer to cannot be
         attributed to either).
 
-        A slug that already exists is used as written. Otherwise the title is looked up:
-        the same name (case, punctuation and a leading "the" ignored) as an existing entry's
-        title wins, preferring the entry made under that name's own slug; a title that is
-        another entry's alias counts only when exactly one entry has it. "Ottoline Wren" is
-        not "Ottoline Pike": only the whole name matches, and a doubtful match makes a new
-        entry, because a duplicate can be merged later and a wrong merge cannot be undone."""
+        A slug that already exists is used as written. Otherwise the title is looked up: the
+        same name (case, punctuation and a leading "the" ignored) as an existing entry's title
+        wins, preferring the entry made under that name's own slug. Only the whole TITLE
+        matches. "Ottoline Wren" is not "Ottoline Pike", and a title that is merely listed as
+        another entry's alias is not a match either: the same small models write wrong
+        aliases (a dry run on a soak save had one character's name in another's alias list, and
+        an alias rule would have folded the second character into the first). A doubtful match
+        makes a new entry, because a duplicate can be merged later and a wrong merge cannot be
+        undone."""
         if any(e.slug == slug for e in entries):
             return slug
         key = name_key(title)
@@ -287,8 +290,7 @@ class Summarizer:
         same = [e for e in entries if name_key(e.title) == key]
         if same:
             return next((e.slug for e in same if e.slug == _slugify(title)), same[0].slug)
-        aliased = [e for e in entries if key in {name_key(a) for a in e.aliases}]
-        return aliased[0].slug if len(aliased) == 1 else slug
+        return slug
 
     # --- apply validated promotions ---
     def _apply_promotions(self, obj: dict) -> list[str]:

@@ -1189,8 +1189,9 @@ turn 120. The run found three defects, and two of them have nothing to do with t
 - *One name is one entry* (`coderain/summarizer.py` `_existing_slug`, `coderain/memory.py` `name_key`). A slug that
   exists is used as written. Otherwise the title is looked up in the entity registries (characters, locations,
   factions, items): the same name (case, punctuation and a leading "the" ignored) as an existing title wins,
-  preferring the entry made under that name's own slug; a title that is another entry's alias counts only when exactly
-  one entry has it. Only the whole name matches ("Tamsin Pike" is not "Tamsin Reeve"), and a doubtful match makes a
+  preferring the entry made under that name's own slug. Only the whole title matches ("Tamsin Pike" is not "Tamsin
+  Reeve"), and a title that is merely listed as another entry's alias does not (the first version of this had that
+  rule, and D-030's dry run showed why it is wrong: small models write wrong aliases). A doubtful match makes a
   new entry, because a duplicate can be merged later and a wrong merge cannot be undone. Threads and canon events are
   left alone (two events can share a title). The merge is reported in the fold's events.
 - *Aliases are cleaned* (`usable_alias`, `MAX_ALIASES` 12, `MAX_ALIAS_WORDS` 5): a repeat by name, a run-on, and one
@@ -1241,3 +1242,38 @@ labels did not trouble.
 character who appears after the first turns), `canon_scene_test.py` 11 (7 mutations caught; its first version had a
 stray backspace character in the regex and would have passed whatever the card said). The four suites that pinned
 the old label format were changed with the reasoning above. Full suite: 117 pass.
+
+## D-030 — Duplicate entries that already exist are merged by an explicit, backed-up command, on whole names only
+
+**Context.** D-029 stopped the fold from making new duplicates, but a save played through a small local model before
+that already holds them: in an invented soak story `characters.md` had 18 sections for 6 characters plus the
+player and a few invented people, and every sheet is sent to the model again each turn. The canon reader makes one
+entity per section, so the duplicates also split what the story says about a person across entities that answer
+to the same name.
+
+**Decision.** `python -m coderain.dedupe --home <CODERAIN_HOME> --save <slug>` prints what would merge and why and writes
+nothing; `--apply` copies each registry it will change into `<save>/.dedupe-backup/<time>/` first (restoring is a file
+copy), then merges. `--home` is required with no default, so a live install is never touched by accident.
+
+- Only entries with the same whole name are one entity (case, punctuation and a leading "the" ignored). **A title that
+  is only listed as another entry's alias is not a match**, and the same rule now holds in the fold (`_existing_slug`).
+  I first wrote an alias rule ("exactly one entry has it") and the first dry run on a soak save showed what it does: a
+  small model had written one character's name into another's alias list, and the rule would have folded the second
+  character into the first, an error a duplicate never is. A duplicate can be merged later; a wrong merge needs the backup.
+- The entry made under its own slug stays, else the oldest. The merged entry unions the aliases (the kept entry's own
+  included, cleaned and capped at 12: on the soak save they were lines of 2,000 to 6,000 characters of repeats), takes the
+  highest importance, the newest status, wants and relationships, and adds the paragraphs of the others it does not already
+  say, newest first, up to the fold's own body limit.
+- Never touched: the player's sheet, threads and canon events, anything outside the registries. Scene summaries and the arc
+  keep their `[[character:old-slug]]` links (the report counts them, the engine already tolerates a link that points
+  nowhere), and the canon ledger is derived: delete `<save>/canon/` to rebuild it.
+
+**Measured.** On a copy of the soak save: 18 entries became 10, the six real duplicates merged and nothing else, and a second
+run reported nothing to merge. Not run on his real story.
+
+**Not done.** Rewriting the `[[links]]` in folded memory (that is fold output, and a rename of a slug there is one more thing
+that cannot be undone without the backup); a button in the app; a merge of one character under two different names
+("Dame Quill" and "Quill"): that needs a person's judgement and is exactly what a name rule must not guess.
+
+**Tests.** `dedupe_test.py` (4 numbered assertions; 15 guard mutations caught, and it found a real bug on the way: two
+applies in the same second shared a backup folder).

@@ -12,7 +12,7 @@ run-on repeats until one line held 400+ characters. Both happened with canon swi
   2. the two shapes seen live (a doubled slug and a numbered one) both merge
   3. case, punctuation and a leading "the" do not make a different name
   4. a different whole name never merges: "Tamsin Pike" is not "Tamsin Reeve"
-  5. a title that is another entry's alias merges only when exactly one entry has that alias
+  5. a title that is merely listed as another entry's alias is NOT a match: small models write wrong aliases
   6. a slug that already exists is used as written, as before
   7. with duplicates already present, the entry made under the name's own slug wins
   8. threads and canon events are untouched (two events can share a title)
@@ -105,27 +105,19 @@ def test_a_different_name_is_a_different_entry():
     s._apply_promotions({"promotions": [promo("tamsin-pike", "Tamsin Pike", "Someone else."),
                                         promo("tamsin", "Tamsin", "A bare first name.")]})
     assert slugs(store) == ["tamsin-reeve", "tamsin-pike", "tamsin"], slugs(store)
-    store2, s2 = fresh()
-    tamsin(store2)                                  # alias "Tamsin" exists: now the bare name IS hers
-    s2._apply_promotions({"promotions": [promo("tamsin", "Tamsin", "The same woman.")]})
-    assert slugs(store2) == ["tamsin-reeve"], slugs(store2)
-    print("4. a different whole name stays its own entry; an exact alias does not")
+    print("4. a different whole name, or a bare first name, stays its own entry")
 
 
-def test_alias_match_needs_exactly_one_owner():
-    """5."""
+def test_an_alias_is_not_a_match():
+    """5. A dry run on a soak save had one character's name written into another's alias list. If an
+    alias counted, the second character's first promotion would be folded into the first."""
     store, s = fresh()
-    tamsin(store, aliases=["Tamsin", "the ferrywoman"])
-    s._apply_promotions({"promotions": [promo("ferrywoman", "The Ferrywoman", "By her job.")]})
-    assert slugs(store) == ["tamsin-reeve"], slugs(store)
-    store2, s2 = fresh()
-    tamsin(store2, aliases=["the ferrywoman"])
-    store2.upsert_entry("characters.md", Entry(title="Hob Marrow", slug="hob-marrow",
-                                               aliases=["the ferrywoman"], importance=3, attrs={},
-                                               body="Also called that, by some."))
-    s2._apply_promotions({"promotions": [promo("ferrywoman", "The Ferrywoman")]})
-    assert "ferrywoman" in slugs(store2), "two owners of the alias: do not guess, make an entry"
-    print("5. an alias title merges only with exactly one owner")
+    tamsin(store, aliases=["Tamsin", "the ferrywoman", "Hob Marrow"])          # the last one is the model's mistake
+    s._apply_promotions({"promotions": [promo("ferrywoman", "The Ferrywoman", "By her job."),
+                                        promo("hob-marrow", "Hob Marrow", "A different man."),
+                                        promo("tamsin", "Tamsin", "A bare first name.")]})
+    assert slugs(store) == ["tamsin-reeve", "ferrywoman", "hob-marrow", "tamsin"], slugs(store)
+    print("5. a title that is only listed as another entry's alias makes its own entry")
 
 
 def test_an_existing_slug_is_used_as_written():
@@ -226,7 +218,7 @@ def test_two_promotions_in_one_fold():
 
 for fn in (test_same_title_new_slug_merges, test_the_two_live_shapes,
            test_name_key_ignores_case_punctuation_and_the, test_a_different_name_is_a_different_entry,
-           test_alias_match_needs_exactly_one_owner, test_an_existing_slug_is_used_as_written,
+           test_an_alias_is_not_a_match, test_an_existing_slug_is_used_as_written,
            test_duplicates_already_present_prefer_the_entry_under_its_own_slug,
            test_threads_and_events_are_untouched, test_new_aliases_are_cleaned,
            test_union_dedupes_and_caps_without_shrinking, test_the_merge_is_reported,
