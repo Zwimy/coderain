@@ -1329,3 +1329,50 @@ look: `identity: always`); volunteered colours that need to be right more than t
 
 **Tests.** `canon_scene_test.py` 12 (what shows and what does not, drift attribution), `canon_card_test.py` 9,
 `canon_inject_test.py` 10 (the engine passes the window and the action; the setting). 21 guard mutations are caught.
+
+## D-032 — The author can give characters strengths, weaknesses, a personality type and goals, in the Plan panel
+
+**Context.** The Plan panel steers a story by chapters, but nothing in it said who the people are. A character's sheet
+carried what the memory had folded out of the story (`status`, `wants`, `motivation`, a body of prose), all of it
+rewritten as the story moves, so an author who wanted a character to be good with a knife, afraid of deep water, a
+stoic, and set on clearing her brother's name could only hope the fold kept it.
+
+**Decision.** Four author-owned fields per character: `strengths`, `weaknesses`, `personality` (a type or a few
+words: ISTJ, Enneagram 6, "a stoic who keeps promises") and `goals`. They are header lines of the character's entry
+in `characters.md`, or of the protagonist's sheet in `player.md`, so Markdown stays the source of truth and a hand
+edit is the same thing as the screen (`coderain/cast.py`). Limits: 300 characters each, 80 for the personality type,
+one line, refused (not cut) when over.
+
+- **The Writer reads them** in the sheet it is already given when the character is in play (the protagonist always),
+  and the Writer's rules gained a "Character traits" section on how to use them: a strength decides a scene when it
+  matters, a weakness costs something real, behaviour follows the personality, a goal pulls the character even when
+  the player never raises it. Written positively on purpose (D-031: telling a small model not to say a thing puts
+  the thing in front of it). The rules are version 11, and the previous default's hash is registered so an install that
+  never edited its rules is upgraded.
+- **The chapter planner reads them** (`CHARACTERS` before the chapters in every planning payload, up to 2,400
+  characters with a visible count of anyone left out, and nothing at all when nobody has any), so a plan can lean on a
+  weakness or move toward a goal.
+- **The memory fold keeps them.** It rewrites `status`, `when` and `relationships` and re-attaches `wants` and
+  `motivation`; every other header line survives a rewrite, and a duplicate merge (D-029, D-030) keeps them too.
+- **`goals` is not `wants`.** `wants` and `motivation` are live and the fold rewrites them as the story moves; the screen
+  shows them beside each character for reference and does not edit them. `goals` stays until the author changes it.
+- The Plan panel has a "Characters…" button: a filterable list (the protagonist first, then by importance), each
+  character expandable into the four fields with a Save button, S W P G letters marking what is set. Routes:
+  `GET /api/saves/{slug}/cast` and `PUT /api/saves/{slug}/cast/{key}` (`player` for the protagonist), 404 for an unknown
+  character, 400 for a bad field or value, nothing written on a refusal.
+
+**Not done.** The generator that writes a new character from a prompt does not fill the four fields in (an author can add
+them after). Nothing checks that the prose honours them: they steer the Writer and the plan, they are not a rule the
+validator enforces. Not measured with a model: whether a 4B Writer shows a weakness or a goal more often with these lines
+than without; the lines are one more thing in a sheet that is sent every turn the character is in play, so a long set of
+them has a cost the limits only bound.
+
+**What would change it.** A cast large enough that the planner block is cut so often it misleads (then rank characters
+by who is in the story now rather than by importance); an author who wants traits that change over the story (they would
+use `wants`, or edit the field).
+
+**Tests.** `cast_test.py` (8 assertions: set, clear and leave the rest alone, every refusal writes nothing, the fold keeps
+them, the planner is told and capped, the API, the rules and their migration, and the traits reaching the Writer's
+prompt); 18 guard mutations caught, and one that is equivalent (an empty value left on the entry is not written, so the file is
+identical). The screen was checked in a browser on an invented story with no model reachable, at desktop and phone width,
+including the save, Back and Close.

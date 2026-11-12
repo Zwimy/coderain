@@ -59,6 +59,14 @@ narrator's system prompt every turn. Edit freely.
 - A character acts on their goal even when the player doesn't raise it, and drops
   or changes it only when the story gives them a reason.
 
+## Character traits
+- When an entry carries `strengths:`, `weaknesses:`, `personality:` or `goals:`,
+  those are the author's own and they hold for the whole story. Let a strength
+  decide a scene when it matters, make a weakness cost the character something
+  real, keep what they say and choose in line with their personality, and let a
+  `goals:` line pull them even when the player never raises it. Show all of it in
+  what the character does.
+
 ## Content boundaries
 - (Set any tone or content limits here.)
 """
@@ -602,7 +610,7 @@ def initial_state(rpg_cfg: dict | None = None) -> dict:
 # Bump whenever any master's default text changes, and append the OUTGOING hash of
 # each changed file to `_SHIPPED_RULE_HASHES` below. The version is informational
 # (stored in the ledger for diagnostics); correctness is driven by the hashes.
-RULES_VERSION = 10
+RULES_VERSION = 11
 
 # Every default rule text we have ever SHIPPED, per file (current defaults are added
 # automatically). On an app update, an on-disk master whose content hashes to one of
@@ -614,7 +622,10 @@ _SHIPPED_RULE_HASHES: dict[str, set[str]] = {
     # (the "What characters want" rule — goals/motivations drive behaviour).
     "writer-rules.md": {
         "53a5d2bf8355cef2cc5d219b853814e7cbb079e9ab766377fd6d1a60799c8e3f",
-        "8441c4181750f92cf991a0e6dc89ea5eddc7e36e4ed66271c57b08f0450c1a43"},
+        "8441c4181750f92cf991a0e6dc89ea5eddc7e36e4ed66271c57b08f0450c1a43",
+        # v10 superseded in v11 (the "Character traits" rule: the author's strengths, weaknesses,
+        # personality and goals).
+        "49e91649711565815764fb938fa2241c3c194c9dfb6535f6499ee7b068792831"},
     # v1 superseded in v2 (character facets + skill-check `skill` field);
     # v2 superseded in v3 (stats: baselines in Markdown + NPC `actor` checks).
     # memory-rules: v5 added lorebook attrs + facts + episode metadata; v6 added

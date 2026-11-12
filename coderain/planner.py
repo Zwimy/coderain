@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 
+from .cast import traits_block
 from .llm import emit_json
 from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore
@@ -342,6 +343,13 @@ class ChapterPlanner:
         out = "PREMISE:\n" + premise[:2000]
         if world:
             out += "\n\nWORLD:\n" + world[:2000]
+        traits = traits_block(self.store)
+        if traits:
+            # The author's own words about who these people are (the Plan panel's Characters). Chapters that
+            # never touch a weakness or a goal waste them; one that leans on them is a plot the author asked for.
+            out += ("\n\nCHARACTERS (their strengths, weaknesses, personality and goals, as the author set them "
+                    "- let chapters put the strengths to work, press on the weaknesses and move toward or "
+                    "against the goals):\n" + traits)
         out += "\n\nCHAPTERS SO FAR:\n" + ("\n".join(rows) or "(none yet)")
         if arc:
             out += "\n\nSTORY SO FAR (arc):\n" + arc[:1500]

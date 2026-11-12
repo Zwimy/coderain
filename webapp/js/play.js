@@ -2,6 +2,7 @@
    inspector, companion drawer. */
 import {$, api, esc, guard, renderProse, sse, toast, view} from "./util.js";
 import {canonModal} from "./canon.js";
+import {castModal} from "./cast.js";
 import {
   closeModal,
   confirmModal,
@@ -67,6 +68,8 @@ export async function outlineModal(slug) {
         ${data.enabled ? `<button id="ch-add">+ Add chapter</button>
           <button id="ch-gen">${chs.length ? "Regenerate…" : "Generate outline"}</button>`
           : ""}
+        <button id="ch-cast" title="strengths, weaknesses, personality and goals for each character"
+          >Characters…</button>
         <span style="flex:1"></span>
         <button id="ch-close">Close</button>
       </div>`);
@@ -82,6 +85,7 @@ export async function outlineModal(slug) {
                           busyBtn.textContent = busyBtn.dataset.busy; }
     };
     $("#ch-close").addEventListener("click", closeModal);
+    $("#ch-cast").addEventListener("click", () => castModal(slug, () => outlineModal(slug)));
     const gen = $("#ch-gen");
     if (gen) gen.addEventListener("click", async () => {
       // Copy corrected with the behaviour: this no longer wipes completed
