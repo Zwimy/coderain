@@ -277,6 +277,22 @@ def _find_item(items: list[str], value: str) -> int | None:
     return hits[0] if len(hits) == 1 else None
 
 
+def _absorbed(items: list[str], value: str) -> set[int]:
+    """Indices of the items that `value` says everything of and more: every word of the item is in it.
+
+    `_find_item` only treats a repeat as the same item when exactly ONE item matches, so once a list held "rope"
+    and "rag", "rope and rag" matched two and was appended, then "worn rope and rag" matched three and was
+    appended too (a 240-turn soak ended with held: rope, rag, rope and rag, worn rope and rag, and an outfit of
+    spectacles, glasses, spectacles and glasses, all in the card the Writer is sent). A new item that contains
+    several old ones replaces them. The words must ALL be inside it: "rag" and "rope" are two things, and
+    "rope and chain" absorbs "rope" and leaves "rag"."""
+    ktoks = set(norm(value).split()) - _STOP
+    if not ktoks:
+        return set()
+    return {i for i, it in enumerate(items)
+            if (itoks := set(norm(it).split()) - _STOP) and itoks < ktoks}
+
+
 # --- entities ---------------------------------------------------------------
 def resolve_loose(canon: Canon, name: str) -> str | None:
     """Entity id for a NAME a model wrote; tolerates "Odile" for "Odile Marsh". None
@@ -383,7 +399,9 @@ def _plan(scratch: Canon, eid: str, c: Claim, turn: int, world):
         if at is not None:                            # said again: newest, old wording
             new = items[:at] + items[at + 1:] + [items[at]]
         else:
-            kept = wardrobe.replaced_by(c.value, items) if slot == "state.outfit" else items
+            gone = _absorbed(items, c.value)
+            kept = [it for i, it in enumerate(items) if i not in gone]
+            kept = wardrobe.replaced_by(c.value, kept) if slot == "state.outfit" else kept
             new = kept + [c.value]
         new = new[-LIST_CAP.get(slot, MAX_LIST):]
         return [_fields(eid, slot, kind, new, c, turn, world)], None

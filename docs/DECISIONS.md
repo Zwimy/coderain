@@ -1378,3 +1378,25 @@ them, the planner is told and capped, the API, the rules and their migration, an
 prompt); 18 guard mutations caught, and one that is equivalent (an empty value left on the entry is not written, so the file is
 identical). The screen was checked in a browser on an invented story with no model reachable, at desktop and phone width,
 including the save, Back and Close.
+
+## D-033 — A new list item that says everything several old ones say replaces them
+
+**Context.** The same 240-turn soak that showed the card's repetition (D-031) showed what the card's state lines look like
+by the end: `holding rope, rag, rope and rag, worn rope and rag` and `wearing spectacles, glasses, spectacles and glasses`.
+D-023's repeat rule treats a claim as the same item only when exactly ONE existing item matches (all its words inside
+the claim or the claim's inside it). Once the list holds "rope" and "rag", "rope and rag" matches two, so it was appended,
+"worn rope and rag" matched three and was appended too. The list then fills toward its cap with one object said four ways,
+the card spends its budget on it, and the Writer is shown the same thing four times.
+
+**Decision.** In `canon/validate.py` `_absorbed`: when no single item is the one a claim refers to, every existing item whose
+words are ALL inside the claim (and the claim has more) is dropped and the claim is added: "rope and rag" replaces "rope"
+and "rag", "worn rope and rag" then replaces that, "sword and shield" replaces "sword" and "shield" and leaves a lantern.
+Whole words only: "rope and chain" shares "rope" with "worn rope and rag" and is not made of it, so both stay. The
+outfit's replace-by-kind rule (D-023) runs after it. It applies to outfit, held items and injuries.
+
+**What it does not do.** Two words for one thing ("spectacles", "glasses") are still two items until a phrase joins them.
+A claim that is a part of several different items ("coil" inside "coil of rope" and "coil of chain") is still appended, because
+which one it means is a guess.
+
+**Tests.** `canon_state_lists_test.py` 3b (held and outfit); 5 guard mutations are caught. Not run against a model; the
+effect on the soak card is not measured.

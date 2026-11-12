@@ -169,6 +169,38 @@ def test_saying_it_again_moves_it_to_the_newest_place_and_is_recorded():
           "and a held item said again is moved, not listed twice")
 
 
+def test_an_item_that_says_several_old_ones_replaces_them():
+    """A 240-turn soak (a local 4B Writer) ended with held: rope, rag, rope and rag, worn rope and rag, and an outfit of
+    spectacles, glasses, spectacles and glasses, in the card sent every turn. The repeat rule only merged when exactly
+    ONE item matched, so once the list held two parts of a phrase the whole phrase matched two and was appended."""
+    s = _store()
+    _say(s, HELD, "add", "rope", "a coil of rope", 2)
+    _say(s, HELD, "add", "rag", "a rag", 3)
+    d = _say(s, HELD, "add", "rope and rag", "rope and rag", 4)
+    assert d.status == "commit", d
+    assert list(s.canon.current("odile", HELD)) == ["rope and rag"], s.canon.current("odile", HELD)
+    _say(s, HELD, "add", "worn rope and rag", "a worn rope and rag", 5)          # says all of it and more: the richer wording wins
+    assert list(s.canon.current("odile", HELD)) == ["worn rope and rag"], s.canon.current("odile", HELD)
+    # only whole words inside it: what is unrelated stays
+    _say(s, HELD, "add", "lantern", "a lantern", 6)
+    _say(s, HELD, "add", "rope and chain", "rope and chain", 7)                 # shares "rope" but is not made of it
+    assert list(s.canon.current("odile", HELD)) == ["worn rope and rag", "lantern", "rope and chain"], s.canon.current("odile", HELD)
+    s2 = _store()
+    _say(s2, HELD, "add", "sword", "a sword", 2)
+    _say(s2, HELD, "add", "shield", "a shield", 3)
+    _say(s2, HELD, "add", "lantern", "a lantern", 4)
+    _say(s2, HELD, "add", "sword and shield", "sword and shield", 5)
+    assert list(s2.canon.current("odile", HELD)) == ["lantern", "sword and shield"], s2.canon.current("odile", HELD)
+    _say(s2, HELD, "add", "rope and chain", "rope and chain", 6)             # shares no whole word with them: nothing absorbed
+    assert list(s2.canon.current("odile", HELD)) == ["lantern", "sword and shield", "rope and chain"]
+    s3 = _store()                                                              # the outfit list too
+    _say(s3, OUT, "add", "hat", "a hat", 2)
+    _say(s3, OUT, "add", "gloves", "gloves", 3)
+    _say(s3, OUT, "add", "hat and gloves", "hat and gloves", 4)
+    assert list(s3.canon.current("odile", OUT)) == ["hat and gloves"], s3.canon.current("odile", OUT)
+    print("3b. an item that says everything several old ones say replaces them; unrelated items stay")
+
+
 def test_a_full_list_drops_the_oldest_instead_of_refusing_the_new():
     s = _store()
     worn = ["ring", "bracelet", "watch", "scarf", "belt", "mask", "glasses", "choker",
@@ -297,6 +329,7 @@ def test_an_old_place_does_not_put_someone_in_the_room():
 try:
     for fn in (test_each_list_takes_only_what_it_is_for, test_a_new_garment_replaces_its_kind,
                test_saying_it_again_moves_it_to_the_newest_place_and_is_recorded,
+               test_an_item_that_says_several_old_ones_replaces_them,
                test_a_full_list_drops_the_oldest_instead_of_refusing_the_new,
                test_a_misfit_is_refused_in_the_validator_and_changes_nothing,
                test_a_garment_replaces_its_kind_in_the_validator_and_history_keeps_the_old_one,
