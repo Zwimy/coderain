@@ -124,16 +124,16 @@ def test_identity_always_state_only_when_caught_up():
     full = build_card(p, hashes(1, 2, 3), RECENT, now=4)
     assert full.state is True and full.unread == 0 and full.reason == ""
     assert full.text.startswith(IDENTITY_HEADER) and CARD_HEADER in full.text, full.text
-    assert "hair: raven" in full.text and "eyes: grey" in full.text
+    assert "raven hair" in full.text and "grey eyes" in full.text
     assert "wearing grey coat" in full.text, full.text
     behind = build_card(p, hashes(1, 2, 3, 4), RECENT, now=5)
     assert behind.state is False and behind.unread == 1
-    assert "hair: raven" in behind.text and "eyes: grey" in behind.text, "identity does not change"
+    assert "raven hair" in behind.text and "grey eyes" in behind.text, "identity does not change"
     assert "wearing" not in behind.text and "holding" not in behind.text \
         and CARD_HEADER not in behind.text, \
         "state shown while a newer turn was unread would contradict what the Writer can read"
     off = build_card(p, hashes(1, 2, 3), RECENT, now=4, state=False)
-    assert off.state is False and "hair: raven" in off.text and CARD_HEADER not in off.text
+    assert off.state is False and "raven hair" in off.text and CARD_HEADER not in off.text
     print("3. identity is always shown; state only when nothing is unread, and never when "
           "the config says identity only")
 
@@ -143,7 +143,7 @@ def test_a_discarded_turn_is_never_shown():
     p = snap(s, hashes(1, 2, 3))
     both = ["Odile Marsh stepped in. Tamsin Reeve waited. Corin Hale watched."]
     with_3 = build_card(p, hashes(1, 2, 3), both, now=4)
-    assert "hair: red" in with_3.text and "wearing red cloak" in with_3.text, with_3.text
+    assert "red hair" in with_3.text and "wearing red cloak" in with_3.text, with_3.text
     # a retry removed turn 3: what the dropped reply stated must not reach the Writer
     retry = build_card(p, hashes(1, 2), both, now=3)
     assert "red" not in retry.text, retry.text
@@ -153,7 +153,7 @@ def test_a_discarded_turn_is_never_shown():
     # an edit of turn 2: only what turn 1 established may be shown, and no state at all
     edited = {**hashes(1, 2, 3), 2: content_hash("edited")}
     cut = build_card(p, edited, both, now=4)
-    assert "hair: raven" in cut.text and "eyes: grey" in cut.text, cut.text
+    assert "raven hair" in cut.text and "grey eyes" in cut.text, cut.text
     assert "grey coat" not in cut.text and "lantern" not in cut.text and "red" not in cut.text, cut.text
     assert cut.state is False and cut.trusted_through == 1 and cut.unread == 2
     print("4. a retry drops the discarded reply's facts and keeps state; an edit keeps only "
@@ -165,7 +165,7 @@ def test_the_cast():
     p = snap(s, hashes(1, 2, 3))
     quiet = build_card(p, hashes(1, 2, 3), ["The street was quiet."], now=4)
     assert quiet.cast[:1] == ("finn",), quiet.cast
-    assert "Finn: hair: black" in quiet.text, quiet.text
+    assert "Finn: black hair" in quiet.text, quiet.text
     assert "Ansel" not in quiet.text, "a character with no identity facts gets no line"
     assert "unknown" not in quiet.text.lower()
     named = build_card(p, hashes(1, 2, 3), ["Ansel nodded. Odile Marsh smiled."], now=4)

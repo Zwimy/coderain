@@ -108,6 +108,41 @@ KIND_FILE = {
     "faction": "factions.md", "item": "items.md",
     "canon-event": "canon-events.md", "thread": "threads.md",
 }
+# Registries of THINGS that have one name each. A promotion for a title already in one of
+# these belongs to the existing entry. Threads and canon events are left out on purpose:
+# two events can share a title, and a thread's resolved/open state has its own rules.
+ENTITY_FILES = frozenset({"characters.md", "locations.md", "factions.md", "items.md"})
+# Most aliases one entry keeps. Measured with a local 4B lore-keeper over 240 turns: aliases
+# grew by case variants and run-on repeats ("corwin the mudlark corwin corwin the mudlark corwin")
+# into lines of 400+ characters, and every alias is scanned against the story each turn.
+MAX_ALIASES = 12
+MAX_ALIAS_WORDS = 5
+_ALIAS_LEAD = frozenset({"the", "a", "an"})
+_ALIAS_FILLER = frozenset({"the", "a", "an", "of", "and", "de", "la", "le"})
+
+
+def name_key(name) -> str:
+    """A name reduced to what makes it the same name: lower case, letters and digits, a
+    leading "the" dropped. "The Blackwood Tavern", "blackwood tavern" and "Blackwood-Tavern"
+    are one key; "Ottoline Pike" and "Ottoline Wren" are two."""
+    words = re.findall(r"[a-z0-9]+", str(name or "").lower())
+    if len(words) > 1 and words[0] in _ALIAS_LEAD:
+        words = words[1:]
+    return " ".join(words)
+
+
+def usable_alias(alias, taken: set[str]) -> bool:
+    """Is this a name an entry could answer to, and a new one? Refuses an empty one, a
+    repeat (same key), a run-on (more than MAX_ALIAS_WORDS words), and one that says a
+    content word twice: that is a model echoing its own list back, not a nickname."""
+    key = name_key(alias)
+    words = key.split()
+    if not key or key in taken or len(words) > MAX_ALIAS_WORDS:
+        return False
+    content = [w for w in words if len(w) >= 3 and w not in _ALIAS_FILLER]
+    return len(content) == len(set(content))
+
+
 # Files a custom lore type may NEVER shadow: built-in registries, rules, and
 # the non-registry story files (declaring "events" as a lore type would turn
 # unfired event rules into Writer-visible lorebook entries).
@@ -1238,6 +1273,21 @@ class MemoryStore:
             self.write(rel, text)
         return removed
 
+    @staticmethod
+    def _union_aliases(existing: Entry, new: Entry) -> list[str]:
+        """The existing aliases (kept as they are: the author may have written them) then
+        the new ones that are genuinely new, up to MAX_ALIASES. Nothing already there is
+        dropped, so an old entry that is already over the cap stops growing, not shrinks."""
+        out = list(dict.fromkeys(existing.aliases))
+        taken = {name_key(existing.title), *(name_key(a) for a in out)}
+        for a in new.aliases:
+            if len(out) >= MAX_ALIASES:
+                break
+            if usable_alias(a, taken):
+                out.append(a)
+                taken.add(name_key(a))
+        return out
+
     def merge_entry(self, rel: str, new: Entry, rewrite: bool = False) -> None:
         """Fold a promotion into an existing entry without clobbering identity.
 
@@ -1250,7 +1300,7 @@ class MemoryStore:
         if existing is None:
             self.upsert_entry(rel, new)
             return
-        aliases = list(dict.fromkeys(existing.aliases + new.aliases))
+        aliases = self._union_aliases(existing, new)
         importance = max(existing.importance, new.importance)
         if rewrite:
             body = new.body.strip() or existing.body

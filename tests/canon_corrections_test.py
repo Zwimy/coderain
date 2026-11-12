@@ -248,16 +248,16 @@ def test_the_card_applies_corrections_itself():
     recent = ["Odile Marsh stepped in. Corin Hale watched her."]
     corr = parse("- Odile: hair = raven\n- Corin: eyes is not green")[0]
     plain = build_card(snap, H, recent, now=4)
-    assert "hair: platinum" in plain.text and "eyes: green" in plain.text, plain.text
+    assert "platinum hair" in plain.text and "green eyes" in plain.text, plain.text
     got = build_card(snap, H, recent, now=4, corrections=corr)
-    assert "hair: raven" in got.text and "platinum" not in got.text, got.text
-    assert "eyes: green" not in got.text, "a retracted value reached the Writer"
-    assert "eyes: violet" in got.text and "wearing grey coat" in got.text, "the rest of the card is unchanged"
+    assert "raven hair" in got.text and "platinum" not in got.text, got.text
+    assert "green eyes" not in got.text, "a retracted value reached the Writer"
+    assert "violet eyes" in got.text and "wearing grey coat" in got.text, "the rest of the card is unchanged"
     # a retry cut the ledger back to turn 2: whatever the reader had written at turn 3 is gone, but the
     # author's word is applied to the projection anyway
     cut = build_card(snap, {1: H[1], 2: H[2]}, recent, now=3, corrections=corr)
-    assert "hair: raven" in cut.text and "platinum" not in cut.text and "eyes: green" not in cut.text, cut.text
-    assert "eyes: violet" not in cut.text, "and the turn-3 fact stays cut"
+    assert "raven hair" in cut.text and "platinum" not in cut.text and "green eyes" not in cut.text, cut.text
+    assert "violet eyes" not in cut.text, "and the turn-3 fact stays cut"
     none = build_card(snap, H, recent, now=4, corrections=parse("- Nobody: hair = red")[0])
     assert none.text == plain.text, "a correction about nobody changed the card"
     print("7. the card shows the author's value and hides a retracted one, before the reader has written "
@@ -375,11 +375,11 @@ def test_the_card_drops_a_released_value_at_once():
     snap = Snapshot(tuple(s.ledger.records), dict(H), 1, "finn")
     recent = ["Odile Marsh stepped in."]
     held = build_card(snap, H, recent, now=2, corrections=parse("- Odile: hair = raven")[0])
-    assert "hair: raven" in held.text, held.text
+    assert "raven hair" in held.text, held.text
     gone = build_card(snap, H, recent, now=2, corrections=[])
-    assert "raven" not in gone.text and "eyes: violet" in gone.text, \
+    assert "raven" not in gone.text and "violet eyes" in gone.text, \
         "the line is gone but the card still tells the Writer the author's value: " + gone.text
-    assert "hair: raven" in build_card(snap, H, recent, now=2).text, \
+    assert "raven hair" in build_card(snap, H, recent, now=2).text, \
         "no corrections argument means 'do not apply', so the ledger is shown as it is"
     print("10. with the last line removed the card drops the author's value before the reader has written the "
           "release, and a card built without corrections shows the ledger as it is")

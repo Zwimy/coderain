@@ -18,7 +18,8 @@ import re
 
 from .llm import emit_json_ex
 from .llm import stage as llm_stage
-from .memory import Entry, KIND_FILE, MemoryStore, _attr_true, trigger_hit
+from .memory import (ENTITY_FILES, Entry, KIND_FILE, MemoryStore, _attr_true, name_key,
+                     trigger_hit, usable_alias)
 
 SCENE_INSTRUCTION = """\
 You are the story's memory keeper. Fold the TURNS below into ONE concise scene
@@ -261,11 +262,40 @@ class Summarizer:
                     out.add(s)
         return out
 
+    @staticmethod
+    def _existing_slug(entries: list[Entry], slug: str, title: str) -> str:
+        """The slug a promotion should be written under, so one name is one entry.
+
+        The fold trusts the slug the model wrote and deduped by slug alone. A small local
+        model does not reuse the slug it was shown: over 240 turns of a plain story it wrote
+        `bram-halloran-4` and `bram-halloran-bram-halloran` for the existing `bram-halloran`,
+        and each became a second entry (characters.md grew from 6 to 16 sections, the canon
+        ledger from 6 characters to 15, and a name that two entries answer to cannot be
+        attributed to either).
+
+        A slug that already exists is used as written. Otherwise the title is looked up:
+        the same name (case, punctuation and a leading "the" ignored) as an existing entry's
+        title wins, preferring the entry made under that name's own slug; a title that is
+        another entry's alias counts only when exactly one entry has it. "Ottoline Wren" is
+        not "Ottoline Pike": only the whole name matches, and a doubtful match makes a new
+        entry, because a duplicate can be merged later and a wrong merge cannot be undone."""
+        if any(e.slug == slug for e in entries):
+            return slug
+        key = name_key(title)
+        if not key:
+            return slug
+        same = [e for e in entries if name_key(e.title) == key]
+        if same:
+            return next((e.slug for e in same if e.slug == _slugify(title)), same[0].slug)
+        aliased = [e for e in entries if key in {name_key(a) for a in e.aliases}]
+        return aliased[0].slug if len(aliased) == 1 else slug
+
     # --- apply validated promotions ---
     def _apply_promotions(self, obj: dict) -> list[str]:
         events: list[str] = []
         # Read once per fold, not once per promotion: entries() re-reads the file.
         player_slugs = self._player_slugs()
+        registry: dict[str, list[Entry]] = {}      # rel -> its entries, dropped after a write
         for p in _as_list(obj.get("promotions")):
             if not isinstance(p, dict):
                 continue
@@ -297,6 +327,14 @@ class Summarizer:
                             f"kind={kind!r:.40} slug={str(p.get('slug'))!r:.40} "
                             f"{'(no detail)' if not detail else ''}")
                 continue
+            if rel in ENTITY_FILES:
+                if rel not in registry:
+                    registry[rel] = self.store.entries(rel)
+                found = self._existing_slug(registry[rel], slug, title)
+                if found != slug:
+                    events.append(f"memory: [[{kind}:{found}]] already exists; "
+                                  f"the fold's slug {slug!r:.40} was merged into it")
+                    slug = found
             if kind == "character" and slug in player_slugs:
                 # Not a degradation — a promotion the engine is right to refuse.
                 # Logged anyway so "why is there no `you` entry" has an answer in
@@ -372,11 +410,16 @@ class Summarizer:
             # turn, and the whole entry is re-rendered into every later fold
             # prompt. Nothing needs more than a handful of names.
             aliases = aliases[:LIST_LIMIT]
-            entry = Entry(title=title, slug=slug,
-                          # aliases render as one comma-joined line, so a newline
-                          # breaks the header and a comma splits one alias in two.
-                          aliases=[_one_line(a).replace(",", " ") for a in aliases
-                                   if a and _one_line(a)],
+            taken = {name_key(title)}
+            clean: list[str] = []
+            for a in aliases:
+                # aliases render as one comma-joined line, so a newline breaks the
+                # header and a comma splits one alias in two.
+                a = _one_line(a).replace(",", " ") if a else ""
+                if usable_alias(a, taken):
+                    clean.append(a)
+                    taken.add(name_key(a))
+            entry = Entry(title=title, slug=slug, aliases=clean,
                           importance=importance,
                           attrs=attrs, body=detail)
             if rel == "threads.md" and self._hold_resolved(slug, entry.attrs):
@@ -385,6 +428,7 @@ class Summarizer:
             # rewrite=True: the model was shown the current entry and returns the
             # full rewritten body, so replace (not append) it.
             self.store.merge_entry(rel, entry, rewrite=True)
+            registry.pop(rel, None)                # the file changed: read it again if needed
             events.append(f"memory: promoted [[{kind}:{slug}]]")
 
         for t in _as_list(obj.get("new_threads")):

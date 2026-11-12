@@ -102,6 +102,9 @@ _MARK = re.compile(
     r"((?:\s+(?:on|over|across|above|below|along|through|under)\s+(?:(?:his|her|their|the|my)\s+)?"
     r"[\w-]+(?:\s+[\w-]+)?)?)", re.IGNORECASE)
 _NOT_PART_OF_A_MARK = frozenset("a an the and with has have had his her their my of or".split())
+# Words that can stand right before an adjective in a sentence and are never part of one:
+# "grey eyes AND raven hair" must offer "raven", not "and raven".
+_LEAD_WORDS = frozenset("a an the and or with has have had his her their its my of was is are but".split())
 
 
 def _mark_phrase(clause: str) -> str | None:
@@ -146,6 +149,10 @@ def player_facts(player_text: str) -> list[tuple[str, str, str]]:
         for slot, noun in (("identity.hair", "hair"), ("identity.eyes", "eyes")):
             for m in re.finditer(rf"\b((?:[\w-]+\s+)?[\w-]+)\s+{noun}\b", clause, re.IGNORECASE):
                 words = m.group(1).split()
+                while words and words[0].lower() in _LEAD_WORDS:     # "grey eyes AND raven hair"
+                    words.pop(0)
+                if not words:
+                    continue
                 for k in (len(words), 1):               # "long black", then "black"
                     offer(slot, " ".join(words[-k:]), clause)
         age = re.search(r"\b(\d{1,3})[- ]years?[- ]old\b|\baged?\s+(\d{1,3})\b", clause, re.IGNORECASE)
@@ -171,21 +178,62 @@ def seed_player(store, player: str | None, player_text: str, *, turn: int = 0) -
     the narration wrote first is replaced once, by the higher authority."""
     if not player or player not in store.canon.entities:
         return []
+    return seed_looks(store, player, player_text, turn=turn)
+
+
+def seed_looks(store, entity: str, text: str, *, turn: int = 0) -> list[tuple[str, str]]:
+    """The shared core of seed_player and seed_sheets: what `text` says about one entity's
+    looks, written at SCENARIO authority; returns what was written as (slot, value)."""
     wrote = []
-    for slot, value, quote in player_facts(player_text):
+    for slot, value, quote in player_facts(text):
         key = f"identity.marks.{_slugify(value)}" if slot == "identity.marks" else slot
-        ivs = store.canon.slots.get(player, {}).get(key)
+        ivs = store.canon.slots.get(entity, {}).get(key)
         live = ivs[-1] if ivs and ivs[-1].end_id is None else None
         if live is not None and (live.value == value
                                  or AUTHORITY[live.authority] >= AUTHORITY["scenario"]):
             continue
         try:
-            store.append(kind="fact_established", entity=player, slot=key, value=value,
+            store.append(kind="fact_established", entity=entity, slot=key, value=value,
                          authority="scenario", turn=turn, span=quote)
         except LedgerError:
             continue                      # e.g. a turn before the ledger's last: next pass
         wrote.append((key, value))
     return wrote
+
+
+# The first narrator turns of a story: a sheet that already exists then was written by the
+# author or came with the world, not folded out of the narration (nothing has been folded yet).
+AUTHORED_UNTIL = 3
+_VISUAL = re.compile(r"\*\*Visuals?:?\*\*:?\s*(.*?)(?=\*\*[A-Z][^*\n]{0,30}:?\*\*|\Z)", re.DOTALL)
+
+
+def sheet_looks(body: str) -> str:
+    """The part of a character sheet that describes looks: the text after its **Visual:** label.
+    Nothing when there is no such label. The rest of a sheet (mentality, voice, a fold's prose)
+    is never read for looks, because "hair" in a sentence about a habit is not a trait."""
+    m = _VISUAL.search(body or "")
+    return " ".join(m.group(1).split()) if m else ""
+
+
+def seed_sheets(store, entries, player: str | None = None, *, turn: int = 0) -> dict[str, list[tuple[str, str]]]:
+    """Write what each character sheet's Visual line says into the ledger at SCENARIO authority,
+    the same way seed_player does for player.md, and return what was written per entity.
+
+    Measured in the first long play-through (an invented story, a local 4B Writer, 240 turns):
+    a character's sheet said green eyes, the Writer's first narration said dark, first write wins,
+    and the card then told the Writer "dark" for the rest of the story. The sheet the author wrote
+    is the better first write. The caller decides WHEN this is safe (only while a story is new, see
+    AUTHORED_UNTIL): a sheet a fold wrote from the narration, seeded as if authored, would lock in
+    whatever the narrator drifted to."""
+    out: dict[str, list[tuple[str, str]]] = {}
+    for e in entries:
+        if e.slug == player or e.slug not in store.canon.entities:
+            continue
+        looks = sheet_looks(e.body)
+        wrote = seed_looks(store, e.slug, looks, turn=turn) if looks else []
+        if wrote:
+            out[e.slug] = wrote
+    return out
 
 
 def reads_anyone(canon, prose: str, player: str | None, before: str = "") -> bool:

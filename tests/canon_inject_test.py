@@ -180,7 +180,7 @@ def test_preview_logs_and_sends_nothing():
         assert not cards(eng.llm.msgs), "preview sent a card"
         assert [r["mode"] for r in rows(store)] == ["preview"], rows(store)
         last = (Path(store.dir) / "canon" / "card-last.txt").read_text(encoding="utf-8")
-        assert "Preview only: NOT sent." in last and "hair: raven" in last and "wearing grey coat" in last, last
+        assert "Preview only: NOT sent." in last and "raven hair" in last and "wearing grey coat" in last, last
     print("3. preview builds and logs the card and sends nothing")
 
 
@@ -192,7 +192,7 @@ def test_on_sends_it_in_the_right_place():
         got = cards(msgs)
         assert len(got) == 1, [m["content"][:30] for m in msgs if m["role"] == "system"]
         card = got[0]
-        assert "hair: raven" in card and "eyes: grey" in card, card
+        assert "raven hair" in card and "grey eyes" in card, card
         assert "wearing grey coat" in card and "holding lantern" in card, card
         assert msgs[-1]["role"] == "system" and "THIS CHAPTER" in msgs[-1]["content"], \
             "the chapter goal must stay the last thing read"
@@ -214,7 +214,7 @@ def test_on_sends_it_in_the_right_place():
         store, eng = ready(cfg)
         list(eng.turn("I look around"))
         card = cards(eng.llm.msgs)[0]
-        assert "hair: raven" in card and "wearing" not in card and "Scene state" not in card, card
+        assert "raven hair" in card and "wearing" not in card and "Scene state" not in card, card
     print("4. on sends one system message after the action and before the chapter directive; "
           "it is never stored; the log holds counts; identity-only drops the state")
 
@@ -241,7 +241,7 @@ def test_a_turn_is_never_delayed_or_broken():
         # never read, so the reader is behind and the card is identity only
         list(eng2.turn("I wait once more"))
         card = cards(eng2.llm.msgs)
-        assert len(card) == 1 and "eyes: grey" in card[0], card     # Corin is still in the scene
+        assert len(card) == 1 and "grey eyes" in card[0], card     # Corin is still in the scene
         assert "wearing" not in card[0] and "holding" not in card[0], \
             "the reader was behind, so state could contradict the turns just written"
         last = rows(store)[-1]
@@ -297,8 +297,8 @@ def test_retry_and_edit_never_show_what_was_discarded():
         eng.llm = Cap()
         list(eng.turn("I look around"))
         card = cards(eng.llm.msgs)[0]
-        assert "hair: raven" in card, "what turn 2 established is still true"
-        assert "eyes: grey" not in card and "lantern" not in card and "grey coat" not in card, \
+        assert "raven hair" in card, "what turn 2 established is still true"
+        assert "grey eyes" not in card and "lantern" not in card and "grey coat" not in card, \
             "an edited turn's facts, or any state, reached the Writer"
         assert rows(store)[-1]["state"] is False
     print("6. a retry shows nothing the discarded reply stated and keeps state; an edit of an old "
@@ -346,8 +346,8 @@ def test_a_correction_reaches_the_writer_on_the_next_turn():
         store.write("corrections.md", "- Odile Marsh: hair = auburn\n- Corin Hale: eyes is not grey\n")
         list(eng.turn("I look around"))                       # no pass has run since the edit
         card = cards(eng.llm.msgs)[0]
-        assert "hair: auburn" in card and "raven" not in card, card
-        assert "eyes: grey" not in card, "a value the author called wrong reached the Writer"
+        assert "auburn hair" in card and "raven" not in card, card
+        assert "grey eyes" not in card, "a value the author called wrong reached the Writer"
         assert "wearing grey coat" in card and "holding lantern" in card, "the rest of the card is unchanged"
         assert sh._store().canon.current("odile", "identity.hair") == "raven", \
             "the ledger was changed by a card: the overlay must be on the projection only"
@@ -360,12 +360,12 @@ def test_a_correction_reaches_the_writer_on_the_next_turn():
         eng.llm = Cap()
         list(eng.turn("I look around again"))
         card = cards(eng.llm.msgs)[0]
-        assert "hair: auburn" in card and "raven" not in card, card
+        assert "auburn hair" in card and "raven" not in card, card
         # a hand edit that says nothing sensible costs nothing: the bad line is reported, the card still builds
         store.write("corrections.md", "- Odile Marsh: hair = auburn\n- not a correction at all\n")
         eng.llm = Cap()
         list(eng.turn("I look around once more"))
-        assert "hair: auburn" in cards(eng.llm.msgs)[0]
+        assert "auburn hair" in cards(eng.llm.msgs)[0]
         assert [p["line"] for p in sh.view(store.turns())["problems"]] == [2]
     print("9. a correction reaches the Writer on the very next turn without touching the ledger, survives an "
           "undo, and a bad line is reported without costing the card")

@@ -281,18 +281,40 @@ def _compose(head: str, fields: dict[str, str], priority: tuple[str, ...],
 
 
 # --- identity: what does not change --------------------------------------------
+_HAS_HAIR = re.compile(r"\bhair(?:ed)?\b|\bhaired\b", re.I)
+_HAS_EYES = re.compile(r"\beyes?\b|\beyed\b", re.I)
+
+
+def _identity_phrase(key: str, value: str) -> str:
+    """One identity fact as a plain phrase ("black hair", "dark eyes"), not a label
+    ("hair: black"). Measured in the first long soak (a local 4B Writer, 240 turns): with
+    `hair: black; eyes: dark` lines in the card the Writer copied that syntax into its
+    prose in 153 of 210 turns, from turn 39 on, and a copied line in the history makes
+    the next copy more likely. A phrase it copies still reads as prose."""
+    v = _clean(value, VALUE_CHARS)
+    if not v:
+        return ""
+    if key == "hair":
+        return v if _HAS_HAIR.search(v) else f"{v} hair"
+    if key == "eyes":
+        return v if _HAS_EYES.search(v) else f"{v} eyes"
+    if key == "age":
+        return f"age {v}"
+    return v                                   # build: the value is already a description
+
+
 def _identity(canon: Canon, eid: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for key in ("hair", "eyes", "build", "age"):
         v = canon.current(eid, f"identity.{key}")
         if v:
-            out[key] = f"{key}: {_clean(v, VALUE_CHARS)}"
+            out[key] = _identity_phrase(key, v)
     marks = [(ivs[-1].start_id, ivs[-1].value)
              for slot, ivs in canon.slots[eid].items()
              if slot.startswith("identity.marks.") and ivs and ivs[-1].end_id is None]
     if marks:
-        out["marks"] = "marks: " + _listed([v for _i, v in sorted(marks)], 60, 4)
-    return {k: v for k, v in out.items() if v and not v.endswith(": ")}
+        out["marks"] = _listed([v for _i, v in sorted(marks)], 60, 4)
+    return {k: v for k, v in out.items() if v}
 
 
 def bible(canon: Canon, eid: str, *, max_chars: int = BIBLE_CHARS) -> str:

@@ -1123,6 +1123,21 @@ the card's line for that character no longer carries it. That is the card, not t
 after this change, so the Writer's behaviour with the value gone (which should be the no-card baseline for
 that slot) is expected and not measured.
 
+**Writer re-test (2026-11-11), the model run that paragraph says was missing.** A copy of a real 976-turn save
+with the ledger from a full `backfill: all` read; local gemma3:4b as the Writer; the real engine builds the
+prompt, so the card and the corrections overlay are the shipped code. Five probes at late scenes, 8 seeds each,
+the identical prompt sent with and without the card: three where the author sets a colour the story never said
+(two of them against a value the story repeated more than twenty times), one "is not" retraction, one control with
+no correction. When the Writer named a colour at all, with the card 11 of 12 were the author's value; without the
+card 0 of 6 were, and the old story value was never repeated with the card. The retraction probe cannot tell the
+card from the baseline: the Writer did not say the removed value in that scene without the card either, so all it
+shows is that a retracted value stays out of the reply. Two things did not change. The Writer named a colour in
+only 1 to 6 of 8 replies even when asked to describe the feature (so a card can only correct what is said), and a
+colour the transcript itself repeats a lot still beat a correct card line in the control (the card agreed with the
+story there, and the Writer kept its habitual wrong colour in 2 of 3 replies that named one). The first scorer glued
+words across em dashes and under-counted colours the Writer did state; it was fixed and the stored replies were
+rescored. Small n, one 4B Writer, a heuristic scorer, direct-ask probes.
+
 **Not done:** state corrections (what someone wears is the story's to say); a way to protect a correction from a
 rebuild that renames a character, since the file names people; and a way to ask "restore what the story said
 before my correction" (the ledger keeps the history, but nothing brings a retracted value back).
@@ -1140,3 +1155,89 @@ because a config whose active profile could not be built falls back to the shipp
 undo) and `canon_api_test.py` (the routes, every refused input, export). 43 guard mutations are caught; the
 passes found two gaps (a duplicated line and the author's own values in the refusal list) that no test could
 see, and closed them.
+
+## D-029 — The first long soak: one name is one entry, the author's sheets are the first write, and the card reads as phrases
+
+**Context.** Everything before this was measured on single turns or on a real save replayed through the reader.
+Nothing had played a story forward with the card on. The soak harness (an invented ferry-town story, six
+characters with a stated hair and eye colour in their sheets, a scripted player, the real engine, a local
+gemma3:4b Writer, memory squeezed to four verbatim turns and a 5,000-token budget so that almost everything older
+than a few turns can only come from memory) played 240 turns with canon off and 240 with the card sent, on the same
+player script. The card did not help: after copied card syntax was removed from the replies, the colour the Writer
+named matched the sheet in 4 of 20 probes with the card against 7 of 19 without, and both fell to about zero after
+turn 120. The run found three defects, and two of them have nothing to do with the card.
+
+1. **The card's own syntax was copied into the story.** With `hair: black; eyes: dark` lines in the card the
+   Writer wrote that syntax into its prose in 183 of 240 turns, from turn 39, and a copied line in the history makes
+   the next copy likelier. Canon off: 0 of 240. Every card-side colour statistic was contaminated by it.
+2. **The fold made a second entry for the same person.** The fold trusted the `slug` the lore-keeper model wrote and
+   deduped by slug alone. A small local model does not reuse the slug it was shown, so it wrote `bram-halloran-4` and
+   `bram-halloran-bram-halloran` for the existing `bram-halloran`. characters.md grew from 6 sections to 16 with
+   the card on and to 18 with it off, the canon ledger from 6 characters to 15, and a name that two entries answer to
+   resolves to neither: 1,452 claims were refused and only five characters ended with any identity. Aliases also
+   piled up by case variants and run-ons ("corwin the mudlark corwin corwin the mudlark corwin ...") to lines of 400+
+   characters. This is the "three entries for one woman" seen in the real save, and it happens without canon.
+3. **The ledger did not know the sheets the author wrote.** A sheet said green eyes, the Writer's first narration said
+   dark, first write wins, and the card then told the Writer "dark" for the rest of the story.
+
+**Decisions.**
+
+- *Identity is rendered as phrases, not labels* (`canon/scene.py` `_identity_phrase`): "black hair; dark eyes", not
+  "hair: black; eyes: dark". Same story, 80 turns: 0 turns with copied label syntax against 33 with labels. A phrase the
+  Writer copies still reads as prose. A value that already names the feature ("blue eyes", "dark-haired") is not
+  given the word twice, and one that is only punctuation says nothing.
+- *One name is one entry* (`coderain/summarizer.py` `_existing_slug`, `coderain/memory.py` `name_key`). A slug that
+  exists is used as written. Otherwise the title is looked up in the entity registries (characters, locations,
+  factions, items): the same name (case, punctuation and a leading "the" ignored) as an existing title wins,
+  preferring the entry made under that name's own slug; a title that is another entry's alias counts only when exactly
+  one entry has it. Only the whole name matches ("Tamsin Pike" is not "Tamsin Reeve"), and a doubtful match makes a
+  new entry, because a duplicate can be merged later and a wrong merge cannot be undone. Threads and canon events are
+  left alone (two events can share a title). The merge is reported in the fold's events.
+- *Aliases are cleaned* (`usable_alias`, `MAX_ALIASES` 12, `MAX_ALIAS_WORDS` 5): a repeat by name, a run-on, and one
+  that says a content word twice are refused; the union keeps what an entry already has and stops at the cap, so
+  an old long list stops growing and is not cut.
+- *Authored sheets seed canon* (`canon/replay.py` `sheet_looks`, `seed_sheets`; the reader's `fresh` flag): the text after
+  a sheet's `**Visual:**` label is read like the player's file (D-025) and written at scenario authority, so a narrated
+  value that differs is held back. Only when the reader first met the story with at most three narrator turns
+  (`AUTHORED_UNTIL`), and only for sheets that exist in those turns. On a story already under way the sheets
+  were folded out of the narration and may have drifted, and seeding them as authored would lock the drift in; a
+  character who appears later, and a sheet with no Visual label, are never seeded. "grey eyes and raven hair" now gives
+  raven (it gave "and raven").
+
+**Result of the final pair (all three fixes in, same story, same player script, 240 turns each, local gemma3:4b).**
+On the direct probes (the player studies one character's hair or eyes every eighth turn; scored against the colour in
+the character's starting sheet, counting only replies that name a colour), the card-on run named the sheet's colour in
+24 of 25 replies (96%; 12 of 13 after turn 120) and the card-off run in 3 of 15 (20%; 0 of 7 after turn 120). The
+card-off run also named no colour at all in 15 of 30 probes, against 5 of 30 with the card. Before the fixes the same
+comparison was 4 of 20 with the card and 7 of 19 without. The phrase format alone (80 turns, old fold, no seeding) was
+0 of 7, so the format removed the copying but not the drift: the ledger had to hold the right values, which is what
+the fold fix and the sheet seeding did. Which of those two matters more was not separated. The card-off run with the
+fold fix is still at 3 of 15, so the fold fix alone does not keep the looks.
+
+What this does not show. The truth being tested is the author's own sheet, seeded into the ledger by construction, so
+this measures that the card carries a known-right value to the Writer over 240 turns of squeezed memory (four verbatim
+turns), not that the Scribe extracts the truth from narration. One local 4B model, one invented story, one player
+script, a heuristic colour scorer, direct-ask probes. The 820 "incidental" statements in the card-on run are not
+independent evidence: they are inflated by the Writer restating the card.
+
+A cost the numbers show. With the card the Writer names a hair or eye colour in 3.8 sentences a turn (0.4 without) and
+a turn shares 30% of its 8-word runs with the previous turn on average (9% without). The prose still reads as a
+story and the colours match the sheet, but it restates identity far more often than a person would. Not addressed: a
+card that asks the Writer to mention a look only when it matters, or lists identity once per scene, is the obvious
+thing to try, and it must be tested for the repetition, not for the colours.
+
+**Not done.** Existing duplicate entries are not merged (only new ones are prevented): that is the offline sweep of
+the original plan, and it needs its own care because a merge cannot be undone. The Writer's narration length grew
+from about 270 to about 1,340 words a turn over 240 turns with canon off, a small-model effect of the engine's
+own history that this did not touch. No test of the three fixes against a hosted model.
+
+**What would change it.** A sheet format other than `**Visual:**` that authors really use (the label is the guard
+against reading looks out of prose); a second character with the same whole name (the merge would join them, and
+the fix is an alias or a title qualifier by the author); a phrase format that the Writer copies badly in a model the
+labels did not trouble.
+
+**Tests.** `fold_entity_resolution_test.py` (12 assertions; 17 guard mutations caught), `canon_sheet_seed_test.py` and
+`canon_shadow_test.py` 21-22 (13 mutations caught, two gaps found and closed: an agreeing narrated value, and a
+character who appears after the first turns), `canon_scene_test.py` 11 (7 mutations caught; its first version had a
+stray backspace character in the regex and would have passed whatever the card said). The four suites that pinned
+the old label format were changed with the reasoning above. Full suite: 117 pass.

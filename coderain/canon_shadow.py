@@ -66,9 +66,9 @@ from canon.ledger import LedgerCorrupt, LedgerError
 from canon.state import project
 from canon.pipeline import process_turn
 from canon.referents import gender_votes
-from canon.replay import (BEFORE_TURNS, GenderVotes, identity_table, passage_who,
+from canon.replay import (AUTHORED_UNTIL, BEFORE_TURNS, GenderVotes, identity_table, passage_who,
                           player_entity, player_gender, reads_anyone, seed_entities, seed_player,
-                          skipped_row,
+                          seed_sheets, skipped_row,
                           state_ages, totals, turn_row)
 from canon.scene import FRESH_TURNS, find_scene, render_card
 from canon.scribe import NotLocal, OllamaChat, Scribe, require_local
@@ -392,13 +392,14 @@ class CanonShadow:
             hashes = {int(k): str(v) for k, v in data["hashes"].items()}
             first = data.get("first")
             return {"first": first if isinstance(first, int) else None,
+                    "fresh": data.get("fresh") is True,
                     "hashes": hashes}
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            return {"first": None, "hashes": {}}
+            return {"first": None, "fresh": False, "hashes": {}}
 
     def _save_state(self, state: dict) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
-        payload = {"version": 1, "first": state["first"],
+        payload = {"version": 1, "first": state["first"], "fresh": state.get("fresh") is True,
                    "hashes": {str(k): v for k, v in sorted(state["hashes"].items())}}
         tmp = self.dir / "shadow.json.tmp"
         tmp.write_text(json.dumps(payload), encoding="utf-8")
@@ -485,6 +486,11 @@ class CanonShadow:
             return out
         if state["first"] is None:
             state["first"] = self._first_index(ordered)
+            # Was the story brand new when the reader first looked at it? Only then are the
+            # character sheets that exist the author's own words (D-029); on a story that is
+            # already under way they were folded out of the narration, and seeding them as if
+            # authored would lock in whatever the narrator had drifted to.
+            state["fresh"] = len(ordered) <= AUTHORED_UNTIL
         todo = [i for i in ordered if i >= state["first"] and i not in hashes]
         votes = GenderVotes(self._read_rows().values())
         errors, since_report = 0, 0
@@ -504,6 +510,8 @@ class CanonShadow:
             player_text = self.store.read("player.md") or ""
             player = player_entity(entries, player_text, self.cfg.get("player"))
             seed_player(cstore, player, player_text, turn=idx)       # D-025
+            if state.get("fresh") and idx <= AUTHORED_UNTIL:         # D-029: the author's sheets
+                seed_sheets(cstore, entries, player, turn=idx)
             refused = refusals(cstore.canon, corr)                   # D-028: values the author called wrong
             at = bisect.bisect_left(ordered, idx)
             before = [narr[i] for i in ordered[max(0, at - BEFORE_TURNS):at]]

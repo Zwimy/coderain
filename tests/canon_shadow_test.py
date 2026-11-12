@@ -843,6 +843,79 @@ def test_canon_settings_survive_the_config_file():
           "survives the Settings rewrite, and is off once removed")
 
 
+SHEET = "**Visual:** the courier, with grey eyes and raven hair. **Mentality:** wary. She keeps her hair tied."
+
+
+def sheet_save(sheet=SHEET):
+    store = new_save([("odile", "Odile Marsh", ["The Courier"])])
+    store.upsert_entry("characters.md", Entry(title="Odile Marsh", slug="odile", aliases=["The Courier"],
+                                              body=sheet))
+    return store
+
+
+def run_with(store, script):
+    sh, _ = shadow(store)
+    SCRIPT[:] = script
+    try:
+        sh.reconcile()
+    finally:
+        SCRIPT[:] = ORIGINAL_SCRIPT
+    return sh
+
+
+def test_authored_sheets_seed_a_new_story():
+    """D-029. In a plain invented soak the sheet said green eyes, the Writer's first narration said dark,
+    first write wins, and the card told the Writer "dark" for 240 turns. A sheet that exists when the story
+    is brand new is the author's, so it is the first write, at scenario authority; a narrated value that
+    differs is held back."""
+    store = sheet_save()
+    story(store, "Odile Marsh looked up, her pale eyes tired.")
+    sh = run_with(store, [("pale eyes tired", [claim("Odile Marsh", "identity.eyes", "set", "pale", "her pale eyes tired")])])
+    c = sh._store().canon
+    assert (c.current("odile", "identity.eyes"), c.current("odile", "identity.hair")) == ("grey", "raven")
+    assert c.slots["odile"]["identity.eyes"][-1].authority == "scenario"
+    assert sh._read_rows()[2].get("held_back") == [
+        {"entity": "odile", "slot": "identity.eyes", "held": "grey", "proposed": "pale"}], sh._read_rows()[2]
+    assert sh._load_state()["fresh"] is True, "remembered across passes and restarts"
+    n = len(sh._store().ledger)
+    story(store, "The harbour was quiet.")
+    sh.reconcile()
+    assert not [r for r in sh._store().ledger.records[n:] if r.authority == "scenario"], "a later pass writes nothing"
+    print("21. a sheet's Visual line is the first write on a new story and a differing narrated value is held back")
+
+
+def test_sheets_are_not_authored_once_a_story_is_under_way():
+    """D-029, the guard. On a story that already has narration the sheets were folded out of it (and may
+    have drifted), so they are NOT seeded: first narration still wins there, as before. Nor is a character
+    who appears after the first turns, and a sheet without a Visual label is never read for looks."""
+    store = sheet_save()
+    story(store, "Odile Marsh looked up, her pale eyes tired.", "The rain fell.", "The rain kept falling.",
+          "The rain fell harder.")
+    sh = run_with(store, [("pale eyes tired", [claim("Odile Marsh", "identity.eyes", "set", "pale", "her pale eyes tired")])])
+    c = sh._store().canon
+    assert c.current("odile", "identity.eyes") == "pale" and c.current("odile", "identity.hair") is None, \
+        "a story already under way: nothing seeded, the narration is the first write"
+    assert sh._load_state()["fresh"] is False
+    late = sheet_save()
+    story(late, "The street was empty.")
+    sh2, _ = shadow(late)
+    sh2.reconcile()
+    assert sh2._load_state()["fresh"] is True, "the story was new at the first pass"
+    story(late, "The street stayed empty.", "Still empty.", "Nobody came.", "The lamps burned down.")
+    late.upsert_entry("characters.md", Entry(title="Corin Hale", slug="corin", aliases=[],
+                                             body="**Visual:** with brown eyes."))
+    story(late, "Corin Hale arrived.")
+    sh2.reconcile()
+    assert "corin" in sh2._store().canon.entities
+    assert sh2._store().canon.current("corin", "identity.eyes") is None, "met after the first turns: not authored"
+    plain = sheet_save("She keeps her hair tied and has grey eyes when she is tired.")
+    story(plain, "The street was empty.")
+    sh3, _ = shadow(plain)
+    sh3.reconcile()
+    assert sh3._store().canon.current("odile", "identity.hair") is None, "no Visual label: no looks read"
+    print("22. an under-way story, a character met later and a sheet with no Visual label are never seeded")
+
+
 try:
     for fn in (test_settings, test_off_by_default_costs_nothing, test_observe_only,
                test_a_pass_and_its_report, test_it_follows_every_kind_of_change,
@@ -856,7 +929,9 @@ try:
                test_the_report_says_what_the_flag_does_and_warns_about_a_partial_read,
                test_the_reader_applies_the_authors_corrections,
                test_removing_the_last_correction_releases_its_value,
-               test_canon_settings_survive_the_config_file):
+               test_canon_settings_survive_the_config_file,
+               test_authored_sheets_seed_a_new_story,
+               test_sheets_are_not_authored_once_a_story_is_under_way):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

@@ -25,6 +25,10 @@ line, and a Scene State Card, all bounded and none of them quiet about what was 
  9) the card never exceeds its budget, whatever canon holds (randomised), and a
     character who did not fit is named in the last line
 10) end to end: Scribe -> validator -> ledger -> scene -> card carries the facts
+11) identity reads as phrases, never as "hair: black" labels: the first long soak (a local 4B Writer,
+    240 turns) copied that label syntax into its prose in 183 of 240 turns once the card was sent, from
+    turn 39 on; the same story with phrases ("black hair; dark eyes") had 0 copies in the first 80 turns
+    (33 with labels over the same turns)
 """
 import json
 import random
@@ -186,21 +190,21 @@ def test_identity_line():
     line = bible(c, "odile")
     assert line.startswith("Odile Marsh (also called The Courier, Marsh, M):"), line
     assert "Fourth" not in line, "more than three aliases were listed"
-    for part in ("hair: raven", "eyes: grey", "build: slim", "age: about thirty",
+    for part in ("raven hair", "grey eyes", "slim", "age about thirty",
                  "thin scar along her jaw", "green sigil on her wrist"):
         assert part in line, (part, line)
-    assert line.index("hair") < line.index("eyes") < line.index("build") < line.index("marks")
+    assert line.index("raven hair") < line.index("grey eyes") < line.index("slim") < line.index("thin scar")
     assert "unknown" not in line.lower() and "none" not in line.lower()
     # only what is stated: a bare character is just a name
     bare = world([("x", "Nobody", [])])
     assert bible(bare, "x") == "Nobody"
     only = world([("x", "Nobody", [])], [("x", "identity.eyes", "green")])
-    assert bible(only, "x") == "Nobody: eyes: green"
+    assert bible(only, "x") == "Nobody: green eyes"
     # Too long, at every budget from the smallest allowed up: never over budget; the
     # fields shown are always a PREFIX of the priority (hair, eyes, marks, build, age),
     # so a lower field never shows while a higher one is missing; and anything left
     # out is announced. Marks, narrated once and permanent, outlive build and age.
-    order = ["hair: ", "eyes: ", "marks: ", "build: ", "age: "]
+    order = ["raven hair", "grey eyes", "thin scar", "slim", "age about thirty"]
     seen_cut = set()
     for budget in range(120, 330):
         out = bible(c, "odile", max_chars=budget)
@@ -214,7 +218,7 @@ def test_identity_line():
             assert "more not shown" not in out
     assert {2, 3, 4} <= seen_cut, f"the sweep never exercised the cuts: {seen_cut}"
     full = bible(c, "odile", max_chars=600)
-    assert "more not shown" not in full and "age: about thirty" in full
+    assert "more not shown" not in full and "age about thirty" in full
     try:
         bible(c, "odile", max_chars=50)
         raise AssertionError("a tiny identity budget was accepted")
@@ -386,10 +390,31 @@ def test_end_to_end_through_the_scribe():
     sc = find_scene(store.canon, [t[0] for t in turns], pinned=("odile",))
     assert sc.cast[0] == "odile"
     text = bibles(store.canon, sc)
-    assert "hair: raven" in text and "thin scar along her jaw" in text, text
+    assert "raven hair" in text and "thin scar along her jaw" in text, text
     card = render_card(store.canon, sc)
     assert "wearing grey coat" in card and "injured swollen left ankle" in card, card
     print("10. Scribe -> validator -> ledger -> scene -> card carries what the story said")
+
+
+def test_identity_reads_as_phrases_not_labels():
+    """11. The card must not hand the Writer `key: value` syntax to copy."""
+    import re
+    c = world([("odile", "Odile Marsh", ["The Courier"]),
+               ("x", "Corin Hale", []), ("y", "Tamsin Reeve", []), ("z", "Zed", [])], [
+        ("odile", "identity.hair", "raven"), ("odile", "identity.eyes", "grey"),
+        ("odile", "identity.build", "slim"), ("odile", "identity.age", "about thirty"),
+        ("odile", "identity.marks.thin-scar", "thin scar along her jaw"),
+        ("x", "identity.hair", "short grey hair"), ("x", "identity.eyes", "blue eyes"),
+        ("y", "identity.hair", "dark-haired"), ("y", "identity.eyes", "wide-eyed"),
+        ("z", "identity.hair", "—"), ("z", "identity.eyes", ";")])
+    fields = bible(c, "odile").split("): ", 1)[1]
+    assert not re.search(r"(?:hair|eyes|build|age|marks)\s*:", fields), fields
+    assert fields.startswith("raven hair; grey eyes; slim; age about thirty; thin scar"), fields
+    # a value that already names the feature is not given the word twice
+    assert bible(c, "x") == "Corin Hale: short grey hair; blue eyes", bible(c, "x")
+    assert bible(c, "y") == "Tamsin Reeve: dark-haired; wide-eyed", bible(c, "y")
+    assert bible(c, "z") == "Zed", "a value that is only punctuation says nothing, so no empty ' hair'"
+    print("11. identity is phrases, not labels, and a value that names the feature is not doubled")
 
 
 try:
@@ -398,7 +423,8 @@ try:
                test_the_cap_reports_what_it_cut, test_pure_and_deterministic,
                test_identity_line, test_card_fields_and_cuts,
                test_values_cannot_forge_or_carry_dashes,
-               test_the_card_never_exceeds_its_budget, test_end_to_end_through_the_scribe):
+               test_the_card_never_exceeds_its_budget, test_end_to_end_through_the_scribe,
+               test_identity_reads_as_phrases_not_labels):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)
