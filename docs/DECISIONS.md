@@ -1423,8 +1423,12 @@ the run, and every later statement is checked against it.
 
 No gain you could call measured: 92% against 87% on 25 and 48 statements, and the direct probes lean the other way (3 agree and 2
 contradict with the card, 6 and 0 without).
-The narration with the card off grew to about 780 words a turn over 160 turns, against about 400 with it, which is not
-a canon effect and is not explained here.
+The narration with the card off grew to about 780 words a turn over 160 turns (about 1,340 by turn 200 in the earlier
+240-turn run), against about 400 with the card. That is not a canon effect: the soak's `response_length: medium` adds no length
+instruction to the prompt (only `short` and `long` do), and the cap a prose call gets is the configured max_tokens plus 3,000
+tokens of headroom for a reasoning model (`config.prose_tokens`), so for a model that is not reasoning there is effectively no cap
+and a small model's turn length feeds on its own history. Why the card-on run stayed near 400 is not explained. Choosing
+`short` in Settings is the existing way to hold the length down.
 
 **Why the card had little to say.** The reader's ledger held a value for 3 of the 9 looks the story established (2 agree
 with the story's first colour, one words it differently). Its report: 3 of 7 characters with any identity fact, 1,076 claims
