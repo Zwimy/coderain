@@ -1400,3 +1400,48 @@ which one it means is a guess.
 
 **Tests.** `canon_state_lists_test.py` 3b (held and outfit); 5 guard mutations are caught. Not run against a model; the
 effect on the soak card is not measured.
+
+## D-034 — When the truth has to come from the story, the card has little to carry, because the reader captures few looks
+
+**Context.** Every soak so far gave the card a known-right value: the sheet's looks were seeded into the ledger (D-029).
+Most real stories start the other way: the cast is named and nobody's looks are written down, so the truth is whatever
+the story first says, and the only thing that can put it in the ledger is the reader (a local model reading each turn).
+The same invented story and player script, `--sheets role` (each sheet says who the person is and nothing about how they
+look), 160 turns, local gemma3:4b, memory squeezed as before, card off against the card sent (`identity: needed`, D-031).
+Scored against the story itself: the first colour the story gives a character's hair or eyes is that character's truth for
+the run, and every later statement is checked against it.
+
+**Result.**
+
+| | card off | card on |
+|---|---|---|
+| looks the story established (of 12) | 7 | 9 |
+| later statements that agree with the first | 42 of 48 (87%) | 23 of 25 (92%) |
+| direct probes: agree / contradict | 6 / 0 | 3 / 2 |
+| look sentences per turn, repeated wording | 0.8, 32% | 0.3, 31% |
+| words per turn | 778 | 398 |
+
+No gain you could call measured: 92% against 87% on 25 and 48 statements, and the direct probes lean the other way (3 agree and 2
+contradict with the card, 6 and 0 without).
+The narration with the card off grew to about 780 words a turn over 160 turns, against about 400 with it, which is not
+a canon effect and is not explained here.
+
+**Why the card had little to say.** The reader's ledger held a value for 3 of the 9 looks the story established (2 agree
+with the story's first colour, one words it differently). Its report: 3 of 7 characters with any identity fact, 1,076 claims
+proposed, 541 rejected (two fifths as "restated", the rest mostly a garment or object the slot refuses, a value not in the
+quoted evidence, or a hypothetical). Of the 9 looks, 5 were stated in a sentence that names no one (a reply to the player
+studying someone, written with "her" or "his"): by design the reader never attributes identity through a pronoun (D-024),
+because identity is first write wins and a wrong attribution is permanent. The other 4 named the character, and the reader
+took 2 of them. With so little in the ledger the card averaged 410 characters, mostly state lines, and hid 0.9 fields a turn.
+
+**What this means.** The card is only as good as the reader behind it. When the author states the looks, the card carries them
+(D-029: 24 of 25). When the story does, a 4B reader captures about a third, and the card can neither add nor correct much.
+The fix is on the reading side, and it is a trade the earlier work chose the other way on purpose.
+
+**Not done, and how I would try it.** (1) Let a look sentence be attributed to a character through "he" or "she" when the
+sentence just before it names exactly one character of that gender, and the reply follows a player action that names them:
+measure how often that is wrong on a labelled sample BEFORE writing anything, because a wrong first identity is the failure
+that D-022 to D-024 exist to stop. (2) Ask the Scribe about one character at a time when the player's action names one.
+(3) A larger local Scribe (llama3.1:8b did better on recall in D-019). One 4B model, one story, one script, 25 statements.
+
+**Tooling.** The soak harness and scorer used here live outside the repo (scratchpad); nothing in this entry needs code.
