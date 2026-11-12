@@ -17,6 +17,8 @@ what it must NOT do and that it can be undone.
   6. entries outside the groups are untouched, byte for byte
   7. a second run finds nothing; running on a save with no duplicates writes no backup
   8. the report counts the [[links]] that will dangle, and the command refuses an unknown save
+  9. names made of the same words are suggested, never merged on their own
+ 10. --merge KEEP DROP... merges exactly what the author names, with the same backup, and refuses what it cannot do
 """
 import hashlib
 import io
@@ -192,9 +194,87 @@ def test_dry_run_apply_backup_and_idempotence():
           "save is untouched; a second run is a no-op; dangling links are counted")
 
 
+def test_possible_same_character_is_a_suggestion_never_a_merge():
+    """9. One woman under three names ("Vesper", "Dame Vesper", "Vesper Ann-Marie") is something only the author can say, so the tool
+    lists names that are made of the same words and merges nothing on its own."""
+    _s, store = make([e("vesper", "Vesper", "The gatekeeper."), e("dame-vesper", "Dame Vesper", "A teacher of the old school, "
+                                                           "known to the whole district."),
+                      e("vesper-ann-marie", "Vesper Ann-Marie"), e("tamsin-reeve", "Tamsin Reeve"), e("tamsin-pike", "Tamsin Pike"),
+                      e("tamsin", "Tamsin"), e("hob", "Hob Marrow"), e("you-player", "You")],
+                     player="## Eira  {#player}" + chr(10) * 2 + "A night courier." + chr(10))
+    regs = {"characters.md": store.entries("characters.md")}
+    found = {tuple(x.slug for x in es) for _rel, es in dedupe.similar_names(regs, skip_names=["you"])}
+    assert ("vesper", "dame-vesper", "vesper-ann-marie") in found or any(set(t) == {"vesper", "dame-vesper", "vesper-ann-marie"} for t in found), found
+    assert any(set(t) == {"tamsin", "tamsin-reeve", "tamsin-pike"} for t in found), "a bare first name fits two women: both listed"
+    assert not any("hob" in t or "you-player" in t for t in found), "an unrelated name and the player are not suggested"
+    assert dedupe.plan_for_store(store) == [], "nothing is merged automatically"
+    lines = dedupe.suggestions(store)
+    assert any("possibly the same" in l and "--merge dame-vesper" in l for l in lines), lines
+    # same whole name is the automatic pass's, not a suggestion
+    _s2, st2 = make([e("a", "Odile Marsh"), e("a-2", "Odile Marsh")])
+    assert dedupe.suggestions(st2) == [], "a same-name pair is merged by the plan, not suggested"
+    # two names that share a word but neither is made of the other's words are two people
+    _s3, st3 = make([e("ottoline-pike", "Ottoline Pike"), e("ottoline-wren", "Ottoline Wren")])
+    assert dedupe.suggestions(st3) == [], "a shared first name alone is not a suggestion"
+    # the player's own name never starts a suggestion
+    _s4, st4 = make([e("eira", "Eira"), e("eira-voss", "Eira Voss")], player="## Eira  {#player}" + chr(10) * 2 + "A night courier." + chr(10))
+    assert dedupe.suggestions(st4) == [], "the player's name is skipped"
+    print("9. names made of the same words are suggested, never merged on their own, and the player and unrelated names are left out")
+
+
+def test_the_author_can_merge_exactly_what_they_choose():
+    """10. --merge KEEP DROP...: the same backup and dry-run rules as the automatic pass, and refusals that write nothing."""
+    _s, store = make([e("vesper", "Vesper", "The gatekeeper."), e("dame-vesper", "Dame Vesper", "A teacher.", importance=4),
+                      e("vesper-ann-marie", "Vesper Ann-Marie", "Her given name."), e("hob", "Hob Marrow", "A keeper."),
+                      e("you-player", "You")], player="## Eira  {#player}" + chr(10) * 2 + "A night courier." + chr(10))
+    home, name = ["--home", str(HOME), "--save", Path(store.dir).name], Path(store.dir).name
+    Library(HOME).store(name)         # opening a save normalises a custom player.md once (the app's own doing): not the tool's
+    before = tree(store)
+    for bad in (["vesper", "vesper"], ["vesper"], ["vesper", "nobody"], ["you-player", "vesper"], ["vesper", "hob", "hob"]):
+        err = io.StringIO()
+        import contextlib
+        with contextlib.redirect_stderr(err), redirect_stdout(io.StringIO()):
+            assert dedupe.main([*home, "--merge", *bad, "--apply"]) == 2, bad
+        assert tree(store) == before and not (Path(store.dir) / dedupe.BACKUP_DIR).exists(), ("a refusal wrote something", bad)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert dedupe.main([*home, "--merge", "dame-vesper", "vesper", "vesper-ann-marie"]) == 0
+    assert "keeps dame-vesper, absorbs vesper, vesper-ann-marie (your choice)" in out.getvalue() and "Dry run" in out.getvalue(), out.getvalue()
+    assert tree(store) == before, "a dry run wrote something"
+    original = (Path(store.dir) / "characters.md").read_bytes()
+    with redirect_stdout(io.StringIO()):
+        assert dedupe.main([*home, "--merge", "dame-vesper", "vesper", "vesper-ann-marie", "--apply"]) == 0
+    es = {x.slug: x for x in store.entries("characters.md")}
+    assert set(es) == {"dame-vesper", "hob", "you-player"}, set(es)
+    assert "Vesper" in es["dame-vesper"].aliases and "Vesper Ann-Marie" in es["dame-vesper"].aliases, es["dame-vesper"].aliases
+    assert "The gatekeeper." in es["dame-vesper"].body and es["dame-vesper"].importance == 4
+    backup = next((Path(store.dir) / dedupe.BACKUP_DIR).iterdir())
+    assert (backup / "characters.md").read_bytes() == original, "the backup is the original, byte for byte"
+    # a registry that is not a registry of things is refused, even with slugs that exist in it; threads are never suggested
+    _s3, st3 = make([e("find-the-ford", "Find the ford", "a"), e("find-the-ford-2", "Find the ford crossing", "b")], rel="threads.md")
+    n3 = Path(st3.dir).name
+    Library(HOME).store(n3)
+    t_before = tree(st3)
+    with contextlib.redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+        assert dedupe.main(["--home", str(HOME), "--save", n3, "--merge", "find-the-ford", "find-the-ford-2",
+                            "--registry", "threads.md", "--apply"]) == 2
+    assert tree(st3) == t_before, "a refused registry wrote something"
+    assert dedupe.similar_names({"threads.md": st3.entries("threads.md")}) == [], "threads are never suggested"
+    # the registry option picks the file: a place can be merged in locations.md
+    _s4, st4 = make([e("salt-market", "Salt Market", "A market."), e("market", "Market", "Stalls.")], rel="locations.md")
+    n4 = Path(st4.dir).name
+    with redirect_stdout(io.StringIO()):
+        assert dedupe.main(["--home", str(HOME), "--save", n4, "--merge", "salt-market", "market",
+                            "--registry", "locations.md", "--apply"]) == 0
+    assert [x.slug for x in st4.entries("locations.md")] == ["salt-market"], [x.slug for x in st4.entries("locations.md")]
+    print("10. --merge merges exactly the named entries with the same backup; every refusal writes nothing; a dry run shows it")
+
+
 try:
     for fn in (test_what_is_a_group, test_player_threads_and_events_are_never_grouped, test_the_merged_entry,
-               test_dry_run_apply_backup_and_idempotence):
+               test_dry_run_apply_backup_and_idempotence,
+               test_possible_same_character_is_a_suggestion_never_a_merge,
+               test_the_author_can_merge_exactly_what_they_choose):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

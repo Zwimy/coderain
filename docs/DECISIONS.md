@@ -1540,3 +1540,57 @@ models may have to swap, which was not measured.
 tried at a larger size than 8B, and the Scribe prompt was not touched (asking about one character at a time when the player's action
 names one, D-034's second idea, is still untried). A rule that refuses a hairstyle phrase as a hair value was not written;
 it would be a shape-rule change with its own measurement (D-022).
+
+## D-037 — Hair styles stay valid hair values (considered, measured, not changed)
+
+**Question.** The shape rules accept a hair style on its own as a hair value (`bob`, `braid`, `ponytail`, `bun`, `undercut`,
+`buzzcut`, `crop` and the like, `canon/shape.py` `_STYLE`), and identity is first write wins. A styling a story changes by scene
+("hair up", "hair down") would then lock in something that stops being true, and a style as the first value blocks the colour,
+because the slot holds one value. A gemma3:4b read in D-036 filed "intricately braided hair" as a hair value, which raised it.
+
+**Measured** on the real story's ledger from the full read (22 live hair values; counts and generic style words only, no prose):
+9 are a style or length with no colour ("ponytail", "severe bun", "tight braid", "short-cropped", "severe bob"), 4 mix a colour with
+a style, 7 are a colour, 2 a shade. That is a large share, so the rule matters. Two things the data does not show:
+- **The styles do not vary.** Of the 5 characters whose value is a braid, bun or ponytail, the story's sentences that name only
+  that character state the same style 4 times, a different style 0 times, and hair worn loose or down 0 times (three of the five
+  have no such sentence at all). Nothing in the story contradicts them.
+- **The colour is rarely lost.** Of the 9 style-only values, the story states a hair colour in a sentence naming that character for
+  2 of them.
+
+**Decision.** No change. A rule that refuses a style-only value would drop values this story never contradicts and recover a colour
+for 2 characters out of 9. Revisit when a story shows a style changing under a locked value (a character whose ledger says
+"ponytail" and whose scenes say the hair is down), which the Canon panel's Wrong button already handles for one character; a
+separate `hairstyle` slot would be the cleaner schema and is a larger change (a Scribe prompt line, an eval case, the card, the
+panel) than the evidence calls for.
+
+**Also checked.** "Aldric", the first entry in every soak save's characters.md, is the template's example inside an HTML comment:
+the entry parser strips comments and the canon ledger never held it.
+
+## D-038 — The dedupe tool lists names that may be one character and merges them only when told to
+
+**Context.** D-030's merge takes entries with the same whole name and nothing else, on purpose: the real story has one woman under
+several names ("Dame Vesper", "Vesper", "Vesper Ann-Marie"), and a name rule cannot know that "Tamsin" is Tamsin Reeve and not Tamsin Pike. That left
+the author with the duplicates and no help finding them.
+
+**Decision.** `python -m coderain.dedupe` also prints, under the automatic plan, **possible same-character clusters**: entries
+whose names are made of some of the same words, where one name's words are all inside another's ("Vesper" inside "Dame Vesper" and "Vesper
+Ann-Marie"), joined by what they share. It merges none of them. `--merge KEEP DROP [DROP ...] [--registry FILE]` merges exactly the
+slugs the author names (the first stays), with the same dry-run default, the same backup and the same alias, importance and body
+rules as the automatic pass, and refuses, writing nothing, an unknown slug, a repeated slug, a single slug, the player's own sheet
+and a registry that is not a registry of characters, places, factions or items. The suggestion line names the entry with the
+longest body as the one to keep and prints the command, so a decision is one copy and paste.
+
+Two names that share only a word and neither contains the other ("Ottoline Pike", "Ottoline Wren") are not suggested, and neither is
+anything with the player's name or anything in threads and canon events.
+
+**Measured** on a copy of the real story (54 character entries): 1 same-name pair for the automatic pass, and 5 possible
+clusters of 2, 2, 3, 3 and 4 entries, 14 entries in all. A list that short can be read and decided in a minute. Whether a cluster is
+one person was not checked (that is the author's call); no merge was applied to anything.
+
+**Not done.** The suggestions use names only: two entries with different names and the same description are not found, and a
+character known by a title alone ("the gatekeeper") is not linked to the person unless a name shares a word. A `[[link]]`
+to a folded-away slug still points nowhere (D-030). The app has no button for it.
+
+**Tests.** `dedupe_test.py` 9 and 10 (clusters, the player, a shared first name, a same-name pair left to the plan, every refusal
+writes nothing, the registry option, the backup restores the original byte for byte); 13 more guard mutations are caught and one is
+equivalent (clustering is undirected, so the direction of the word-subset test does not matter).

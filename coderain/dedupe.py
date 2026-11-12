@@ -21,6 +21,10 @@ it is built to be undone and to be asked for:
 
     python -m coderain.dedupe --home <CODERAIN_HOME> --save <slug>             # report only
     python -m coderain.dedupe --home <CODERAIN_HOME> --save <slug> --apply     # back up, then merge
+    python -m coderain.dedupe --home <CODERAIN_HOME> --save <slug> --merge KEEP DROP [DROP ...] [--apply]
+
+The report also lists entries that MAY be one character under different names ("Vesper", "Dame Vesper", "Vesper Ann-Marie"). The tool
+never merges those by itself; `--merge` is how you say they are, with the same backup.
 """
 from __future__ import annotations
 
@@ -152,6 +156,60 @@ def plan_for_store(store) -> list[Group]:
     return plan_merges(regs, skip_names=_player_names(store))
 
 
+def similar_names(registries: dict[str, list[Entry]], skip_names=()) -> list[tuple[str, list[Entry]]]:
+    """Entries that MAY be one character under different names, for a person to decide: one entry's name is made of some of the
+    words of another's ("Vesper", "Dame Vesper", "Vesper Ann-Marie"), grouped by the words they share. Never merged by this tool on its own:
+    "Tamsin" fits "Tamsin Reeve" and "Tamsin Pike" and only the author knows which she is. Entries with the same whole name are
+    left to `plan_merges`, so each name appears once (the first of a same-name group stands for it)."""
+    skip = {name_key(n) for n in skip_names if name_key(n)}
+    out: list[tuple[str, list[Entry]]] = []
+    for rel in sorted(registries):
+        if rel not in ENTITY_FILES:
+            continue
+        reps: dict[str, Entry] = {}
+        for e in registries[rel]:
+            key = name_key(e.title)
+            if key and key not in skip:
+                reps.setdefault(key, e)
+        toks = {k: frozenset(k.split()) for k in reps}
+        parent = {k: k for k in reps}
+
+        def find(k):
+            while parent[k] != k:
+                parent[k] = parent[parent[k]]
+                k = parent[k]
+            return k
+        for a in reps:
+            for b in reps:
+                if a != b and toks[a] < toks[b]:                  # a's words are all in b, and b has more
+                    parent[find(a)] = find(b)
+        clusters: dict[str, list[str]] = {}
+        for k in reps:
+            clusters.setdefault(find(k), []).append(k)
+        for keys in clusters.values():
+            if len(keys) > 1:
+                out.append((rel, [reps[k] for k in sorted(keys, key=lambda k: (len(k), k))]))
+    return out
+
+
+def explicit_group(store, keep: str, drop: list[str], rel: str = "characters.md") -> Group:
+    """A merge the author asked for by slug. Raises ValueError, writing nothing, when it cannot be one: a registry that is
+    not a registry of things, a slug that is not there, the same slug twice, or the player's own sheet."""
+    if rel not in ENTITY_FILES:
+        raise ValueError(f"{rel} is not a registry of characters, places, factions or items")
+    entries = {e.slug: e for e in store.entries(rel)}
+    wanted = [keep, *drop]
+    missing = [x for x in wanted if x not in entries]
+    if missing:
+        raise ValueError(f"not in {rel}: {', '.join(missing)}")
+    if len(set(wanted)) != len(wanted) or not drop:
+        raise ValueError("give one entry to keep and at least one other, each once")
+    skip = {name_key(n) for n in _player_names(store)}
+    if any(name_key(entries[x].title) in skip for x in wanted):
+        raise ValueError("the player's own sheet is never merged here")
+    return Group(rel, keep, tuple(drop), "your choice")
+
+
 def apply_merges(store, groups: list[Group]) -> dict:
     """Back up what will change, then merge. Returns {"backup": path | None, "merged": n, "dropped": n}.
     Safe to run twice: a second plan finds nothing."""
@@ -181,6 +239,19 @@ def apply_merges(store, groups: list[Group]) -> dict:
     return {"backup": str(backup), "merged": merged, "dropped": dropped}
 
 
+def suggestions(store) -> list[str]:
+    """Lines naming entries that may be one character under several names (never merged by the automatic pass)."""
+    regs = {rel: store.entries(rel) for rel in sorted(ENTITY_FILES)}
+    lines = []
+    for rel, es in similar_names(regs, skip_names=_player_names(store)):
+        names = ", ".join(f"{e.title!r} ({e.slug})" for e in es)
+        keep = max(es, key=lambda e: (len(e.body), len(e.title)))
+        others = " ".join(e.slug for e in es if e is not keep)
+        lines.append(f"{rel}: possibly the same: {names}. If they are, merge with: --merge {keep.slug} {others}"
+                     + ("" if rel == "characters.md" else f" --registry {rel}"))
+    return lines
+
+
 def report(store, groups: list[Group]) -> list[str]:
     if not groups:
         return ["Nothing to merge."]
@@ -202,6 +273,10 @@ def main(argv=None) -> int:
                                                   "a live install is never touched by accident)")
     ap.add_argument("--save", required=True, help="the save's slug")
     ap.add_argument("--apply", action="store_true", help="back up and merge; without it nothing is written")
+    ap.add_argument("--merge", nargs="+", metavar="SLUG", help="merge exactly these entries instead of the automatic same-name "
+                    "pass: the first slug stays, the others are folded into it (a choice only you can make: see the "
+                    "'possibly the same' lines)")
+    ap.add_argument("--registry", default="characters.md", help="the file --merge works in (default characters.md)")
     args = ap.parse_args(argv)
     from .memory import Library
     home = Path(args.home)
@@ -209,9 +284,19 @@ def main(argv=None) -> int:
         print(f"no save {args.save!r} under {home}", file=sys.stderr)
         return 2
     store = Library(home).store(args.save)
-    groups = plan_for_store(store)
+    if args.merge:
+        try:
+            groups = [explicit_group(store, args.merge[0], args.merge[1:], args.registry)]
+        except ValueError as exc:
+            print(f"cannot merge: {exc}", file=sys.stderr)
+            return 2
+    else:
+        groups = plan_for_store(store)
     for line in report(store, groups):
         print(line)
+    if not args.merge:
+        for line in suggestions(store):
+            print(line)
     if not args.apply:
         if groups:
             print("Dry run: nothing was written. Add --apply to back up and merge.")
