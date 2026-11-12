@@ -174,6 +174,10 @@ def test_settings():
     for junk in (7, "", "x" * 500, ["a"], None):
         got = settings({"canon": {"shadow": True, "model": junk, "host": junk}})
         assert got["model"] == "gemma3:4b" and got["host"] == "http://localhost:11434", junk
+    assert settings({"canon": {"shadow": True}})["identity_via_pronoun"] is False, "off by default (D-024)"
+    for junk in ("true", 1, "on", None, []):
+        assert settings({"canon": {"shadow": True, "identity_via_pronoun": junk}})["identity_via_pronoun"] is False, junk
+    assert settings({"canon": {"shadow": True, "identity_via_pronoun": True}})["identity_via_pronoun"] is True
     print("1. shadow needs a literal true; every value is bounded; junk falls back")
 
 
@@ -916,6 +920,26 @@ def test_sheets_are_not_authored_once_a_story_is_under_way():
     print("22. an under-way story, a character met later and a sheet with no Visual label are never seeded")
 
 
+def test_a_look_through_a_pronoun_reaches_canon_only_when_switched_on():
+    """D-035: the reader takes an identity fact said with "she" for the one character the nearest sentences name, only
+    when canon.identity_via_pronoun is true; by default (D-024) it never does."""
+    texts = ["Odile Marsh looked up from the rope.", "She pushed back her raven hair."]
+    script = [("raven hair", [claim("she", "identity.hair", "set", "raven", "her raven hair")])]
+    got = {}
+    for label, over in (("off", {}), ("on", {"identity_via_pronoun": True})):
+        store = new_save()
+        story(store, *texts)
+        sh, _ = shadow(store, **over)
+        SCRIPT[:] = script
+        try:
+            sh.reconcile()
+        finally:
+            SCRIPT[:] = ORIGINAL_SCRIPT
+        got[label] = sh._store().canon.current("odile", "identity.hair")
+    assert got == {"off": None, "on": "raven"}, got
+    print("23. a look said with 'she' reaches canon only when identity_via_pronoun is on")
+
+
 try:
     for fn in (test_settings, test_off_by_default_costs_nothing, test_observe_only,
                test_a_pass_and_its_report, test_it_follows_every_kind_of_change,
@@ -931,7 +955,8 @@ try:
                test_removing_the_last_correction_releases_its_value,
                test_canon_settings_survive_the_config_file,
                test_authored_sheets_seed_a_new_story,
-               test_sheets_are_not_authored_once_a_story_is_under_way):
+               test_sheets_are_not_authored_once_a_story_is_under_way,
+               test_a_look_through_a_pronoun_reaches_canon_only_when_switched_on):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

@@ -270,14 +270,16 @@ class GenderVotes:
 
 
 def passage_who(canon, prose: str, *, votes: GenderVotes, player: str | None,
-                before: list[str], player_is: str | None = None) -> Who:
+                before: list[str], player_is: str | None = None,
+                identity_reach: int | None = None) -> Who:
     """The validator's view of this turn, from the turns replayed so far. `player_is` is the
-    player's gender when player.md states it, and wins over the votes."""
+    player's gender when player.md states it, and wins over the votes. `identity_reach` lets a
+    pronoun name the subject of an IDENTITY fact within that many sentences (off by default, D-035)."""
     genders = votes.genders()
     if player and player_is:
         genders[player] = player_is
     return make_who(canon, prose, genders=genders, player=player,
-                    before="\n".join(before[-BEFORE_TURNS:]))
+                    before="\n".join(before[-BEFORE_TURNS:]), identity_reach=identity_reach)
 
 
 BEFORE_TURNS = 5        # narrator turns before this one that a pronoun may look back into

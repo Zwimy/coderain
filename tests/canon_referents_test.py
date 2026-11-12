@@ -290,6 +290,48 @@ def test_the_player_is_found_from_player_md_or_config():
     print("10. the player comes from player.md or config; a passage is read if it names someone or says 'you'")
 
 
+def test_identity_through_a_pronoun_only_when_switched_on():
+    """D-035. Off by default (D-024: identity is first write wins, so a wrong attribution is permanent). With a reach
+    it takes a look through "she" or "he" for the one compatible character the nearest sentences name, and no further:
+    measured on 36 look sentences from soak replies where the intended character is known, the rule was right 34 times
+    when it answered and answered about half the time."""
+    def run(claim_of, prose, before, turn, reach, genders=None, entity="she"):
+        s = _store()
+        who = make_who(s.canon, prose, genders=genders or {}, player="finn", before=before, identity_reach=reach)
+        return s, _run(s, claim_of(entity), prose, who, turn=turn)
+    hair = lambda ent: _claim(ent, "identity.hair", "set", "raven", "her raven hair")           # noqa: E731
+    prose = "She turns, her raven hair loose."
+    s, d = run(hair, prose, "Odile Marsh waited by the door.", 1, None)
+    assert (d.status, d.reason) == ("reject", "unresolved_entity"), "off (the default): a pronoun never names an identity subject"
+    s, d = run(hair, prose, "Odile Marsh waited by the door.", 1, 2)
+    assert (d.status, d.entity, d.via) == ("commit", "odile", "pronoun"), d
+    assert s.canon.current("odile", "identity.hair") == "raven"
+    # two possible people in the nearest sentence, or the name too far back, is still unclear
+    s, d = run(hair, prose, "Odile Marsh and Tamsin Reeve waited.", 1, 2)
+    assert (d.status, d.reason) == ("reject", "unresolved_entity"), d
+    far = "Odile Marsh waited. The rain fell. The tide came in. The lamps burned low."
+    s, d = run(hair, prose, far, 1, 2)
+    assert (d.status, d.reason) == ("reject", "unresolved_entity"), "more than two sentences back"
+    s, d = run(hair, prose, far, 1, 30)
+    assert (d.status, d.entity) == ("commit", "odile"), "the reach is the switch's number"
+    # a quote about a man is still not about her; and the Scribe naming someone the passage does not name works too
+    s, d = run(lambda e: _claim(e, "identity.hair", "set", "raven", "His raven hair"), "He turns, his raven hair loose.",
+               "Odile Marsh waited by the door.", 1, 2, genders={"odile": "F"})
+    assert d.status == "reject", d
+    named = lambda e: _claim("Odile", "identity.eyes", "set", "green", "her green eyes")      # noqa: E731
+    s, d = run(named, "She tilts her green eyes.", "Odile Marsh waited by the door.", 1, 2, entity="Odile")
+    assert (d.status, d.via) == ("commit", "context"), d
+    s, d = run(named, "She tilts her green eyes.", "Odile Marsh waited by the door.", 1, None, entity="Odile")
+    assert (d.status, d.reason) == ("reject", "entity_not_in_passage"), "off: as D-024 says"
+    # first write still wins: a later, different value through a pronoun is not committed over the first
+    s, d = run(hair, prose, "Odile Marsh waited by the door.", 1, 2)
+    d2 = _run(s, _claim("she", "identity.hair", "set", "platinum", "her platinum hair"), "She smiles, her platinum hair bright.",
+              make_who(s.canon, "She smiles, her platinum hair bright.", before="Odile Marsh waited.", identity_reach=2), turn=2)
+    assert s.canon.current("odile", "identity.hair") == "raven" and d2.status != "commit", (d2, s.canon.current("odile", "identity.hair"))
+    print("9c. identity through a pronoun is off by default and, with a reach, answers only for one compatible character "
+          "within that many sentences")
+
+
 try:
     for fn in (test_a_name_must_be_capitalised_where_it_occurs_and_not_follow_the_,
                test_the_nearest_sentence_that_names_one_character_decides,
@@ -300,6 +342,7 @@ try:
                test_quote_helpers,
                test_gender_is_read_from_sentences_that_name_one_character,
                test_the_validator_resolves_pronouns_for_state_and_never_for_identity,
+               test_identity_through_a_pronoun_only_when_switched_on,
                test_you_is_the_player_for_every_slot,
                test_a_quote_about_a_woman_is_not_a_fact_about_a_man,
                test_an_empty_who_changes_nothing,

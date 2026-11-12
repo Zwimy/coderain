@@ -86,6 +86,16 @@ class Who:
     genders: dict = field(default_factory=dict)       # entity id -> "F" | "M", when known
     # (gender, quote, sentences to look back) -> entity id, or None when it cannot say
     refer: Callable[[str, str, int], str | None] | None = None
+    # How far back a pronoun may look for its name when the fact is an IDENTITY fact. None (the default, D-024) means
+    # never: identity is first write wins and permanent. A number turns it on (canon: identity_via_pronoun, D-035).
+    identity_reach: int | None = None
+
+    def reach(self, slot: str) -> int | None:
+        """How many sentences back a pronoun may look for its name, for a fact in `slot`; None where a guess is not
+        allowed."""
+        if slot.startswith("state."):
+            return STATE_REACH
+        return self.identity_reach if slot.startswith("identity.") else None
 
     def about(self, eid: str, quote: str, reach: int | None) -> bool:
         """The passage does not name `eid`, but the quote is plainly about them: the player
@@ -115,9 +125,6 @@ class Who:
 # passage, or "you" for the player, which is exact.
 STATE_REACH = 30                      # sentences a pronoun may look back for its name
 
-
-def _reach(slot: str) -> int | None:
-    return STATE_REACH if slot.startswith("state.") else None
 
 # How many items a state list keeps. Past it the OLDEST goes, because state is latest
 # wins: the old rule refused the new item and kept the old ones, so a full list showed
@@ -487,7 +494,7 @@ def validate(canon: Canon, claims: list[Claim], prose: str, *, turn: int,
         pre: list[dict] = []
         kind = pronoun_kind(c.entity)
         if kind is not None:                          # a pronoun: the code decides who
-            eid = who.resolve(kind, c.evidence, _reach(c.slot))
+            eid = who.resolve(kind, c.evidence, who.reach(c.slot))
             if eid is None or eid not in scratch.entities:
                 d.reason = "unresolved_entity"
                 continue
@@ -497,7 +504,7 @@ def validate(canon: Canon, claims: list[Claim], prose: str, *, turn: int,
         if kind is None and eid is not None:
             ent = scratch.entities[eid]
             if not named_in_prose([ent["name"], *ent["aliases"]], prose):
-                if not who.about(eid, c.evidence, _reach(c.slot)):
+                if not who.about(eid, c.evidence, who.reach(c.slot)):
                     d.reason = "entity_not_in_passage"
                     continue
                 d.via = "context"

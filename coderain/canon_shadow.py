@@ -43,6 +43,8 @@ Off unless config.yaml says so:
       card_chars: 2400            # the most the card may add to a prompt (about 600 tokens)
       inject_state: true          # false: identity only (hair, eyes, marks), no clothing etc.
       identity: needed            # needed (default): a look is shown only when it matters; always: every turn
+      identity_via_pronoun: false # true: a look said with "he"/"she" is read for the one character the nearest
+                                  # sentences name (about 94% right when it answers, D-035); off = D-024
 
 What a turn's card did is in <save>/canon/injections.jsonl (one row of counts per turn)
 and <save>/canon/card-last.txt (the last card in full, marked sent or preview).
@@ -79,8 +81,9 @@ BACKFILL_ALL = 10 ** 9
 DEFAULTS = {"shadow": False, "model": "gemma3:4b", "host": "http://localhost:11434",
             "num_ctx": 8192, "backfill": 200, "max_errors": 3,
             "inject": "off", "card_chars": 2400, "inject_state": True,
-            "identity": "needed"}
+            "identity": "needed", "identity_via_pronoun": False}
 _ROWS_KEEP = 6000                    # rows.jsonl is trimmed to this many lines
+IDENTITY_REACH = 2                   # sentences a pronoun may look back for its name when identity_via_pronoun is on
 RECENT_FOR_CARD = 4                  # latest turns whose names pick the cast
 _INJECT_LOG_BYTES = 120_000          # injections.jsonl is cut to its newest half past this
 
@@ -124,6 +127,7 @@ def settings(raw) -> dict:
                      else "off")
     out["card_chars"] = _int(sec.get("card_chars"), DEFAULTS["card_chars"], 600, 4000)
     out["inject_state"] = sec.get("inject_state") is not False
+    out["identity_via_pronoun"] = sec.get("identity_via_pronoun") is True      # a literal true, like shadow: it changes what gets locked
     out["identity"] = "always" if isinstance(sec.get("identity"), str) and sec["identity"].strip().lower() == "always" else "needed"
     pl = sec.get("player")
     out["player"] = (pl.strip() if isinstance(pl, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", pl.strip())
@@ -524,7 +528,8 @@ class CanonShadow:
                 out["skipped"] += 1
             else:
                 who = passage_who(cstore.canon, prose, votes=votes, player=player,
-                                  before=before, player_is=player_gender(player_text))
+                                  before=before, player_is=player_gender(player_text),
+                                  identity_reach=IDENTITY_REACH if self.cfg["identity_via_pronoun"] else None)
                 rep = process_turn(cstore, idx, prose, self._get_scribe(),
                                    create_unknown=False, record_contradictions=True, who=who,
                                    refused=refused)

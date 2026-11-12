@@ -161,7 +161,8 @@ def explain(canon: Canon, passage: Passage, quote: str, gender: str, *,
 
 
 def make_who(canon: Canon, prose: str, *, genders: dict | None = None,
-             player: str | None = None, before: str = "") -> Who:
+             player: str | None = None, before: str = "",
+             identity_reach: int | None = None) -> Who:
     """The validator's view of this passage: who "you" is, who is which gender, and how to
     resolve a pronoun in a quote. `before` is the narrator turns just before this one."""
     genders = dict(genders or {})
@@ -173,7 +174,7 @@ def make_who(canon: Canon, prose: str, *, genders: dict | None = None,
             cache.append(Passage(canon, prose, before, player))
         return referent(canon, cache[0], quote, gender, genders=genders, reach=reach)
 
-    return Who(player=player, genders=genders, refer=refer)
+    return Who(player=player, genders=genders, refer=refer, identity_reach=identity_reach)
 
 
 # --- gender, read from the story -----------------------------------------------------

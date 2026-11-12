@@ -1445,3 +1445,52 @@ that D-022 to D-024 exist to stop. (2) Ask the Scribe about one character at a t
 (3) A larger local Scribe (llama3.1:8b did better on recall in D-019). One 4B model, one story, one script, 25 statements.
 
 **Tooling.** The soak harness and scorer used here live outside the repo (scratchpad); nothing in this entry needs code.
+
+## D-035 — A look said with "he" or "she" can be read for the character the nearest sentences name, behind a switch that is off
+
+**Context.** D-034 found the reader captured 3 of the 9 looks a narration-first story established, and that 5 of the 9 were
+stated with a pronoun or in reply to a probe, which the reader refuses by design (D-024: identity is first write wins and
+permanent, and the nearest-name rule was right about 9 in 10 on hand-read samples, one wrong lock in ten being too many).
+D-034 said to measure before changing anything.
+
+**Measured** (no model; every probe reply in every soak run). On a probe turn the player studies one character, so a
+hair or eye sentence of the reply that names no one is about that character unless the reply is describing someone else.
+Over those sentences that use a gendered pronoun, with the existing rule and a reach of 2 sentences: excluding the one run whose
+replies were full of copied card syntax, 64 sentences, the rule answered 36 times (56%) and was right 34 of them (94%); of the
+two it missed, both look like replies that describe a second woman, so the true error may be lower. With the contaminated run
+in, 84 answers and 57% right, which shows what a degenerate reply does to the rule and is not representative. A 94% rate on 36
+cases has a wide interval (roughly 82 to 99%), and it matches the 9-in-10 of the hand-read state samples.
+
+**Decision.** `canon: {identity_via_pronoun: true}` (a literal true, default false, so D-024 stands unless the author turns it
+on) gives the reader a reach of 2 sentences for an IDENTITY fact: `Who.identity_reach`, `Who.reach(slot)` (state facts keep
+their 30), `make_who`, `passage_who`, the shadow's setting. The rest is unchanged: exactly one compatible character in the
+nearest sentence that names anyone, none or two is "unclear", a quote about a woman is refused for a man, a pronoun in
+speech and a name after the pronoun do not count, first write still wins and an author's correction (D-028) still outranks.
+Why a switch and not a change: the trade is wrong locks (about one in twenty or fewer, by this measure) against capture (a
+nameless look sentence is about half of what a narration-first story offers), and a wrong first look is permanent until the
+author corrects it, so it is the author's call, not mine.
+
+**Not done.** A requirement that a pronoun-sourced look be seen twice before it is committed was considered and not built: a
+story states a look about once (0.3 to 0.8 look sentences a turn here), so most would never commit. The ledger does not record
+that a value came through a pronoun (the report counts them), so the Canon panel cannot flag them yet.
+
+**Tests.** `canon_referents_test.py` 9c (off by default, on with a reach, two candidates, too far back, a man's quote, the
+context route, first write still wins), `canon_shadow_test.py` 1 and 23 (the setting, and a look said with "she" reaching the
+ledger only when on); 11 guard mutations are caught and one is equivalent (the default constant is overwritten from the
+config).
+
+**On a model run** (the narration-first story of D-034, same script, card on, `identity_via_pronoun: true`, 160 turns, local
+gemma3:4b). The story is a different realisation each run (this one stated only 6 of the 12 looks, against 9 and 7 before), so
+this is not a controlled comparison and the numbers are small. The reader's ledger held 4 of the 6 looks the story established
+(66%, against 3 of 9, 33%, with the switch off): 3 agree with the story's first colour, 1 does not; it held identity facts for 5
+characters instead of 3, and 3 values my scorer did not see stated. The 19 identity records quote "her thick, grey hair", "his
+dark eyes", "her silver-streaked hair" and the like: the pronoun path was used and every attribution I could check from the
+quote and the cast is plausible. The one value that disagrees with the story's first colour is a character's eyes that the
+story gave as ashen (a probe reply, not read by the reader), then dark, then grey: the ledger wrote the first one it read
+(dark) and held the later "grey" back as a contradiction, which is the story being inconsistent with itself and the reader
+missing the first mention, not a wrong pronoun. No wrong attribution through a pronoun was found in this run; with 19 records
+that says little about a one-in-twenty rate.
+
+**What I would do.** Leave the default off until it has run on a real story with the Canon panel open, because a wrong first
+look is the cost and the panel is where it would be caught and corrected. It is a one-line config change for the author who wants
+more of the story's looks captured.
