@@ -1495,6 +1495,48 @@ story gave as ashen (a probe reply, not read by the reader), then dark, then gre
 missing the first mention, not a wrong pronoun. No wrong attribution through a pronoun was found in this run; with 19 records
 that says little about a one-in-twenty rate.
 
+**Correction (D-036).** The comparison above is across two different stories, so the rise in capture cannot be credited to the
+switch. On one fixed transcript the switch changed nothing for gemma3:4b and cost llama3.1:8b one value: the benefit is not
+shown, only the 94% accuracy of the rule.
+
 **What I would do.** Leave the default off until it has run on a real story with the Canon panel open, because a wrong first
 look is the cost and the panel is where it would be caught and corrected. It is a one-line config change for the author who wants
 more of the story's looks captured.
+
+## D-036 — On a fixed transcript a larger local reader is more precise, and the pronoun switch changes almost nothing
+
+**Context.** D-034 and D-035 compared readers across different soak runs, and the story is a different realisation each run (the
+Writer is a sampled 4B model), so the capture figures were never comparable: one run stated 9 of 12 looks, another 6, another 7.
+This takes one transcript and changes only the reader. The transcript is the card-off no-sheets story of D-034: 161 narrator
+turns, nobody's looks written down, so the truth is the first colour the story gives each character's hair or eyes (my scorer,
+7 of 12 looks stated). Each reader reads a fresh copy of the save, backfill all, through the real reader and validator, and the
+ledger is compared with the story.
+
+| reader | pronoun switch | captured of 7 | agree with the story's first colour | differ | identity records | minutes |
+|---|---|---|---|---|---|---|
+| gemma3:4b | off | 5 | 3 | 2 | 17 | 46.8 |
+| gemma3:4b | on | 5 | 3 | 2 | 17 | 49.3 |
+| llama3.1:8b | off | 5 | 5 | 0 | 29 | 30.1 |
+| llama3.1:8b | on | 5 | 4 | 1 | 29 | 29.1 |
+
+**What it shows.**
+- **The larger reader is more precise, not better at recall.** Both capture 5 of 7. gemma3:4b's two disagreements are a hairstyle
+  phrase filed as a hair value ("intricately braided hair", which the shape rule accepts as a description of hair) and an eye colour
+  that is not the story's first; llama3.1:8b has none. It wrote 29 identity records against 17 (marks, ages and repeats included),
+  and it was faster here (30 minutes against 47 to 49).
+- **The pronoun switch did nothing on this transcript for gemma3:4b** (the same 17 records, the same values) and cost llama3.1:8b one
+  value that disagrees with the story's first colour (a character's eyes written "dark" where the story first said ashen; the story
+  states it inconsistently, so it may be the story and not the pronoun). **This corrects D-035:** the rise from 3 of 9 looks to 4 of 6
+  between two soak runs was a different story, not the switch. The 94% accuracy of the nearest-name rule (D-035's offline
+  measurement) stands; the benefit of using it for identity is not shown. The default stays off and I would not recommend turning
+  it on on this evidence.
+
+**Recommendation, not a change.** `canon: {model: llama3.1:8b}` reads this story more precisely than the default gemma3:4b. The
+shipped default stays gemma3:4b because every install has it and a config naming a model that is not pulled degrades the reader.
+llama3.1:8b needs about 5 GB of video memory: alone on an 8 GB card with a hosted Writer it fits; next to a local Writer the two
+models may have to swap, which was not measured.
+
+**Not done.** One transcript and 7 looks: a difference of one or two values is within what a re-read would change. Nothing was
+tried at a larger size than 8B, and the Scribe prompt was not touched (asking about one character at a time when the player's action
+names one, D-034's second idea, is still untried). A rule that refuses a hairstyle phrase as a hair value was not written;
+it would be a shape-rule change with its own measurement (D-022).
