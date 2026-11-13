@@ -1996,8 +1996,10 @@ rule, and one class of finding: none of the four characters states a hair or eye
 until the story first states one. The first version of this check passed three of the four sheets because the word "hair" or "eye"
 appeared ("hair wet to the scalp", "a face the eye slides off of"); reading the sheets showed that was the wrong test, and it now
 needs a colour word beside the noun. The Tall Man and the Arbiter are uncanny on purpose (the Arbiter is never the same twice), so a
-finding there is by design and the report says a shapeshifter may be that on purpose; Wren and Corin should have looks, which is the
-next change. Nothing was found for the other classes, which says the shipped world is clean, not that generated worlds are: the
+finding there is by design and the report says a shapeshifter may be that on purpose. Wren and Corin should have looks, so the
+shipped sheets now state them (Wren: black hair, pale grey eyes; Corin: brown hair, hazel eyes), which gives the canon reader an
+authored first write to hold from the first turn of the default story (D-029); the audit of the shipped scenario now reports only
+the two uncanny characters, and a test pins that. Nothing was found for the other classes, which says the shipped world is clean, not that generated worlds are: the
 audit's real use is on a save a model has built.
 
 **Tests.** `creation_audit_test.py` builds a world with each defect and requires each to be found (and a real link and a

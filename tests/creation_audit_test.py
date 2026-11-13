@@ -135,6 +135,11 @@ def test_the_cli():
     d = cli("--default", "--out", str(dout), expect=0)
     inv = json.loads(dout.read_text(encoding="utf-8"))["inventory"]
     assert "creation audit of" in d.stdout and inv["characters.md"] >= 3 and inv["locations.md"] >= 2, inv   # the shipped world
+    found = json.loads(dout.read_text(encoding="utf-8"))["findings"]
+    # The shipped world is clean but for two characters who are uncanny on purpose (the Arbiter is never the same twice).
+    # Wren and Corin state a hair and an eye colour, so the canon card has something to hold for them (D-049).
+    assert sorted((f["check"], f["where"]) for f in found) == [("no_looks", "characters.md:the-arbiter"),
+                                                               ("no_looks", "characters.md:the-tall-man")], found
     assert cli(str(WORK / "no-such-folder")).returncode != 0
     assert cli().returncode == 2
     print("6. the CLI prints findings, --strict exits 1 on them and 0 on a clean folder, --default audits the shipped scenario, "

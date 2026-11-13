@@ -149,8 +149,8 @@ status: alive - sitting beside you, waiting on your answer
 triggers: ferryman, coin, contact, guide
 relationships: player: offering to carry you across
 
-**Visual:** Grey coat gone dark at the shoulders with rain, hair wet to the
-scalp, a stillness that doesn't belong in a diner.
+**Visual:** Grey coat gone dark at the shoulders with rain, black hair wet to
+the scalp, pale grey eyes, a stillness that doesn't belong in a diner.
 **Mentality:** Been across and back too many times to lie or to rush. Bound by
 the Concordance — she will not force the coin on you, and says so.
 **Voice:** Low, level, spare. e.g. "I can open the door. I can't walk you
@@ -182,7 +182,8 @@ importance: 2
 delay: 4
 triggers: friend, work, morning
 
-**Visual:** Tired, kind, always half-laughing at something.
+**Visual:** Tired, kind, always half-laughing at something, with untidy brown
+hair and hazel eyes.
 **Mentality:** Fully asleep inside the Veil and content there. The face that
 makes leaving cost something.
 **Voice:** Warm, ordinary. e.g. "You've been weird all week — sit down, eat
