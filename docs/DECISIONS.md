@@ -1846,7 +1846,7 @@ values change. Only then is the default flipped.
 **Tests (added with the gate).** `canon_accessories_test.py` 4 (the schema and prompt ask only when told to, the Scribe passes the
 gate on), `canon_shadow_test.py` 1 (the setting) and `soak_scribe_corpus_test.py` 7 (the slices); 11 of 11 gate guards caught.
 
-## D-045 — Fate: a hidden D20 nudges where the next turn goes (built; the first model run is pending)
+## D-045 — Fate: a hidden D20 nudges where the next turn goes (built; the first model run is D-053)
 
 **The idea (the owner's).** An add-on for the immediate story progression: the model writes directions for where the scene goes next, a
 D20 picks one (1-2 a setback, 3-10 and 11-18 two neutral developments, 19-20 a stroke of luck), and the Writer is steered by it. "Or
@@ -2105,3 +2105,50 @@ is refused without calling the generator; "Generate the rest" still streams the 
 21 guard mutations caught after one gap was closed (generator warnings were not asserted). `webapp_smoke_test.py` case 8 drives the
 dialog in a real browser (it opens, an empty sentence is refused without closing it, a failed run says so, keeps the sentence,
 re-enables the button and leaves no world); 5 mutations of the dialog and the button caught.
+
+## D-053 — Fate on a real model: the first preview found five defects (fixed) and one limit (not)
+
+**The run (2026-11-13).** The D-045 preview, on two local models through the real engine: the scripted player of `soak play` (an invented
+ferry-town story, role-only sheets, 80 turns, seed 5), fate in preview mode, the Writer sent nothing. gemma3:4b took 24 minutes, llama3.1:8b
+95 minutes (the 8B model spills off the 8 GB card at a 16k context; its turns averaged 71 s, fate added about 8 s of that). Every fate call
+was recorded (latency, reply, error) through a wrapper in the session scratchpad, not in the repo.
+
+**What it measured, before any fix.**
+- First-answer validity: gemma3:4b 63 of 96 calls usable at once (66%), llama3.1:8b 81 of 94 (86%). A usable first answer ended in a
+  line for 44 of 80 exchanges (gemma) and 64 of 80 (llama); the rest got no steering and one health row.
+- Why they failed: lines over the 200 character limit were 21 of gemma's 36 failures and 10 of llama's 16 (the models write 25 to 45
+  words when asked for 25; refused lengths were 201 to 354, mostly under 285); a reply in another JSON shape (the Writer's own
+  `{"deltas": ...}` sidecar format, copied from the story context, 3 times) or with no direction; unparseable JSON (10 on gemma,
+  2 on llama; the raw text was not kept, so the cause is still unknown); a repeat (4).
+- Cost: a fate call took 3.3 s on gemma3:4b (a 13 s turn) and 7.8 s on llama3.1:8b. Neither is a problem next to the Writer.
+- The `stakes` valve: gemma3:4b labelled every setback and windfall "some" (0 of 11 switched off); llama3.1:8b labelled 7 of 16 "none",
+  which fits a script of mostly quiet actions. So the valve works only on the larger model.
+- Quality, read line by line (all 44 and 57): the setbacks were usually real events (gemma 4 of 5); the windfalls were not
+  (gemma: at most 1 of 6 a stroke of luck for the player, the rest echoed "help arrives" or were weather; llama: none); the surprises were mostly
+  atmosphere (rain, a glow, a hum); the natural lines were filler (weather, or a retelling of the player's own action). 16 of gemma's 44
+  lines opened on rain, wind or a sound, 24 lines in each run mention the player (some of those are fine: "a guard stops you"), 12 of gemma's 44 began by copying the kind's
+  description ("a surprising but harmless development: ...") and 16 restated an earlier line.
+
+**What was fixed (all in `coderain/fate.py`, each with a test that fails without it).**
+1. The length limit is 300 characters, and the request asks for 20 words (the limit is a bound, the request is the target).
+2. An unusable first answer of any kind gets ONE more try that names what was wrong ("YOUR LAST ANSWER WAS REFUSED: ..."), up to
+   `ATTEMPTS = 2`. A model that raises (a dead or stuck server) is asked once: the second wait would only double the delay.
+3. A kind label copied into the answer is dropped when it is exactly at the start (`a setback:`, `a small stroke of luck for the
+   player:` and the other description openers) and refuses the line when it sits inside the sentence.
+4. Also refused, so the second try can ask again: a line under three words ("help arrives"), a line that stops mid-sentence (a trailing
+   colon, comma, hyphen or dash), a line whose first word is "You" (the Writer owns what the player does; "Your pack is torn" and
+   "As you reach the door, a bell rings" are events and pass).
+5. The record's `model` field was blank on every real run (the real client keeps the name on `profile.model`, a stub as `model`).
+6. The request was rewritten to ask for an EVENT (a person or thing does something that changes the situation; weather, sounds, smells and
+   moods are not events), gives one example per kind from a different story ("copy the shape, never the content"), and describes each
+   kind in a sentence that does not read like a label.
+
+**What was not fixed, and why.** Whether a 4B or 8B model can write a windfall or a surprise that is an event and not atmosphere is a
+quality limit, not a code defect, and the second run below measures how far the new request moves it. The stakes valve on a model that
+says "some" for everything is also a model limit; it is harmless (the band was always allowed to fire). The unparseable-JSON failures
+need their raw text, which the second run keeps. Natural stays a model-written sentence for now; the first run says it is filler
+(weather or a retelling), and if the rewritten request does not change that, making natural send nothing is the next step (it halves
+the extra calls, and the chapter directive already says every scene must advance).
+
+**Not verified.** Whether the Writer follows a steering line, or copies it (`leaks` only logs); how any of this reads on a hosted
+model; the fate on/off soak (same moves, same dice, with and without steering).

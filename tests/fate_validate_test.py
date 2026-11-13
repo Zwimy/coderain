@@ -3,7 +3,10 @@
 The model proposes one sentence and a `stakes` label; code decides whether to use it. Invariant 1: the validator is
 pure code, never an LLM.
 
- 1) clean_line: one line, bounded, no fences or headings or lists; too long is refused, not cut
+ 1) clean_line: one line, bounded, no fences or headings or lists; too long is refused, not cut. Refused too, each
+    seen in a real run on a 4B and an 8B model (D-053): the kind's description copied back as a label, a line under
+    three words, one that stops mid-sentence, one whose subject is the player. A label at the very start is dropped
+    instead. A possessive ("Your pack is lost") and a world event that mentions the player are fine
  2) parse_reply: the stakes label is 'some' only when the model said so (missing, invalid or any other word is none),
     and a reply that is not an object, or has no direction, is refused with a reason
  3) armour: a setback that kills or removes the player or a protected character is vetoed; the same words about
@@ -13,6 +16,7 @@ pure code, never an LLM.
  6) the Writer's directive never carries the die, the tier or a number, and says what it must not override
  7) the request to the model names the kind, carries the chapter goal and the recent directions, and names a repeat
  8) the event line: preview shows everything, on shows the die only when asked and never the sentence
+ 9) the record names the model (the real client keeps it on its profile; it was blank until a real run showed it)
 """
 import sys
 from pathlib import Path
@@ -30,11 +34,42 @@ def test_clean_line():
     for bad in ("", "   ", None, 7, ["x"], "```json\nx```", "a `code` span"):
         text, why = fate.clean_line(bad)
         assert text == "" and why, (bad, text, why)
-    ok, _ = fate.clean_line("x" * fate.MAX_TEXT)
+    def line(n):                                            # n characters, many words, no end punctuation
+        return ("ab " * n)[:n - 1] + "z"
+    ok, _ = fate.clean_line(line(fate.MAX_TEXT))
     assert len(ok) == fate.MAX_TEXT
-    text, why = fate.clean_line("x" * (fate.MAX_TEXT + 1))
+    text, why = fate.clean_line(line(fate.MAX_TEXT + 1))
     assert text == "" and "limit" in why, (text, why)
-    print("1. one clean line, bounded; fences, empties and over-long lines are refused, not cut")
+    assert fate.MAX_TEXT >= 300, "the first real runs wrote 201 to 284 characters when asked for 20 words"
+    # an exact label at the start is dropped, the sentence behind it kept
+    for labelled, kept in (
+            ("a surprising but harmless development: a crab scuttles out from under the bar",
+             "a crab scuttles out from under the bar"),
+            ("A setback: Bram demands to see the letter before you may speak",
+             "Bram demands to see the letter before you may speak"),
+            ("a small stroke of luck for the player: the ferryman offers a free crossing",
+             "the ferryman offers a free crossing"),
+            ("The ordinary next beat: Ottoline names a price for the room", "Ottoline names a price for the room"),
+            ("an unexpected but harmless development: a gull lands on the rail and stares",
+             "a gull lands on the rail and stares")):
+        assert fate.clean_line(labelled) == (kept, ""), (labelled, fate.clean_line(labelled))
+    assert fate.clean_line("A surprise guest arrives: the tax collector, early") == \
+        ("A surprise guest arrives: the tax collector, early", ""), "only the exact label forms are stripped"
+    # what stays refused: a label in the middle, a stub of a line, a cut-off line, the player as the subject
+    for bad, word in (("As you step onto the path, a surprising but harmless development: a flock rises", "description"),
+                      ("a small stroke of luck for the player: help arrives", "words"),
+                      ("a small stroke of luck for the player: help", "words"),
+                      ("A sudden gust of wind whips the rain into a frenzy, scattering the sample:", "mid-sentence"),
+                      ("The gate opens, and the guard shrugs,", "mid-sentence"),
+                      ("The sample scatters across the deck " + chr(0x2014), "mid-sentence"),
+                      ("You turn to the keeper and buy a tankard of ale", "player"),
+                      ("You're handed a folded note by a passing child", "player")):
+        text, why = fate.clean_line(bad)
+        assert text == "" and word in why, (bad, text, why)
+    for fine in ("Your pack is torn open by a snagged branch.", "A guard stops you at the gate and asks for a pass.",
+                 "As you reach the door, a bell rings twice behind you."):
+        assert fate.clean_line(fine) == (fine, ""), fine
+    print("1. one clean line, bounded; fences, empties, over-long, labelled, stub, cut-off and player-subject lines are refused")
 
 
 def test_parse_reply():
@@ -92,6 +127,12 @@ def test_directive_and_request():
                                ["Fog rolls in."], offender="rival smuggler offers")
     sysm, user = msgs[0]["content"], msgs[1]["content"]
     assert "a setback" in sysm and "/no_think" in sysm and '"stakes"' in sysm
+    assert fate._EXAMPLE["setback"] in sysm, "the example of the shape is not in the request"
+    assert "REFUSED" not in user and "REFUSED: the direction is under 3 words" in fate.build_messages(
+        "w", [], "", "", "a", "setback", [], note="the direction is under 3 words")[1]["content"]
+    for kind in fate._KIND:                                  # every tier has an example, and the validator accepts it
+        assert fate.clean_line(fate._EXAMPLE[kind]) == (fate._EXAMPLE[kind], ""), (kind, "an example the checks refuse")
+    assert set(fate._EXAMPLE) == set(fate._KIND) == {name for name, _lo, _hi in fate.BANDS}
     assert "WORLD TEXT" in user and "Odile: raven hair" in user and "CHAPTER GOAL:\nReach the gate." in user
     assert "Player: I wait." in user and "Narrator: Rain falls." in user and "PLAYER ACTION:\nI open the door." in user
     assert "- Fog rolls in." in user and "rival smuggler offers" in user
@@ -112,7 +153,27 @@ def test_event_line():
     print("8. preview shows the idea; on shows the die only when asked and never the sentence")
 
 
+def test_model_name():
+    class Profile:
+        model = "real-model"
+
+    class Real:                                              # the real client: the name lives on its profile
+        profile = Profile()
+
+    class Stub:                                              # a test stub: the name is `model`
+        model = "stub-model"
+
+    class Both(Stub):
+        profile = Profile()
+
+    assert fate._model_name(Real()) == "real-model", "the real client's model was blank in every run's record"
+    assert fate._model_name(Stub()) == "stub-model"
+    assert fate._model_name(Both()) == "real-model" and fate._model_name(object()) == ""
+    assert len(fate._model_name(type("L", (), {"model": "m" * 200})())) == 80
+    print("9. the record names the model: from the client's profile, else the stub's attribute, bounded")
+
+
 for fn in (test_clean_line, test_parse_reply, test_armour, test_repeats_and_leaks, test_directive_and_request,
-           test_event_line):
+           test_event_line, test_model_name):
     fn()
 print("\nFATE VALIDATE TESTS PASSED")

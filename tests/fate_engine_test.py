@@ -10,8 +10,10 @@ fate.derive_roll, so each case names the tier it exercises.
  3) preview: the call is made and recorded and the Writer is sent nothing; the idea is on the event line
  4) retry and swipe reuse the cached direction (same sentence, no new call); an undo drops it and a different
     action asks again; the same action after an undo gets the same die
- 5) a failing, garbage or hanging-style reply never breaks the turn: the prose is stored, the Writer's messages are
-    as if fate were off, and there is one health row
+ 5) a failing, garbage or hanging-style reply, on both tries, never breaks the turn: the prose is stored, the Writer's
+    messages are as if fate were off, and there is one health row; a model that raises is asked once, not twice
+ 5b) one unusable first answer (not JSON, too long, the wrong shape, a copied label, the player as subject) gets one more
+    try that names the refusal, and the recovered line is cached and names the model (D-053, from the first real runs)
  6) a quiet scene (stakes none) on a setback or a windfall gives no steering; a natural roll ignores the label
  7) a setback that kills the player is vetoed; a direction that repeats an earlier one is asked for again once
  8) RPG saves skip it (one health row for the whole save, not per turn); the opening and a Continue never use it
@@ -205,10 +207,13 @@ def test_failures():
     base_roles = [m["role"] for m in base_stub.writer_msgs[0]]
     for label, bad in (("garbage", "not json at all"), ("empty", ""), ("raises", RuntimeError("network died")),
                        ("no direction", json.dumps({"stakes": "some"})),
+                       ("sidecar shape", json.dumps({"deltas": {}})),
                        ("fenced", json.dumps({"stakes": "some", "direction": "```x```"})),
-                       ("too long", json.dumps({"stakes": "some", "direction": "word " * 80}))):
+                       ("too long", json.dumps({"stakes": "some", "direction": "word " * 80})),
+                       ("a label", json.dumps({"stakes": "some", "direction": "a small stroke of luck for the player: help arrives"})),
+                       ("the player", json.dumps({"stakes": "some", "direction": "You turn to the keeper and buy ale."}))):
         eng, store, stub = make("on")
-        stub.replies = [bad]
+        stub.replies = [bad, bad]                           # BOTH tries are bad: one is not enough to fail any more
         notes = []
         out = play(eng, notes=notes)
         assert out.startswith("She keeps walking"), (label, out)
@@ -218,7 +223,38 @@ def test_failures():
         assert len(health(store)) == 1, (label, health(store))
         assert any("Fate FAILED" in n for n in notes), (label, notes)
         assert fate.read(store) == [], (label, "a failure was cached")
-    print("5. a garbage, empty, raising, fenced, over-long or direction-less reply never breaks the turn: one health row each")
+        # a dead or hanging server is asked once, not twice: the second wait would only double the delay
+        assert stub.fate_calls == (1 if label == "raises" else fate.ATTEMPTS), (label, stub.fate_calls)
+    print("5. a garbage, empty, raising, fenced, over-long, labelled or player-subject reply, twice, never breaks the "
+          "turn: one health row each; a raising model is asked once")
+
+
+def test_second_try():
+    """The first real runs (a 4B and an 8B model) lost a third of the exchanges to one unusable first answer."""
+    force(12)
+    good = reply("A lamplighter hurries past with a ladder.")
+    for label, bad, why in (("garbage", "not json at all", "JSON"),
+                            ("too long", json.dumps({"stakes": "some", "direction": "word " * 90}), "300"),
+                            ("wrong shape", json.dumps({"deltas": {}}), "direction"),
+                            ("a label", json.dumps({"stakes": "some", "direction": "a surprising but harmless development: a crab"}), "words"),
+                            ("the player", json.dumps({"stakes": "some", "direction": "You walk to the quay and look around."}), "player")):
+        eng, store, stub = make("on")
+        stub.replies = [bad, good]
+        notes = []
+        play(eng, notes=notes)
+        assert stub.fate_calls == 2, (label, stub.fate_calls)
+        assert "lamplighter" in steering(stub.writer_msgs[0])[0], (label, "the second answer was not used")
+        assert not health(store) and not any("FAILED" in n for n in notes), (label, health(store), notes)
+        second = stub.fate_msgs[1][1]["content"]
+        assert "YOUR LAST ANSWER WAS REFUSED" in second and why in second, (label, second[-300:])
+        assert "REFUSED" not in stub.fate_msgs[0][1]["content"], "the first request already named a refusal"
+        assert fate.read(store)[0]["text"] == "A lamplighter hurries past with a ladder."
+        assert fate.read(store)[0]["model"] == "stub-model", "the record did not name the model"
+        # the recovered exchange is cached: a retry asks nobody
+        ok, action = eng.rollback_for_retry()
+        "".join(eng.regenerate(action))
+        assert stub.fate_calls == 2, (label, "a retry asked again after a recovered answer")
+    print("5b. an unusable first answer gets one more try that names the refusal; the recovered line is cached")
 
 
 def test_quiet_scene():
@@ -339,8 +375,8 @@ def test_trinity():
     print("9. the quad pipeline in simple mode is steered like any other; with the Director planning, fate steps aside once")
 
 
-for fn in (test_off, test_on_order_and_event, test_preview, test_retry_swipe_undo, test_failures, test_quiet_scene,
-           test_veto_and_repeat, test_skips, test_trinity):
+for fn in (test_off, test_on_order_and_event, test_preview, test_retry_swipe_undo, test_failures, test_second_try,
+           test_quiet_scene, test_veto_and_repeat, test_skips, test_trinity):
     fate.derive_roll = REAL_ROLL
     fn()
 fate.derive_roll = REAL_ROLL

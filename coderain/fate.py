@@ -20,8 +20,9 @@ What is deliberate (each of these was argued and settled, see D-045):
     and the planner already learned that one malformed element must not cost a batch.
   * The model's `stakes` label (none or some) can only switch a setback or a windfall OFF (a quiet scene gets no
     steering that turn). It never widens a band. A missing or invalid label counts as none.
-  * Pure code decides what is acceptable: one line, 200 characters at most, not a repeat of a recent direction
-    (planner._restates), and a setback that kills or removes anyone the story protects is vetoed.
+  * Pure code decides what is acceptable: one line, 300 characters at most, an event rather than a label or the
+    player's own action, not a repeat of a recent direction (planner._restates), and a setback that kills or removes
+    anyone the story protects is vetoed. An unusable first answer gets one more try that names what was wrong (D-053).
   * It is off by default. `meta.json` holds the per-save mode (off, preview or on) and whether to show the die.
     Preview rolls, asks the model and records, and sends the Writer nothing.
   * Any failure leaves the turn exactly as if fate were off, and says so in memory/health.jsonl (invariant 2).
@@ -44,30 +45,50 @@ MODES = ("off", "preview", "on")
 # "10 to 18" read as 11 to 18.
 BANDS = (("setback", 1, 2), ("natural", 3, 10), ("surprise", 11, 18), ("windfall", 19, 20))
 STEERED_ONLY_WITH_STAKES = ("setback", "windfall")      # a quiet scene switches these two off
-MAX_TEXT = 200
+MAX_TEXT = 300              # measured (D-053): asked for 20 words, a 4B and an 8B model write 25 to 45
+MIN_WORDS = 3               # "help arrives" is a label, not a direction
+ATTEMPTS = 2                # the second names what was wrong with the first
 KEEP = 100                  # records kept in memory/fate.jsonl
 RECENT_DIRECTIONS = 3       # how many earlier directions a new one may not restate
 FATE_TOKENS = 700           # the call's answer budget: one short JSON object, and a little room
 CONTEXT_CHARS = 12_000
 FILE = "memory/fate.jsonl"
 
+# What each kind of development is. The first sentence names it; the model has copied that sentence into its answer as a
+# label ("a surprising but harmless development: ..."), so clean_line strips and refuses that echo (D-053).
 _KIND = {
-    "setback": ("a setback: something goes wrong for the player in the world, such as a complication, a delay, "
-                "a loss of position, or a failed attempt if they were trying something risky. Never kill, "
-                "cripple or remove anything important, and do not decide what the player thinks or does"),
-    "natural": "the natural, expected continuation of the scene",
-    "surprise": ("a surprising but harmless development: something unexpected happens that neither helps nor "
-                 "hurts the player much"),
-    "windfall": ("a small stroke of luck for the player: help arrives, a useful detail turns up, or an "
-                 "advantage opens"),
+    "setback": ("a setback. Something goes wrong for the player in the world: a plan is blocked, someone refuses "
+                "or objects, something is lost, broken or delayed, or a risky attempt fails. Never kill, cripple "
+                "or remove anything important"),
+    "natural": ("the ordinary next beat. The people present answer or act the way anyone would, and the scene moves "
+                "on without a twist"),
+    "surprise": ("an unexpected but harmless development. A new person, object or fact turns up and changes what "
+                 "the scene is about, and it neither helps nor hurts the player much"),
+    "windfall": ("a small stroke of luck for the player. Someone helps, a door opens, a useful thing is found or "
+                 "offered, or a problem solves itself"),
+}
+# One line per kind from a different story, so a small model learns the SHAPE (an event: somebody does something) and has
+# nothing in it to copy into this one.
+_EXAMPLE = {
+    "setback": "The border guard spots the forged stamp and calls for his captain.",
+    "natural": "The innkeeper answers the question and names a price for the room.",
+    "surprise": "A child pushes through the crowd and presses a folded note into a traveller's hand.",
+    "windfall": "The merchant, charmed by the story, waives the fee and offers a fresh horse.",
 }
 
 FATE_SYS = """\
-You write ONE hidden steering line for an interactive story. Read the scene and the player's action, then write \
-a single sentence (at most 25 words) saying what happens next, of this kind: {kind}.
+You write ONE hidden steering line for an interactive story. The dice have chosen what happens next: {kind}.
 
-Rules: write what happens in the world, not the player's feelings; never narrate the player's own actions; never \
-mention dice, luck, odds, fate or this note; stay consistent with the story context and the chapter goal.
+Read the scene and the player's action, then write a single sentence (at most 20 words) saying what happens next \
+in the world. It must be an EVENT: a person or thing does something that changes the situation (someone arrives, \
+speaks, refuses, offers, finds, drops, blocks, breaks). Weather, sounds, smells, moods and descriptions are not \
+events; mention the weather only when it blocks or breaks something.
+
+Example of the shape, from another story (never copy its content): {example}
+
+Rules: never write what the player does, thinks or feels, and never begin with "You"; write the sentence alone, \
+with no label and no colon; never mention dice, luck, odds, fate or this note; stay consistent with the story \
+context and the chapter goal.
 
 Also judge whether the player's action carries any risk or stakes. Use "none" for quiet actions (talking, \
 looking, resting, travelling without trouble) and "some" otherwise.
@@ -105,8 +126,8 @@ def exchange_key(n: int, action: str, before: str) -> str:
 
 # --- what is sent to the model, and what comes back --------------------------
 def build_messages(context: str, recent: list[dict], card: str, chapter: str, action: str, tier: str,
-                   avoid: list[str], offender: str = "", no_think: bool = True) -> list[dict]:
-    system = FATE_SYS.format(kind=_KIND[tier]) + ("\n\n/no_think" if no_think else "")
+                   avoid: list[str], offender: str = "", no_think: bool = True, note: str = "") -> list[dict]:
+    system = FATE_SYS.format(kind=_KIND[tier], example=_EXAMPLE[tier]) + ("\n\n/no_think" if no_think else "")
     parts = ["STORY CONTEXT:\n" + context[-CONTEXT_CHARS:]]
     if card:
         parts.append("WHO IS IN THE SCENE:\n" + card)
@@ -121,22 +142,50 @@ def build_messages(context: str, recent: list[dict], card: str, chapter: str, ac
         parts.append("EARLIER DIRECTIONS (write something different):\n" + "\n".join(f"- {a}" for a in avoid))
     if offender:
         parts.append(f'YOUR LAST ANSWER REPEATED "{offender}". Write a different direction.')
+    if note:
+        parts.append(f"YOUR LAST ANSWER WAS REFUSED: {note}. Answer again, following the rules.")
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
+
+
+# The model echoes the description it was given as a label ("a surprising but harmless development: ...", "a small
+# stroke of luck for the player: ..."). An exact label at the very start is dropped; one inside the sentence cannot be
+# cut out cleanly, so that line is refused (the phrases below).
+_LABEL = re.compile(r"^(?:an? |the )?(?:setback|surprise|windfall|surprising(?: but harmless)?(?: development)?"
+                    r"|unexpected but harmless development|small stroke of luck(?: for the player)?"
+                    r"|ordinary next beat)\s*:\s*", re.IGNORECASE)
+_ECHOES = ("harmless development", "stroke of luck", "ordinary next beat", "a setback:")
+_YOU_FIRST = re.compile(r"^you(?:'re|'ve|'ll|'d)?\b", re.IGNORECASE)      # "Your pack is lost" is a setback, not this
+
+
+def _unlabel(s: str) -> str:
+    return _LABEL.sub("", s, count=1)
 
 
 def clean_line(text) -> tuple[str, str]:
     """(one clean line, "") or ("", why not). Bounded here because the line is rendered into the Writer's
-    prompt: one line, no fences, headings or lists, at most MAX_TEXT characters."""
+    prompt: one line, no fences, headings or lists, at most MAX_TEXT characters. Also refused, each seen in a real
+    run (D-053): a leftover kind label, a line too short to be an event, one that stops mid-sentence, and one whose
+    subject is the player (the Writer owns what the player does)."""
     if not isinstance(text, str):
         return "", "no direction"
     s = " ".join(text.split()).strip(" \t\"'")
     s = re.sub(r"^[-*#>\s]+", "", s)
+    s = _unlabel(s).strip(" \t\"'")
     if not s:
         return "", "empty direction"
     if "```" in s or "`" in s:
         return "", "a code fence in the direction"
     if len(s) > MAX_TEXT:
         return "", f"the direction is {len(s)} characters (limit {MAX_TEXT})"
+    low = s.lower()
+    if any(w in low for w in _ECHOES):
+        return "", "the direction repeats the description of its kind"
+    if len(s.split()) < MIN_WORDS:
+        return "", f"the direction is under {MIN_WORDS} words"
+    if s.endswith((":", ",", "-", chr(0x2013), chr(0x2014))):   # a cut-off line (a trailing en or em dash included)
+        return "", "the direction stops mid-sentence"
+    if _YOU_FIRST.match(s):
+        return "", "the direction describes what the player does"
     return s, ""
 
 
@@ -280,6 +329,13 @@ def event_line(rec: dict, mode: str, show_die: bool) -> str | None:
     return None
 
 
+def _model_name(llm) -> str:
+    """The model that wrote the line. The real client keeps it on its profile; a test stub has it as `model`. (The
+    record's field was blank on every real run until a preview showed it, D-053.)"""
+    name = getattr(getattr(llm, "profile", None), "model", "") or getattr(llm, "model", "") or ""
+    return str(name)[:80]
+
+
 def run_stage(store, llm, messages: list[dict], action: str, *, seed, card: str = "", chapter: str = "",
               protected=(), no_think: bool = True, on_stage=None) -> tuple[dict | None, str | None]:
     """The whole stage for one player action. Returns (record, None) with a record to inject or show, or
@@ -302,23 +358,36 @@ def run_stage(store, llm, messages: list[dict], action: str, *, seed, card: str 
         on_stage("Fate: weighing the next turn")
     avoid = recent_directions(store, n)
     recent = [m for m in messages[1:] if m.get("role") in ("user", "assistant")]
-    offender, text, stakes = "", "", "none"
+    offender, note, why = "", "", ""
+    text, stakes = "", "none"
     try:
-        for attempt in range(2):
+        # A second try for ANY unusable first answer, naming what was wrong. Measured on a 4B and an 8B model (D-053):
+        # with no second try a third of the exchanges got no direction at all, mostly lines a few characters over the
+        # limit or a reply in the wrong JSON shape, and every one of those is fixed by asking once more.
+        for _ in range(ATTEMPTS):
             convo = build_messages(messages[0]["content"] if messages else "", recent, card, chapter, action,
-                                   tier, avoid, offender, no_think)
+                                   tier, avoid, offender, no_think, note)
             with llm_stage(llm, "fate"):
                 obj, err = emit_json_ex(llm, "", messages=convo, retry=0, max_tokens=FATE_TOKENS)
+            offender, note = "", ""
             if obj is None:
-                return None, f"no usable reply: {err}"
-            stakes, text, why = parse_reply(obj)
-            if why:
-                return None, why
+                why = f"no usable reply: {err}"
+                if str(err).startswith("model call failed"):
+                    return None, why            # the server is down or stuck: asking again only doubles the wait
+                note = "it was not a JSON object holding a direction"
+                continue
+            stakes, text, bad = parse_reply(obj)
+            if bad:
+                why = note = bad
+                continue
             offender = repeats(text, avoid)
-            if not offender:
-                break
+            if offender:
+                why = f"the direction repeated an earlier one ({offender!r})"
+                continue
+            why = ""
+            break
         else:
-            return None, f"the direction repeated an earlier one ({offender!r})"
+            return None, why
     except Exception as e:  # noqa: BLE001 - fate must never cost a turn
         return None, f"{type(e).__name__}: {e}"
     quiet = tier in STEERED_ONLY_WITH_STAKES and stakes != "some"
@@ -326,7 +395,7 @@ def run_stage(store, llm, messages: list[dict], action: str, *, seed, card: str 
     if vetoed:
         return None, f"a setback naming a protected character with {vetoed!r} was vetoed"
     rec = {"n": n, "key": key, "nonce": 0, "roll": roll, "tier": tier, "stakes": stakes,
-           "text": "" if quiet else text, "model": str(getattr(llm, "model", "") or "")[:80]}
+           "text": "" if quiet else text, "model": _model_name(llm)}
     put(store, rec)
     if on_stage:
         on_stage(f"Fate done ({time.monotonic() - t0:.1f}s): d20 {roll}, {'quiet scene' if quiet else tier}")
