@@ -2118,7 +2118,7 @@ was recorded (latency, reply, error) through a wrapper in the session scratchpad
   line for 44 of 80 exchanges (gemma) and 64 of 80 (llama); the rest got no steering and one health row.
 - Why they failed: lines over the 200 character limit were 21 of gemma's 36 failures and 10 of llama's 16 (the models write 25 to 45
   words when asked for 25; refused lengths were 201 to 354, mostly under 285); a reply in another JSON shape (the Writer's own
-  `{"deltas": ...}` sidecar format, copied from the story context, 3 times) or with no direction; unparseable JSON (10 on gemma,
+  `{"deltas": ...}` sidecar format, copied from the story context, 3 times) or with no direction; unparseable JSON (11 on gemma,
   2 on llama; the raw text was not kept, so the cause is still unknown); a repeat (4).
 - Cost: a fate call took 3.3 s on gemma3:4b (a 13 s turn) and 7.8 s on llama3.1:8b. Neither is a problem next to the Writer.
 - The `stakes` valve: gemma3:4b labelled every setback and windfall "some" (0 of 11 switched off); llama3.1:8b labelled 7 of 16 "none",
@@ -2182,3 +2182,76 @@ run said all of them were; the rewritten request halved it, it did not end it). 
 that removes 40% of the calls and the chapter directive already carries the scene forward. The model also invents named people in its
 lines ("a grizzled fisherman, Silas Blackwood"); in `on` mode the Writer would adopt them. And the `stakes` valve still says "some" for
 almost everything on this model (2 of 16 setbacks and windfalls switched off).
+
+**Third run, with every fix above in (gemma3:4b 80 turns, llama3.1:8b 20 turns).**
+
+| | first answers usable | exchanges with a usable answer | calls with no JSON | calls in the sidecar format | lines opening on weather |
+|---|---|---|---|---|---|
+| gemma3:4b, before any fix | 66% | 44 of 80 | 11 of 96 | 1 of 96 | 16 of 44 |
+| gemma3:4b, after the first fixes | 80% | 65 of 80 | 19 of 106 | 6 of 106 | 11 of 63 |
+| gemma3:4b, now | 89% | 68 of 80 | 0 of 103 | 0 of 103 | 4 of 66 |
+| llama3.1:8b, after the first fixes | 29% | 26 of 40 | 20 of 68 (18 of them plain story prose) | 19 of 68 | 5 of 22 |
+| llama3.1:8b, now | 83% | 18 of 20 | 4 of 28 (a new shape: the sentence as a key) | 0 of 28 | 2 of 17 |
+
+The llama rows are the proof that the sidecar was the cause and the context fix the cure: in its second run 37 of 68 calls answered as
+the Writer (19 in the sidecar format, 18 in plain story prose), and with the Writer's world-update block gone from fate's context
+the third run has none. What is left on gemma is 12 refusals of "You studied Dessa's hair ..." on the scripted probe turns (the
+rule doing its job; the second try recovered 4 of 10) and the 4B model's own habits: "a flicker of suspicion" five times, an
+invented named fisherman again, and one carved wooden crow that the story's own prose established and fate then keeps picking up.
+Natural lines are now mostly a person reacting (weather opens 2 of 24), so the idea of making natural send nothing is dropped:
+the evidence it was written for is gone. Fate calls cost 3.3 s (gemma) and 6.0 s (llama) next to turns of 19 s and 60 s, the
+`stakes` valve still never turns anything off on gemma (2 of 14) and does on llama (1 of 5 here, 7 of 16 earlier).
+A last cosmetic fix from this run: 6 of 68 stored gemma lines ended in a closing quote that nothing opened, which is now dropped.
+
+## D-054 — The first real-model checks of the accessory slot, chapter 1 from a premise, and a world from one sentence
+
+The owner lifted the per-run GPU ask on 2026-11-13, so these ran the same evening as the fate preview (D-053), on gemma3:4b and
+llama3.1:8b through a local Ollama, on invented stories only. Three results and three defects.
+
+**Accessory slot (D-044): the corpus measurement, default stays off.** The evaluation corpus (33 passages: the 26 older ones, 4 accessory
+passages with 6 labelled facts, 3 look-alike traps), temperature 0, one run per cell, validated stage:
+
+| model | accessory facts found, off to on | older facts found of 26, off to on (precision) | look-alike traps, false positives |
+|---|---|---|---|
+| gemma3:4b | 0 of 6 to 5 of 6 (1 false positive, was 2) | 20 to 18 (0.87 to 0.82) | 4 to 4 |
+| llama3.1:8b | 0 of 6 to 1 of 6 | 19 to 18 (0.79 to 0.75) | 3 to 4 |
+
+The slot works on gemma3:4b and not on llama3.1:8b. The prompt line also moves a few older passages, which D-044 said it might: on gemma
+one multi-character passage lost both its facts and one state fact was lost while another was gained (net minus 2 of 26); on llama one
+state fact was lost. D-044's own gate was "the older slice must not drop", and it dropped by one or two facts out of 26, which at this
+size is close to the noise floor but is not nothing. **Decision: the default stays off.** An author with a gemma3:4b reader and jewellery
+that matters turns it on per story (`canon: {accessories: true}`). Not done: the second D-044 measurement, a re-read of the fixed
+narration-first transcript with the slot on (about 47 minutes on gemma), because the corpus already says llama cannot use the slot and
+the default is not changing on this evidence.
+
+**Chapter 1 from the premise (D-051), a real look.** Both models planned "ch-1" at the opening (origin: start, no health row), at a cost of
+the planning call only. gemma3:4b wrote a five-event plot dump and, from a premise that said only "you arrive as a stranger", **named the
+player** ("Elias finds himself drawn into ..."); llama3.1:8b wrote a shorter, sensible goal with no name. The planner was never told how to
+refer to the player, so both instructions now say: use "the player" or the premise's own name, never invent a name, a gender or a
+backstory (`PLAYER_RULE`; the Writer reads a chapter goal as fact). Re-run on gemma3:4b: "The player's arrival throws ...", no name.
+
+**A world from one sentence (D-052), a real look.** The sentence "A tidal market town on a saltmarsh where everyone owes the ferrywoman a
+favour, and one debt has just come due." made a whole world in 82 s on gemma3:4b and 395 s on llama3.1:8b (3 characters, 8 to 10 pieces,
+an opening message). The stage log reads as designed, including a stage that failed once on the 4B model ("items FAILED: no valid JSON"),
+was retried and was reported in the done frame. The defect: the JSON shapes the generator shows the model contain `"slug": "kebab-id"`
+and `"aliases": ["alt"]`, and the models copied them: four entries from the 4B model (a canon event, a place, an item, a thread) had the
+slug `kebab-id` and an item the alias `alt`; the 8B model wrote `kebab-aethera` and `kebab-marshview`. A slug that names nothing makes every
+cross-reference ambiguous and lets a second entry replace the first. `_entry_from` now drops a placeholder slug (kebab, kebab-<anything>,
+slug, id, slug-id, new-slug) and lets the title make the slug, and drops the alias `alt`. Re-run: every slug was sensible, none started
+with kebab.
+
+**A system message after the player's turn made llama3.1:8b open every reply with "assistant".** Seen in the chapter-1 look (llama's
+opening and first turn both began with the line "assistant" and a blank line; the soak transcripts, which have no chapter directive, never
+did). Isolated with a raw client, 6 replies per shape: [system, user] 0 of 6; [system, user, system] 6 of 6; [system, user, system,
+system] 6 of 6; the same words folded into the user turn 0 of 6. gemma3:4b was clean in all four. The engine puts the chapter goal, the
+canon card, fate's note and the continuity pass after the player's action on purpose (the end of the prompt binds hardest, D-027), and
+the default chapter outline puts one there from the first turn, so every llama3.1 user on Ollama was exposed. `LLM` now folds a trailing
+run of system messages into the last user turn (after an assistant turn they become a user turn of their own) when the endpoint is on
+this machine; a hosted provider is sent what it always was. `generation: {fold_late_system: true|false}` overrides either way. The
+words stay at the end of the prompt, so the D-027 argument still holds; whether a directive carried in the user turn binds exactly as
+well as one in a system turn was not measured, only that the reply stops starting with the role word. qwen3:4b, deepseek-r1:8b and
+the Qwen3.5 build were not tested for the same fault.
+
+**Tests.** `generator_slugs_test.py` (4), `chapter_distinctness_test.py` case 7 (the player rule is in both instructions),
+`llm_late_system_test.py` (4: the fold, the locality check, the client with the override, the tool-calling path). 10 and 15 guard
+mutations caught.
