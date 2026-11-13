@@ -2152,3 +2152,33 @@ the extra calls, and the chapter directive already says every scene must advance
 
 **Not verified.** Whether the Writer follows a steering line, or copies it (`leaks` only logs); how any of this reads on a hosted
 model; the fate on/off soak (same moves, same dice, with and without steering).
+
+**Second run, after those fixes (gemma3:4b, same script, 80 turns).** First answers usable 72 of 90 (80%, was 66%); 63 of 80 exchanges
+got a line (was 44); label copying and length refusals nearly gone (3 of 106 calls over 300 characters). Quality moved the way the
+request was meant to move it: lines that open on weather, a sound or a smell fell from 16 of 44 to 11 of 63, the surprises became
+things that happen (an object washes ashore, a person arrives and says something), and about half the windfalls were real luck (a
+crate with coins, a hidden door, a lantern that lights a passage; before, at most 1 of 6). The raw replies, kept this time, showed
+what the first run could not, and the run also left a new class of defect. All are fixed in `coderain/fate.py`, each with a test that
+fails without it:
+1. **Nearly-JSON replies were the largest failure left (19 of 106 calls).** The sentence ends in speech, the model closes the speech
+   with an escaped quote and forgets the quote that closes the JSON string, so no parser takes a line that is fine. `salvage()` takes
+   the sentence and the stakes word out of such a reply; the sentence then passes the same checks as any other. Replayed offline over
+   the 19 recorded failures: 16 become usable lines, 3 are refused for length or weather. fate now makes its own request
+   (`_ask`) instead of going through `emit_json_ex`, because that helper throws the text away when it does not parse.
+2. **The model was shown the Writer's world-update block.** It is appended to the END of the Writer's system message ("End EVERY reply
+   with one fenced block ... {"deltas": {}}") and fate sends the last 12,000 characters of that message, so it sat in the most
+   salient place; 6 of 106 replies were that sidecar and not a direction, and a second try did not fix them (same context, same
+   answer). `story_context()` removes the block before the tail is cut.
+3. **`clean_line` cut the closing quote off every spoken line** (`declares, "This paper ... deceit.`): it stripped quote characters
+   from both ends to remove a wrapper. Only a pair that wraps the whole line is dropped now.
+4. **"The rain continues to lash the deck"** was 5 of 20 natural lines: the weather carrying on is the opposite of an event, so a
+   weather noun followed within two words by "continues" is refused (and asked again). "A gust of wind rips the lantern from its
+   hook" and "The wind drops, and Corwin continues down the path" pass.
+5. **One invented object came back seven times** ("a small, intricately carved wooden bird or box") and one invented fisherman five
+   times, because a new line was compared with only the last 3 directions. The window is 6.
+
+**Still true after the second run.** About half of the natural lines are filler or a retelling of the player's own action (the first
+run said all of them were; the rewritten request halved it, it did not end it). If the next run still says so, natural sends nothing:
+that removes 40% of the calls and the chapter directive already carries the scene forward. The model also invents named people in its
+lines ("a grizzled fisherman, Silas Blackwood"); in `on` mode the Writer would adopt them. And the `stakes` valve still says "some" for
+almost everything on this model (2 of 16 setbacks and windfalls switched off).

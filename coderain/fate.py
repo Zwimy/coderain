@@ -36,9 +36,10 @@ import json
 import random
 import re
 
-from .llm import emit_json_ex
+from .llm import extract_json
 from .llm import stage as llm_stage
 from .planner import _restates
+from .templates import WORLD_SIDECAR
 
 MODES = ("off", "preview", "on")
 # (tier, lowest face, highest face). Fixed in v1: the owner's 10 / 40 / 40 / 10, with his overlapping
@@ -49,7 +50,8 @@ MAX_TEXT = 300              # measured (D-053): asked for 20 words, a 4B and an 
 MIN_WORDS = 3               # "help arrives" is a label, not a direction
 ATTEMPTS = 2                # the second names what was wrong with the first
 KEEP = 100                  # records kept in memory/fate.jsonl
-RECENT_DIRECTIONS = 3       # how many earlier directions a new one may not restate
+RECENT_DIRECTIONS = 6       # how many earlier directions a new one may not restate (3 let "a small intricately carved
+#                             wooden bird" come back seven times in 80 turns on a 4B model, D-053)
 FATE_TOKENS = 700           # the call's answer budget: one short JSON object, and a little room
 CONTEXT_CHARS = 12_000
 FILE = "memory/fate.jsonl"
@@ -125,10 +127,17 @@ def exchange_key(n: int, action: str, before: str) -> str:
 
 
 # --- what is sent to the model, and what comes back --------------------------
+def story_context(system_text: str) -> str:
+    """The Writer's system message, as fate reads it: without the world-update block, and cut to its tail. That block
+    ends the Writer's system message ("End EVERY reply with one fenced block ... {"deltas": {}}") and so sat in the
+    last characters fate kept: 6 of 106 replies on a 4B model were that sidecar, not a direction (D-053)."""
+    return str(system_text or "").replace(WORLD_SIDECAR, "")[-CONTEXT_CHARS:]
+
+
 def build_messages(context: str, recent: list[dict], card: str, chapter: str, action: str, tier: str,
                    avoid: list[str], offender: str = "", no_think: bool = True, note: str = "") -> list[dict]:
     system = FATE_SYS.format(kind=_KIND[tier], example=_EXAMPLE[tier]) + ("\n\n/no_think" if no_think else "")
-    parts = ["STORY CONTEXT:\n" + context[-CONTEXT_CHARS:]]
+    parts = ["STORY CONTEXT:\n" + story_context(context)]
     if card:
         parts.append("WHO IS IN THE SCENE:\n" + card)
     if chapter:
@@ -155,10 +164,25 @@ _LABEL = re.compile(r"^(?:an? |the )?(?:setback|surprise|windfall|surprising(?: 
                     r"|ordinary next beat)\s*:\s*", re.IGNORECASE)
 _ECHOES = ("harmless development", "stroke of luck", "ordinary next beat", "a setback:")
 _YOU_FIRST = re.compile(r"^you(?:'re|'ve|'ll|'d)?\b", re.IGNORECASE)      # "Your pack is lost" is a setback, not this
+# "The rain continues to lash the deck": the weather carrying on is the opposite of an event. Five of one 4B model's
+# twenty "natural" lines were this sentence with a different noun (D-053).
+_WEATHER_ON = re.compile(r"\b(?:rain|wind|storm|sea|waves?|mist|fog|tide|gale|thunder|drizzle)\b\s+(?:\w+\s+){0,2}"
+                         r"continu(?:es|ed|e|ing)\b", re.IGNORECASE)
+_WRAPS = {'"': '"', "'": "'", chr(0x201C): chr(0x201D), chr(0x2018): chr(0x2019)}
 
 
 def _unlabel(s: str) -> str:
     return _LABEL.sub("", s, count=1)
+
+
+def _unwrap(s: str) -> str:
+    """Drop quotes that wrap the WHOLE line (and only those): a line that ends in dialogue ends in a closing quote that is
+    part of it. The first version stripped quote characters off both ends and cut the closing quote of every spoken line."""
+    s = s.strip()
+    close = _WRAPS.get(s[:1])
+    if close and len(s) > 1 and s.endswith(close) and s.count(s[0]) + (s.count(close) if close != s[0] else 0) == 2:
+        return s[1:-1].strip()
+    return s
 
 
 def clean_line(text) -> tuple[str, str]:
@@ -168,15 +192,17 @@ def clean_line(text) -> tuple[str, str]:
     subject is the player (the Writer owns what the player does)."""
     if not isinstance(text, str):
         return "", "no direction"
-    s = " ".join(text.split()).strip(" \t\"'")
+    s = _unwrap(" ".join(text.split()))
     s = re.sub(r"^[-*#>\s]+", "", s)
-    s = _unlabel(s).strip(" \t\"'")
+    s = _unwrap(_unlabel(s))
     if not s:
         return "", "empty direction"
     if "```" in s or "`" in s:
         return "", "a code fence in the direction"
     if len(s) > MAX_TEXT:
         return "", f"the direction is {len(s)} characters (limit {MAX_TEXT})"
+    if _WEATHER_ON.search(s):
+        return "", "the direction says the weather carries on, which is not an event"
     low = s.lower()
     if any(w in low for w in _ECHOES):
         return "", "the direction repeats the description of its kind"
@@ -187,6 +213,48 @@ def clean_line(text) -> tuple[str, str]:
     if _YOU_FIRST.match(s):
         return "", "the direction describes what the player does"
     return s, ""
+
+
+_DIRECTION_KEY = re.compile(r'"direction"\s*:\s*"(.*)', re.DOTALL)
+_STAKES_KEY = re.compile(r'"stakes"\s*:\s*"(some|none)"', re.IGNORECASE)
+
+
+def salvage(text) -> dict | None:
+    """A reply that is nearly JSON, repaired, or None. 19 of 106 calls on a 4B model were this: the sentence ends in spoken
+    words, the model closes them with an escaped quote and forgets the quote that closes the JSON string
+    (`..., \\"It is late.\\"}`), so no parser takes it though the line is fine. Only the sentence and the stakes word are
+    taken, and the sentence then passes the same checks as any other (clean_line)."""
+    if not isinstance(text, str):
+        return None
+    m = _DIRECTION_KEY.search(text)
+    if not m:
+        return None
+    body = m.group(1)
+    body = re.split(r'"\s*,\s*"[a-z_]+"\s*:', body, maxsplit=1)[0]            # another key after it
+    end = body.rfind("}")
+    body = (body[:end] if end >= 0 else body).strip().strip("`").strip()
+    if body.endswith('"') and not body.endswith('\\"'):                         # the quote that closes the string
+        body = body[:-1]
+    body = body.replace('\\"', '"').replace("\\n", " ").strip()
+    if not body:
+        return None
+    stakes = _STAKES_KEY.search(text)
+    return {"stakes": stakes.group(1).lower() if stakes else "none", "direction": body}
+
+
+def _ask(llm, convo: list[dict]) -> tuple[dict | None, str | None]:
+    """One request: (the reply object, None) or (None, why). It reads the raw text itself, not through emit_json_ex,
+    because that helper throws the text away when it does not parse and `salvage` needs it."""
+    try:
+        text = llm.complete(convo, max_tokens=FATE_TOKENS)
+    except Exception as e:  # noqa: BLE001 - a network or model failure leaves nothing to parse; the caller degrades
+        return None, f"model call failed: {e}"
+    text = str(text or "")
+    obj = extract_json(text) or salvage(text)
+    if obj is not None:
+        return obj, None
+    tail = text.strip()[-80:].replace("\n", " ")
+    return None, "model returned empty output" if not tail else f"no valid JSON in output; tail: ...{tail}"
 
 
 def parse_reply(obj) -> tuple[str, str, str]:
@@ -368,7 +436,7 @@ def run_stage(store, llm, messages: list[dict], action: str, *, seed, card: str 
             convo = build_messages(messages[0]["content"] if messages else "", recent, card, chapter, action,
                                    tier, avoid, offender, no_think, note)
             with llm_stage(llm, "fate"):
-                obj, err = emit_json_ex(llm, "", messages=convo, retry=0, max_tokens=FATE_TOKENS)
+                obj, err = _ask(llm, convo)
             offender, note = "", ""
             if obj is None:
                 why = f"no usable reply: {err}"

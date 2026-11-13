@@ -92,6 +92,8 @@ def test_recent_directions():
     assert fate.recent_directions(s, 10) == ["one", "three", "four"], fate.recent_directions(s, 10)
     assert fate.recent_directions(s, 100, k=2) == ["five", "six"]
     assert fate.recent_directions(s, 2) == []
+    assert fate.RECENT_DIRECTIONS >= 6 and fate.recent_directions(s, 100) == ["one", "three", "four", "five", "six"], \
+        "a window of 3 let one invented object come back seven times in 80 turns"
     print("4. the recent directions are the last k real ones before the turn, oldest first")
 
 

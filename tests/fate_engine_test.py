@@ -14,6 +14,8 @@ fate.derive_roll, so each case names the tier it exercises.
     messages are as if fate were off, and there is one health row; a model that raises is asked once, not twice
  5b) one unusable first answer (not JSON, too long, the wrong shape, a copied label, the player as subject) gets one more
     try that names the refusal, and the recovered line is cached and names the model (D-053, from the first real runs)
+ 5c) a nearly-JSON reply (speech closing the sentence, the JSON string's closing quote missing) is repaired on the first
+    try; the model is never shown the Writer's world-update block
  6) a quiet scene (stakes none) on a setback or a windfall gives no steering; a natural roll ignores the label
  7) a setback that kills the player is vetoed; a direction that repeats an earlier one is asked for again once
  8) RPG saves skip it (one health row for the whole save, not per turn); the opening and a Continue never use it
@@ -135,6 +137,9 @@ def test_on_order_and_event():
     play(eng)
     assert stub.fate_calls == 1
     msgs = stub.writer_msgs[0]
+    assert "World updates (required)" in msgs[0]["content"], "the Writer lost its world-update block: this case proves nothing"
+    assert "World updates (required)" not in stub.fate_msgs[0][1]["content"], \
+        "the model was shown the Writer's sidecar instructions (6 of 106 real replies copied that format)"
     sys_tail = [m["content"] for m in msgs if m["role"] == "system"][1:]
     assert len(steering(msgs)) == 1 and "A bell rings in the harbour." in steering(msgs)[0]
     idx = {k: next(i for i, m in enumerate(msgs) if m["role"] == "system" and m["content"].startswith(k))
@@ -257,6 +262,20 @@ def test_second_try():
     print("5b. an unusable first answer gets one more try that names the refusal; the recovered line is cached")
 
 
+def test_repaired_reply():
+    """The commonest real failure after the length limit: a line that ends in speech, closed by an escaped quote with the
+    JSON string's own closing quote missing. It is used on the first try, with no second call and no health row."""
+    force(12)
+    eng, store, stub = make("on")
+    stub.replies = ['```json\n{"stakes": "some", "direction": "Ottoline eyes you, and replies, \\"The ferry is out.\\"}\n```']
+    play(eng)
+    assert stub.fate_calls == 1 and not health(store), (stub.fate_calls, health(store))
+    line = steering(stub.writer_msgs[0])[0]
+    assert 'Ottoline eyes you, and replies, "The ferry is out."' in line, line
+    assert fate.read(store)[0]["text"] == 'Ottoline eyes you, and replies, "The ferry is out."', "the closing quote was cut"
+    print("5c. a nearly-JSON reply is repaired and used on the first try; the line keeps its closing quote")
+
+
 def test_quiet_scene():
     for face, tier in ((1, "setback"), (20, "windfall")):
         force(face)
@@ -376,7 +395,7 @@ def test_trinity():
 
 
 for fn in (test_off, test_on_order_and_event, test_preview, test_retry_swipe_undo, test_failures, test_second_try,
-           test_quiet_scene, test_veto_and_repeat, test_skips, test_trinity):
+           test_repaired_reply, test_quiet_scene, test_veto_and_repeat, test_skips, test_trinity):
     fate.derive_roll = REAL_ROLL
     fn()
 fate.derive_roll = REAL_ROLL

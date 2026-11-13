@@ -17,6 +17,9 @@ pure code, never an LLM.
  7) the request to the model names the kind, carries the chapter goal and the recent directions, and names a repeat
  8) the event line: preview shows everything, on shows the die only when asked and never the sentence
  9) the record names the model (the real client keeps it on its profile; it was blank until a real run showed it)
+10) a reply that is nearly JSON (spoken words ending the sentence, the closing quote of the string missing) is repaired and
+    then checked like any other line; a hopeless reply says why; a dead model says so
+11) the model reads the story without the Writer's world-update block (6 of 106 real replies copied that block's format)
 """
 import sys
 from pathlib import Path
@@ -68,6 +71,24 @@ def test_clean_line():
         assert text == "" and word in why, (bad, text, why)
     for fine in ("Your pack is torn open by a snagged branch.", "A guard stops you at the gate and asks for a pass.",
                  "As you reach the door, a bell rings twice behind you."):
+        assert fate.clean_line(fine) == (fine, ""), fine
+    # quotes: only a pair that wraps the WHOLE line is dropped. The first version stripped quote characters off both ends
+    # and cut the closing quote of every spoken line (seen in the second real run: 'declares, "This paper ... deceit.')
+    spoken = ['Bram scowls and replies, "The ferry is out tonight."', "Hollis says, 'The tide keeps its debts.'",
+              "The clerk mutters, " + chr(0x201C) + "Not today." + chr(0x201D)]
+    for line in spoken:
+        assert fate.clean_line(line) == (line, ""), (line, fate.clean_line(line))
+    assert fate.clean_line("'The lamp gutters.'") == ("The lamp gutters.", "")
+    assert fate.clean_line(chr(0x201C) + "The lamp gutters." + chr(0x201D)) == ("The lamp gutters.", "")
+    assert fate.clean_line('"He said "go" and left."')[0].startswith('"He said'), "four quote marks are not a wrapper"
+    # the weather carrying on is not an event; a plain weather event, or 'continues' about a person, is
+    for weather in ("The rain continues to lash the ferry deck.", "A steady wind continued to buffet the tavern walls.",
+                    "The storm and the tide continue to rise around the quay."):
+        text, why = fate.clean_line(weather)
+        assert text == "" and "weather" in why, (weather, text, why)
+    for fine in ("A gust of wind rips the lantern from its hook and the light goes out.",
+                 "The wind drops, and Corwin continues down the path with the crate.",
+                 "Ottoline continues to the quay and waits for the ferry."):
         assert fate.clean_line(fine) == (fine, ""), fine
     print("1. one clean line, bounded; fences, empties, over-long, labelled, stub, cut-off and player-subject lines are refused")
 
@@ -153,6 +174,62 @@ def test_event_line():
     print("8. preview shows the idea; on shows the die only when asked and never the sentence")
 
 
+def test_salvage_and_ask():
+    # the real shape (19 of 106 calls on a 4B model): spoken words end the sentence, the escaped quote that closes them is
+    # followed by the brace, and the quote that closes the JSON string is missing
+    broken = '```json\n{"stakes": "some", "direction": "Ottoline eyes you, and replies, \\"The ferry is out tonight.\\"}\n```'
+    assert fate.extract_json(broken) is None, "this shape parses after all; the repair is not needed"
+    got = fate.salvage(broken)
+    assert got == {"stakes": "some", "direction": 'Ottoline eyes you, and replies, "The ferry is out tonight."'}, got
+    assert fate.parse_reply(got) == ("some", 'Ottoline eyes you, and replies, "The ferry is out tonight."', "")
+    other = fate.salvage('{"direction": "A bell rings out over the harbour.", "stakes": "some"')   # no closing brace
+    assert other == {"stakes": "some", "direction": "A bell rings out over the harbour."}, other
+    assert fate.salvage('{"direction": "A bell rings out over the harbour"')["direction"] == "A bell rings out over the harbour"
+    assert fate.salvage('{"direction": "A bell rings out over the harbour"')["stakes"] == "none", "a missing label means none"
+    for nothing in (None, 7, "", "not json at all", '{"stakes": "some"}', '{"direction": ""}', '{"direction": "   "}'):
+        assert fate.salvage(nothing) is None, nothing
+    # a repaired line is NOT exempt: it passes clean_line like any other (too long, a label, the player as subject)
+    assert fate.parse_reply(fate.salvage('{"direction": "' + "word " * 90 + '"'))[2], "a repaired line skipped the bounds"
+    assert fate.parse_reply(fate.salvage('{"direction": "You turn to the keeper and buy ale"'))[2]
+
+    class Llm:
+        def __init__(self, text):
+            self.text, self.asked = text, []
+
+        def complete(self, messages, **k):
+            self.asked.append(k)
+            if isinstance(self.text, Exception):
+                raise self.text
+            return self.text
+
+    ok = Llm('{"stakes": "some", "direction": "A bell rings out over the harbour."}')
+    assert fate._ask(ok, [{"role": "user", "content": "x"}]) == ({"stakes": "some", "direction": "A bell rings out over the harbour."}, None)
+    assert ok.asked == [{"max_tokens": fate.FATE_TOKENS}], "the answer budget was not passed"
+    obj, err = fate._ask(Llm(broken), [])
+    assert err is None and obj["direction"].startswith("Ottoline eyes you"), (obj, err)
+    obj, err = fate._ask(Llm("not json at all"), [])
+    assert obj is None and "no valid JSON" in err and "not json at all" in err, err
+    assert fate._ask(Llm(""), []) == (None, "model returned empty output")
+    assert fate._ask(Llm(None), []) == (None, "model returned empty output")
+    obj, err = fate._ask(Llm(RuntimeError("down")), [])
+    assert obj is None and err == "model call failed: down", err
+    print("10. a nearly-JSON reply is repaired (and still checked); a hopeless one says why; a dead model says so")
+
+
+def test_story_context():
+    from coderain import templates
+    system = "RULES\n\nWORLD BIBLE\n\nCAST\n\n" + templates.WORLD_SIDECAR
+    got = fate.story_context(system)
+    assert "World updates (required)" not in got and "```rpg" not in got and "deltas" not in got, got[-200:]
+    assert got.startswith("RULES") and "CAST" in got, "the story itself was dropped with the sidecar"
+    assert fate.story_context("x" * (fate.CONTEXT_CHARS + 500)) == "x" * fate.CONTEXT_CHARS, "the tail is kept, bounded"
+    assert fate.story_context("A" * 500 + templates.WORLD_SIDECAR + "B" * fate.CONTEXT_CHARS) == "B" * fate.CONTEXT_CHARS
+    assert fate.story_context(None) == "" and fate.story_context("") == ""
+    user = fate.build_messages(system, [], "", "", "I act.", "setback", [])[1]["content"]
+    assert "World updates" not in user and "RULES" in user, "the request still carries the world-update block"
+    print("11. the model reads the story without the Writer's world-update block, bounded to its tail")
+
+
 def test_model_name():
     class Profile:
         model = "real-model"
@@ -174,6 +251,6 @@ def test_model_name():
 
 
 for fn in (test_clean_line, test_parse_reply, test_armour, test_repeats_and_leaks, test_directive_and_request,
-           test_event_line, test_model_name):
+           test_event_line, test_salvage_and_ask, test_story_context, test_model_name):
     fn()
 print("\nFATE VALIDATE TESTS PASSED")
