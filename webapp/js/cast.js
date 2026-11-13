@@ -7,14 +7,10 @@
    what a character is after right now is kept by the memory and shown beside them for reference. */
 import {$, api, esc, guard, toast} from "./util.js";
 import {closeModal, openModal} from "./modal.js";
+import {TRAIT_HINT, TRAIT_LABEL} from "./pieceform.js";
 
-const LABEL = {strengths: "Strengths", weaknesses: "Weaknesses", personality: "Personality type", goals: "Goals"};
-const HINT = {
-  strengths: "What they are good at. The writer lets it decide a scene when it matters.",
-  weaknesses: "What costs them. The writer makes it cost something real.",
-  personality: "A type or a few words, for example ISTJ, Enneagram 6, or a stoic who keeps promises.",
-  goals: "What they want over the whole story. The planner moves chapters toward or against it.",
-};
+const LABEL = TRAIT_LABEL;       // one copy of the wording, shared with the piece editor
+const HINT = TRAIT_HINT;
 const ONE_LINE = new Set(["personality"]);
 
 const filled = c => ["strengths", "weaknesses", "personality", "goals"].filter(f => c[f]);

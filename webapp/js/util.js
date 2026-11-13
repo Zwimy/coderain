@@ -23,7 +23,7 @@ export function renderProse(text) {
    them as removable bubbles with an autocomplete of values already used elsewhere
    (a trait made on one card is offered on every other card). `suggestions` may be
    plain strings (traits) or {label, value} pairs (links: show the title, store
-   the slug). Returns { get } -> the current values. */
+   the slug). Returns { get, set } -> the current values, and a way to replace them. */
 export function chipInput(host, opts = {}) {
   const values = (opts.value || []).slice();
   const sugg = (opts.suggestions || []).map(
@@ -70,7 +70,9 @@ export function chipInput(host, opts = {}) {
     });
   };
   render();
-  return {get: () => values.slice()};
+  // `set` replaces the whole list (an AI result fills the chips, a restore puts them back).
+  return {get: () => values.slice(),
+          set: list => { values.splice(0, values.length, ...(list || [])); render(); }};
 }
 
 export async function api(path, opts = {}) {

@@ -1903,3 +1903,28 @@ line), `fate_store_test.py` (cache, prune, settings, branch with and without a s
 message order, preview, retry/swipe/undo, every failure shape, quiet scenes, veto and repeat, RPG and opening/Continue skips, the real
 seed and turn reach the die), `fate_api_test.py` (the routes and the transcript-edit prune). The guard-breaking pass is in the commit
 message.
+
+## D-046 — The piece editor merges an AI result without losing what it states
+
+**What was wrong** (read from the source, verified by a test). "Improve with AI" and "Seed from idea" in the piece editor (builder.js)
+wrote only some of the form's fields back. `fill()` never set a character's wants or motivation, the traits and links chips (the chip input had
+no setter), the activation controls (group, chance, delay, sticky, cooldown, requires, blocked by, semantic, recurse), nor the four trait
+fields of D-032 (strengths, weaknesses, personality, goals), which had no field in this form at all. Worse, `collect()` re-merged the OLD
+attributes over whatever the AI had said, so the AI's answer for every such field was silently dropped and the form looked updated. There
+was no undo, so a bad result overwrote the author's work.
+
+**Decision.** One table (`webapp/js/pieceform.js`, no DOM) lists every field the form manages. `collect()` reads every field in it and
+`fill()` writes every field in it, so a field cannot be read but not written again. What an AI answer changes is a pure merge: every
+attribute it states replaces the form's (managed or not, so an unmanaged header line it rewrites is replaced too), an attribute it leaves
+out keeps the author's value, `null` and `undefined` never clobber, lists and numbers arrive as text, and a bad title, importance or alias
+list keeps the form's own. The four trait fields are now in the character form (shared wording with the Characters screen). After any AI
+result an "Undo AI" button restores the form as it was (one level, until the piece is saved or the form closed). `chipInput` gained `set`.
+
+**Tests.** `pieceform_test.py` runs the pure module under Node (it skips with a SKIP line when node is missing, which `run_tests.py` now
+lists, see below) and reads the editor's HTML for an element for every field in the table, the Undo button, and that seed and improve
+both go through the merge; 21 guard mutations caught after two gaps in the first draft were closed (the chip setter was only checked
+by name, and `collect()` dropping the carried attributes was not asserted).
+
+**Not done.** The rest of the creation flow the product designer listed: chapter 1 planned at story start with progress, a world
+from one sentence on the web, and the assist context (the roster and world bible) for characters. The editor itself is not driven in a
+browser by a test here; the DOM binding is thin and the logic that decides what changes is the tested part.

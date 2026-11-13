@@ -1,6 +1,7 @@
 /* The world builder: premise, pieces, custom lore types.
    Shared by scenarios and by a save's own copy of its world. */
 import {$, api, chipInput, esc, guard, sse, toast, view} from "./util.js";
+import {CHIPS, TRAIT_HINT, TRAIT_LABEL, TRAIT_LIMIT, csv, fieldsFor, mergeFill, unmanaged} from "./pieceform.js";
 import {
   closeModal,
   confirmModal,
@@ -361,6 +362,7 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
       <div><button class="mini" id="p-seed" style="width:100%">✨ Seed from idea</button></div>
       <div><button class="mini" id="p-improve" style="width:100%"
         ${piece ? "" : "disabled"}>Improve with AI</button></div>
+      <div><button class="mini" id="p-undo-ai" style="width:100%" hidden>Undo AI</button></div>
     </div>
     <div class="row">
       <div><label>Importance 1-5</label>
@@ -397,7 +399,12 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
         <input id="p-stats" value="${esc(a.stats || "")}"></div>
       <div><label>Skills ("name (stat), …")</label>
         <input id="p-skills" value="${esc(a.skills || "")}"></div>
-    </div>` : ""}
+    </div>
+    ${["strengths", "weaknesses", "personality", "goals"].map(f => `
+      <label>${esc(TRAIT_LABEL[f])} <span class="muted">${esc(TRAIT_HINT[f])}</span></label>
+      ${f === "personality"
+        ? `<input id="p-${f}" maxlength="${TRAIT_LIMIT[f]}" value="${esc(a[f] || "")}">`
+        : `<textarea id="p-${f}" rows="2" maxlength="${TRAIT_LIMIT[f]}">${esc(a[f] || "")}</textarea>`}`).join("")}` : ""}
     ${isItem ? `<label>Rarity</label>
       <select id="p-rarity">${["", "common", "uncommon", "rare", "epic",
         "legendary"].map(v => `<option ${v === (a.rarity || "") ? "selected"
@@ -455,58 +462,36 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
       <button class="primary" id="p-save">Save piece</button>
     </div>`);
 
-  const csv = s => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
   // Traits autocomplete from every trait already used in this world; links
   // autocomplete from every card in the world (show title, store slug), and this
   // card is excluded so it can't link to itself.
   const selfSlug = piece ? piece.slug : "";
-  const traitChips = chipInput($("#p-traits-chips"), {
-    value: csv(a.traits), suggestions: vocab.traits,
-    placeholder: "brave, merchant, undead…"});
-  const linkChips = chipInput($("#p-links-chips"), {
-    value: csv(a.links),
-    suggestions: (vocab.entities || []).filter(e => e.slug !== selfSlug)
-      .map(e => ({label: e.title, value: e.slug})),
-    placeholder: "link a character, place, faction…"});
+  const chips = {
+    traits: chipInput($("#p-traits-chips"), {
+      value: csv(a.traits), suggestions: vocab.traits,
+      placeholder: "brave, merchant, undead…"}),
+    links: chipInput($("#p-links-chips"), {
+      value: csv(a.links),
+      suggestions: (vocab.entities || []).filter(e => e.slug !== selfSlug)
+        .map(e => ({label: e.title, value: e.slug})),
+      placeholder: "link a character, place, faction…"}),
+  };
+  // Attributes the form does not manage ride along untouched, so an entry's extra
+  // header lines survive an edit (and an AI result replaces the ones it states).
+  let carried = unmanaged(a);
+  const fields = fieldsFor(rel);
 
+  // ONE table (pieceform.js) drives both directions, so a field cannot be read
+  // but not written, which is what made "Improve with AI" drop traits, links,
+  // wants, motivation and the activation controls.
   const collect = () => {
-    const adv = id => ($("#" + id) ? $("#" + id).value.trim() : "");
-    const attrs = {
-      weight: $("#p-weight").value,
-      triggers: $("#p-triggers").value.trim(),
-      pinned: $("#p-pinned").checked ? "true" : "",
-      hidden: $("#p-hidden").checked ? "true" : "",
-      // Tier-2 activation controls — the engine has supported these all along,
-      // but with no form fields they could only be written by hand in Markdown.
-      group: adv("p-group"),
-      chance: adv("p-chance"),
-      delay: adv("p-delay"),
-      sticky: adv("p-sticky"),
-      cooldown: adv("p-cooldown"),
-      triggers_all: adv("p-triggers-all"),
-      triggers_not: adv("p-triggers-not"),
-      traits: traitChips.get().join(", "),
-      links: linkChips.get().join(", "),
-      semantic: $("#p-semantic") && $("#p-semantic").checked ? "true" : "",
-      recurse: $("#p-recurse") && $("#p-recurse").checked ? "true" : "",
-    };
-    // preserve attrs the form doesn't manage
-    for (const [k, v] of Object.entries(a)) {
-      if (!(k in attrs) && !["playable", "once", "stats", "skills", "rarity",
-                             "objectives", "wants", "motivation"].includes(k)) {
-        attrs[k] = v;
-      }
+    const attrs = {...carried};
+    for (const f of fields) {
+      const el = $("#" + f.id);
+      if (!el) continue;
+      attrs[f.attr] = f.kind === "check" ? (el.checked ? "true" : "") : el.value.trim();
     }
-    if (isChar) {
-      attrs.playable = $("#p-playable").checked ? "true" : "";
-      attrs.stats = $("#p-stats").value.trim();
-      attrs.skills = $("#p-skills").value.trim();
-      attrs.wants = $("#p-wants").value.trim();
-      attrs.motivation = $("#p-motivation").value.trim();
-    }
-    if (isEvent) attrs.once = $("#p-once").checked ? "true" : "";
-    if (isItem) attrs.rarity = $("#p-rarity").value;
-    if (isThread) attrs.objectives = $("#p-objectives").value.trim();
+    for (const c of CHIPS) attrs[c] = chips[c].get().join(", ");
     return {
       title: $("#p-title").value.trim(),
       slug: piece ? piece.slug : "",
@@ -517,25 +502,36 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
       body: $("#p-body").value.trim(),
     };
   };
-  const fill = entry => {
+  const apply = entry => {
     $("#p-title").value = entry.title || "";
     $("#p-imp").value = entry.importance || 3;
     $("#p-aliases").value = (entry.aliases || []).join(", ");
     $("#p-body").value = entry.body || "";
     const ea = entry.attrs || {};
-    $("#p-weight").value = ea.weight || "";
-    $("#p-triggers").value = ea.triggers || "";
-    $("#p-pinned").checked = ea.pinned === "true";
-    $("#p-hidden").checked = ea.hidden === "true";
-    if (isChar) {
-      $("#p-playable").checked = ea.playable === "true";
-      $("#p-stats").value = ea.stats || "";
-      $("#p-skills").value = ea.skills || "";
+    for (const f of fields) {
+      const el = $("#" + f.id);
+      if (!el) continue;
+      if (f.kind === "check") el.checked = ea[f.attr] === "true";
+      else el.value = ea[f.attr] || "";
     }
-    if (isEvent) $("#p-once").checked = ea.once === "true";
-    if (isItem) $("#p-rarity").value = ea.rarity || "";
-    if (isThread) $("#p-objectives").value = ea.objectives || "";
+    for (const c of CHIPS) chips[c].set(csv(ea[c]));
+    carried = unmanaged(ea);
   };
+  // What an AI answer changes is decided in pieceform.js: everything it states, nothing it leaves out.
+  const fill = entry => apply(mergeFill(collect(), entry));
+  // One level of undo for the last AI result, until the piece is saved or the form closed.
+  let undo = null;
+  const applyAI = entry => {
+    undo = collect();
+    fill(entry);
+    $("#p-undo-ai").hidden = false;
+  };
+  $("#p-undo-ai").addEventListener("click", () => {
+    if (!undo) return;
+    apply(undo);
+    undo = null;
+    $("#p-undo-ai").hidden = true;
+  });
 
   $("#p-cancel").addEventListener("click", closeModal);
   $("#p-save").addEventListener("click", async () => {
@@ -587,7 +583,7 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
         kind, mode: "seed", text: idea, scenario: slug,
         improve: Boolean($("#b-improve") && $("#b-improve").checked),
       }});
-      fill(out.entry);
+      applyAI(out.entry);
     } catch (e) { toast(e.message); }
     $("#p-seed").disabled = false;
     $("#p-seed").textContent = "✨ Seed from idea";
@@ -600,7 +596,7 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
         kind, mode: "improve", text: JSON.stringify(collect()),
         scenario: slug,
       }});
-      fill(out.entry);
+      applyAI(out.entry);
     } catch (e) { toast(e.message); }
     $("#p-improve").disabled = false;
     $("#p-improve").textContent = "Improve with AI";
