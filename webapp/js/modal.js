@@ -14,6 +14,14 @@ export function openModal(html, onClose = null) {
   modalCard.innerHTML = html;
   modalCard.setAttribute("role", "dialog");
   modalCard.setAttribute("aria-modal", "true");
+  // The comment above said "labelled for assistive tech" and nothing was: name the dialog by its own heading.
+  const heading = modalCard.querySelector("h1, h2");
+  if (heading) {
+    heading.id = heading.id || "modal-title";
+    modalCard.setAttribute("aria-labelledby", heading.id);
+  } else {
+    modalCard.removeAttribute("aria-labelledby");
+  }
   modalRoot.classList.remove("hidden");
   const first = modalCard.querySelector(
     "input, textarea, select, button:not([disabled])");

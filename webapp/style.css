@@ -9,6 +9,7 @@
   --line: #123f1c;
   --text: #c7f0cf;
   --dim: #6f9b7d;
+  --muted: var(--dim);    /* .ver read var(--muted), which nothing defined */
   --accent: #1fda25;
   --accent-dim: #178a1e;
   --on-accent: #04130a;   /* dark text on bright neon green */
@@ -113,6 +114,9 @@ label { display: block; color: var(--dim); font-size: 12px; margin: 10px 0 4px;
 .row > * { flex: 1 1 140px; }
 .muted { color: var(--dim); font-size: 13px; }
 .hidden { display: none !important; }
+/* The `hidden` attribute loses to any rule that sets display (`.row` is flex), so a row marked hidden was shown anyway: the
+   piece editor's idea row never hid. */
+[hidden] { display: none !important; }
 pre.table {
   font-family: var(--mono); font-size: 11.5px; color: var(--dim);
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
@@ -158,7 +162,10 @@ pre.table {
   flex: 1; overflow-y: auto; padding: 26px 0;
 }
 .turn { max-width: 720px; margin: 0 auto 18px; padding: 0 24px;
-        line-height: 1.65; }
+        line-height: 1.65;
+        /* one long word, URL or path used to make the turn 1,211px wide on a 375px screen, cut off at the edge */
+        overflow-wrap: anywhere; }
+.card, #modal-card { overflow-wrap: anywhere; }
 .turn.narrator { font-family: var(--serif); font-size: 16.5px;
                  white-space: pre-wrap; }
 .turn.player { color: var(--player); font-style: italic;
@@ -319,6 +326,8 @@ details.howto p { color: var(--text); line-height: 1.55; }
   .seg button { padding: 8px 12px; font-size: 13px; }
   #modal-card { padding: 16px 14px; }
   #play-head { flex-wrap: wrap; row-gap: 6px; padding: 8px 12px; }
+  /* the title shared a row with the buttons and got what was left, 18px: "D." for "Dice Night". It gets its own row. */
+  #play-head .title { flex: 1 1 100%; order: -1; white-space: normal; }
   #play-actions { flex-wrap: wrap; }
   #composer { padding: 10px 12px; }
   .turn, #stageline, #eventbar { padding: 0 14px; }
@@ -545,3 +554,21 @@ label + .hint { margin-top: 3px; }
 .ca-f textarea, .ca-f input { width: 100%; }
 .ca-f small { display: block; color: var(--dim); font-size: 11.5px; margin-top: 2px; text-transform: none; letter-spacing: 0; }
 .ca-now { margin: 6px 0 2px; }
+
+/* ---------- touch targets (WCAG 2.5.8 asks 24px, platform guidelines 44px) ----------
+   On a phone almost every control was under 44px (341 of 344 on the long story's Play view). Buttons that stand alone get
+   a real height. The small icon buttons inside the transcript keep their size, so the transcript does not grow, and get a
+   larger hit area from an invisible pseudo-element instead. */
+@media (max-width: 640px), (pointer: coarse) {
+  #play-head button, #play-actions button, #composer button, .page button, #modal-card button, #topbar nav a {
+    min-height: 40px;
+  }
+  #topbar nav a { display: inline-flex; align-items: center; }
+  .turn button, .swipebar button, .fold-nav button, .turn-editbar button, button.evt.fold, .cards button.mini {
+    position: relative;
+  }
+  .turn button::after, .swipebar button::after, .fold-nav button::after, .turn-editbar button::after,
+  button.evt.fold::after {
+    content: ""; position: absolute; inset: -9px;
+  }
+}

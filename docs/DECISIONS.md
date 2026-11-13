@@ -2259,3 +2259,57 @@ as one in a system turn was not measured on llama, only that the reply stops sta
 **Tests.** `generator_slugs_test.py` (4), `chapter_distinctness_test.py` case 7 (the player rule is in both instructions),
 `llm_late_system_test.py` (5: the fold, the locality check, the llama-only rule, the client with the override, the tool-calling path). 10 and 19 guard
 mutations caught.
+
+## D-056 — Web UI sweep: what driving the real app found, what was fixed, and what the comparison with FictionLab and AI Dungeon adds
+
+**Method.** A throwaway home (never the repo's saves or `.env`) with a model profile pointed at a closed port, so nothing could leave the
+machine: three invented worlds (one with a very long name), four stories including one of 320 turns and one with an unbroken 170
+character word, and a fresh install. Three read-only research agents ran in parallel: one on FictionLab, one on AI Dungeon (public pages
+only, no sign-in, no account), one reading our own web code. Then every route was driven in a real browser at 800 and 375 px wide with
+scripts that measure rather than look (horizontal overflow, controls with no accessible name, tap-target size, errors). The agents'
+claims about our code were checked against the source and then in the browser before anything was changed.
+
+**Verified in the browser and fixed (each pinned by a case in `webapp_smoke_test.py`, 9 to 13; 12 guard mutations caught).**
+1. **Data loss.** The builder's "Improve with AI" and "Seed" wrote "✨ improving…" into the premise box, and Back, Save and every
+   navigation save whatever the box holds: pressing Back while the model worked replaced the author's premise on disk with the
+   placeholder (reproduced; the stored premise became "✨ improving…"). The status now sits beside the field and the value is never
+   touched until the model succeeds.
+2. **Dead feature, lost form.** "Seed from idea" in the piece editor opened a second dialog into the single modal host, which replaced the
+   form; the handler then threw `Cannot set properties of null (setting 'disabled')` and the form (28 fields) was gone. The idea is asked
+   for inline now. Writing the test exposed a second defect in the first fix: a row marked `hidden` is shown anyway when a rule such as
+   `.row { display: flex }` applies, so there is now a global `[hidden]` rule.
+3. **Skip link.** Its href is `#view`, a hash the router does not know, and unknown hashes render the Library: on any other page "Skip to
+   content" threw a keyboard user back to the Library. It moves focus now.
+4. **No accessible names.** 108 `<label>` elements and not one `for`; 10 of the 11 fields of the world builder and the box you type your
+   action into had no name, and dialogs claimed to be labelled and were not. `a11y.js` ties each label to the control beside it whenever
+   markup is added (a timer, not `requestAnimationFrame`, which never fires in a background tab) and names a dialog by its heading.
+5. **A long unbroken word** (a URL, a path) made a turn 1,211 px wide on a 375 px screen and was cut off at the edge: `overflow-wrap`.
+6. **Phone width.** The story title in the Play header was squeezed to 18 px ("D." for "Dice Night"): it has its own row now. Nearly
+   every control was under 44 px (341 of 344 on the long story's Play view): stand-alone buttons are at least 40 px, and the small
+   icon buttons in the transcript keep their size and get a larger invisible hit area, which a pointer test would have to confirm.
+7. `--muted` was used and never defined.
+
+**Verified, not yet fixed (input to the backlog).**
+- The first-run probe and the model list ask `http://localhost:11434` and ignore the local profile's own address: a user on LM Studio,
+  llama.cpp or a remote Ollama is told "Ollama isn't running".
+- The first-run picker lists `nomic-embed-text`, an embedding model that cannot tell a story, as a model to use.
+- Settings paints nothing until its slowest call returns (2.4 s here, waiting on the model list); there is no progressive paint.
+- Em dashes remain in shipped copy: the showcase world's blurb, the Pieces intro, the first-run picker.
+- Read in the code by the audit, not yet reproduced: Escape or a backdrop click discards any dialog's edits without asking; leaving the
+  Play view mid-turn and coming back leaves Send doing nothing; swipe-generate has no Stop; a deliberate Stop shows as a red alert; no
+  story search; no readable export (a zip backup only); one dark theme and no font-size control (a second theme file is linked nowhere).
+
+**What the competitors add (public documentation and reviews only; neither product was opened, so layout claims are inferred).**
+FictionLab: a hover menu on each reply (copy, edit, branch, rewind, regenerate, delete) with regenerated replies you can flip through;
+lore entries split into a short "when to use me" description and the text that is injected; an AI Assist box in each creation section with
+undo and retry; a font-size, colour and response-length panel; no sampler controls for normal users. AI Dungeon: Do, Say, Story and See
+input modes; a Context Viewer on the last reply showing what share of the AI's context each part takes; Used, Stored or Forgotten labels on
+memories; Retry with a stack of earlier tries; Erase to here; sampling controls saved per model, and a "Dynamic" model option that hides the
+choice from beginners; an account required before the first turn; no world-from-a-sentence generator found. We already have what neither
+was found to have: a world from one sentence, a Canon panel that lists what the story holds and lets the author correct it, per-story
+fate, and no account.
+
+**Still to do (the plan's Phase C and D).** One table of feature, FictionLab, AI Dungeon, Coderain and a verdict; two rounds of critique
+by the three agents; a ranked backlog (P1 confuses or harms a first-time user, P2 friction, P3 nice); then build it in that order with
+a browser case per item. Evidence that would change this: a real session with either product (needs the owner's yes to an account),
+or a first-time user's recording.

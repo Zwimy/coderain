@@ -198,9 +198,17 @@ export async function renderBuilder(slug, scope = "scenario") {
       toast("Nothing to improve yet — write something or seed it first.");
       return;
     }
+    // The status goes NEXT TO the field, never into it. The field's value is what Back, Save and every navigation write
+    // to disk (mainFields), so a placeholder put in the value was saved over the author's own premise whenever they left
+    // the page while the model was still working. The request is the only thing that may replace the text, and only when
+    // it succeeds.
     ta.disabled = true;
-    const old = ta.value;
-    ta.value = mode === "seed" ? "✨ generating…" : "✨ improving…";
+    ta.setAttribute("aria-busy", "true");
+    const status = document.createElement("div");
+    status.className = "muted assist-status";
+    status.setAttribute("role", "status");
+    status.textContent = mode === "seed" ? "✨ generating…" : "✨ improving…";
+    ta.insertAdjacentElement("afterend", status);
     try {
       const out = await api("/api/assist", {method: "POST", body: {
         kind: FIELD_KIND[id], mode, text, scenario: slug,
@@ -208,10 +216,12 @@ export async function renderBuilder(slug, scope = "scenario") {
       }});
       ta.value = out.text;
     } catch (e) {
-      ta.value = old;
       toast(e.message);
+    } finally {
+      status.remove();
+      ta.removeAttribute("aria-busy");
+      ta.disabled = false;
     }
-    ta.disabled = false;
   };
   view.querySelectorAll("[data-seed]").forEach(b => b.addEventListener(
     "click", () => assist(b.dataset.seed, "seed")));
@@ -363,6 +373,14 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
       <div><button class="mini" id="p-improve" style="width:100%"
         ${piece ? "" : "disabled"}>Improve with AI</button></div>
       <div><button class="mini" id="p-undo-ai" style="width:100%" hidden>Undo AI</button></div>
+    </div>
+    <!-- The idea is asked for HERE, not in a second dialog: there is one modal host, so a second dialog replaced this whole
+         form (the seed handler then looked for a button that was gone and threw, and Cancel threw the form away). -->
+    <div id="p-seed-row" class="row" hidden style="align-items:flex-end">
+      <div style="flex:3"><label for="p-idea">Describe the idea (leave it blank to let the AI decide)</label>
+        <textarea id="p-idea" rows="2" placeholder="A grim knight bound by a blood-oath…"></textarea></div>
+      <div><button class="mini primary" id="p-seed-go">Generate</button></div>
+      <div><button class="mini" id="p-seed-cancel">Cancel</button></div>
     </div>
     <div class="row">
       <div><label>Importance 1-5</label>
@@ -570,12 +588,18 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
     if (ok !== undefined) tolib.textContent = "Saved to library ✓";
   });
 
-  $("#p-seed").addEventListener("click", async () => {
-    const idea = await promptModal("Seed this piece from an idea", {
-      multiline: true, okLabel: "Generate",
-      placeholder: "A grim knight bound by a blood-oath…",
-      hint: "Leave it blank to let the AI decide."});
-    if (idea === null) return;
+  const seedRow = $("#p-seed-row");
+  $("#p-seed").addEventListener("click", () => {
+    seedRow.hidden = false;
+    $("#p-idea").focus();
+  });
+  $("#p-seed-cancel").addEventListener("click", () => {
+    seedRow.hidden = true;
+    $("#p-seed").focus();
+  });
+  $("#p-seed-go").addEventListener("click", async () => {
+    const idea = $("#p-idea").value;
+    $("#p-seed-go").disabled = true;
     $("#p-seed").disabled = true;
     $("#p-seed").textContent = "✨ generating…";
     try {
@@ -584,9 +608,14 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
         improve: Boolean($("#b-improve") && $("#b-improve").checked),
       }});
       applyAI(out.entry);
+      seedRow.hidden = true;
     } catch (e) { toast(e.message); }
-    $("#p-seed").disabled = false;
-    $("#p-seed").textContent = "✨ Seed from idea";
+    // The modal can have been closed while the model worked: touch only what is still on screen.
+    for (const [sel, fn] of [["#p-seed-go", el => { el.disabled = false; }],
+                             ["#p-seed", el => { el.disabled = false; el.textContent = "✨ Seed from idea"; }]]) {
+      const el = $(sel);
+      if (el) fn(el);
+    }
   });
   $("#p-improve").addEventListener("click", async () => {
     $("#p-improve").disabled = true;

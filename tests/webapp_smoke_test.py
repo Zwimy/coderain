@@ -22,6 +22,11 @@ Asserts, once it can run:
  6) an empty Continue is reported to the reader, not swallowed;
  7) the first-run escape hatch does not throw;
  8) the "World from an idea" dialog opens, refuses an empty sentence, and reports a failed run without leaving a world.
+ 9) leaving the builder during an AI assist keeps the author's premise (the placeholder was being saved over it)
+10) "Seed from idea" in the piece editor fills the form and keeps it on cancel (it used to throw and lose the form)
+11) the skip link moves focus and stays on the page (it used to render the Library)
+12) every visible field and every dialog has an accessible name
+13) at 375px a long unbroken word wraps, the story title is readable and the stand-alone buttons are at least 40px tall
 """
 import os
 import shutil
@@ -291,6 +296,126 @@ with sync_playwright() as p:
         failures.append("a failed 'World from an idea' run left a world behind")
     close_modal()
     print("8) the 'World from an idea' dialog opens, refuses an empty sentence and reports a failed run")
+
+    # --- web UI sweep (D-056): defects found by driving the real app, each one pinned -------------------------------
+    # 9) The premise must survive leaving the page while the model is still working. The builder used to write
+    #    "improving..." INTO the premise box and Back saved whatever the box held: the author's own premise was
+    #    replaced on disk by the placeholder.
+    page.evaluate(f"location.hash = '#world/{scen}'")
+    page.wait_for_selector("#b-premise", timeout=8000)
+    premise_before = c.get(f"/api/scenarios/{scen}/full").json()["premise"]
+    held = []
+    page.route("**/api/assist", lambda route: held.append(route))         # never answered until the test lets go
+    page.evaluate("document.querySelector('[data-improve=\"b-premise\"]').click()")
+    page.wait_for_function("document.querySelector('#b-premise').disabled", timeout=4000)
+    during = page.input_value("#b-premise")
+    page.click("#back")
+    page.wait_for_function("location.hash === '#library'", timeout=8000)
+    premise_after = c.get(f"/api/scenarios/{scen}/full").json()["premise"]
+    for r in held:
+        r.fulfill(status=400, content_type="application/json", body='{"detail": "released by the test"}')
+    page.unroute("**/api/assist")
+    if during.strip() != premise_before.strip():
+        failures.append(f"the premise box held {during!r} while the model worked, not the author's text")
+    if premise_after.strip() != premise_before.strip():
+        failures.append(f"Back during an AI assist saved {premise_after!r} over the premise")
+    print("9) leaving the builder during an AI assist keeps the author's premise")
+
+    # 10) "Seed from idea" in the piece editor: asking for the idea used to open a second dialog into the ONE modal host,
+    #     which replaced the form; the handler then looked for a button that was gone, threw, and the form was lost.
+    page.evaluate(f"location.hash = '#world/{scen}'")
+    page.wait_for_selector("[data-newpiece='characters.md']", timeout=8000)
+    page.click("[data-newpiece='characters.md']")
+    page.wait_for_selector("#p-seed", timeout=4000)
+    page.fill("#p-title", "Half Typed")
+    if page.is_visible("#p-idea"):
+        failures.append("the idea row is open before Seed from idea was pressed (a `hidden` row shown by CSS)")
+    page.click("#p-seed")
+    if not page.is_visible("#p-idea") or page.input_value("#p-title") != "Half Typed":
+        failures.append("Seed from idea replaced or emptied the piece form")
+    page.click("#p-seed-cancel")
+    if page.is_visible("#p-idea") or page.input_value("#p-title") != "Half Typed":
+        failures.append("cancelling the idea row lost the piece form")
+    page.click("#p-seed")
+    page.fill("#p-idea", "a grim ferryman")
+    page.route("**/api/assist", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body='{"entry": {"title": "Seeded Ferryman", "importance": 3, "aliases": [], "attrs": {}, "body": "Grim."}}'))
+    page.click("#p-seed-go")
+    try:
+        page.wait_for_function("document.querySelector('#p-title').value === 'Seeded Ferryman'", timeout=6000)
+    except Exception:  # noqa: BLE001 - report it, don't abort the run
+        failures.append("Seed from idea did not fill the piece form: " + repr(page.input_value("#p-title")))
+    page.unroute("**/api/assist")
+    close_modal()
+    print("10) Seed from idea in the piece editor fills the form and keeps it on cancel")
+
+    # 11) "Skip to content" moves focus into the page. Its href is "#view", a hash the router does not know, so it used to
+    #     render the Library: a keyboard user on any other page was thrown away from it.
+    page.evaluate("location.hash = '#characters'")
+    page.wait_for_function("document.querySelector('#view h1, #view h2')", timeout=8000)
+    # Focus it directly: Chromium starts a Tab from the last click, so a bare Tab here lands wherever the test last clicked.
+    first_in_order = page.evaluate(
+        "document.querySelector('a[href], button, input, select, textarea, [tabindex]:not([tabindex=\"-1\"])')"
+        ".classList.contains('skip-link')")
+    page.focus(".skip-link")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(500)
+    at = page.evaluate("[location.hash, document.activeElement && document.activeElement.id]")
+    if not first_in_order:
+        failures.append("the skip link is not the first focusable element on the page")
+    if at != ["#characters", "view"]:
+        failures.append(f"the skip link navigated or lost focus: {at!r}")
+    print("11) the skip link moves focus and stays on the page")
+
+    # 12) Names for assistive technology: every visible field has one, and a dialog is named by its heading.
+    for view in (f"#world/{scen}", f"#play/{slug}"):
+        page.evaluate(f"location.hash = {view!r}")
+        page.wait_for_timeout(900)
+        unnamed = page.evaluate("""() => [...document.querySelectorAll(
+            '#view input:not([type=hidden]):not([type=checkbox]):not([type=radio]), #view textarea, #view select')]
+          .filter(el => el.offsetParent !== null && !(el.labels && el.labels.length)
+                        && !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby'))
+          .map(el => el.id || el.type)""")
+        if unnamed:
+            failures.append(f"{view}: fields with no accessible name: {unnamed[:6]}")
+    page.click("#mem-btn")
+    page.wait_for_selector("#modal-card h2, #modal-card h1", timeout=8000)
+    named = page.evaluate("""() => { const c = document.querySelector('#modal-card');
+      const id = c.getAttribute('aria-labelledby'); const t = id && document.getElementById(id);
+      return t ? t.textContent.trim() : null; }""")
+    if not named:
+        failures.append("an open dialog has no accessible name (aria-labelledby does not point at its heading)")
+    close_modal()
+    print("12) fields and dialogs have accessible names")
+
+    # 13) Phone width: one long unbroken word must wrap instead of making the turn wider than the screen, the story's
+    #     title must stay readable, and the stand-alone controls must be big enough to tap.
+    server._engine(slug).store.append_turn("narrator", "Wrapped: " + "Supercalifragilisticexpialidocious" * 5)
+    page.set_viewport_size({"width": 375, "height": 812})
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_timeout(300)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    page.wait_for_timeout(600)
+    m = page.evaluate("""() => {
+      const t = [...document.querySelectorAll('.turn-body')].find(e => /Supercali/.test(e.textContent));
+      const title = document.querySelector('#play-head .title');
+      const small = [...document.querySelectorAll('#play-head button, #play-actions button, #composer button')]
+        .filter(b => b.offsetParent !== null && b.getBoundingClientRect().height < 40).map(b => b.textContent.trim() || b.id);
+      return {turnRight: t ? Math.round(t.getBoundingClientRect().right) : null, vw: innerWidth,
+              docW: document.documentElement.scrollWidth, titleW: title ? title.clientWidth : null, small};
+    }""")
+    if m["turnRight"] is None or m["turnRight"] > m["vw"] + 1:
+        failures.append(f"a long unbroken word runs off the screen at 375px: {m}")
+    if m["docW"] > m["vw"]:
+        failures.append(f"the Play view scrolls sideways at 375px: {m}")
+    if (m["titleW"] or 0) < 150:
+        failures.append(f"the story title is squeezed to {m['titleW']}px at 375px")
+    if m["small"]:
+        failures.append(f"controls under 40px tall at 375px: {m['small']}")
+    page.set_viewport_size({"width": 1280, "height": 720})
+    print("13) at 375px a long word wraps, the title is readable and the buttons are tappable")
 
     browser.close()
 

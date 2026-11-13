@@ -3,6 +3,8 @@
    layer, and one module per view. Loaded as a module from index.html, so
    nothing here touches the global scope. */
 import {esc, view} from "./util.js";
+import {watchLabels} from "./a11y.js";
+import {modalCard} from "./modal.js";
 import {
   checkReady,
   clearDirty,
@@ -78,5 +80,10 @@ export async function render() {
   }
 }
 
+// "Skip to content" has to move focus, not navigate: its href is "#view", and a hash the router does not know renders the
+// Library, so on any other page it threw the reader to the Library (confirmed in a browser).
+const skip = document.querySelector(".skip-link");
+if (skip) skip.addEventListener("click", ev => { ev.preventDefault(); view.focus(); });
+watchLabels(view, modalCard);
 setBrainline();
 render();
