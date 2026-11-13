@@ -1792,3 +1792,56 @@ test.
 one story, one model, one run. If a reader ever returns far fewer claims on such turns than on ordinary ones, the same check (a
 density-ranked sample against a control, claims per passage beside the status) is the test; its script lives in the session notes,
 not in the repo, because the lexicon and the story must not.
+
+## D-044 — Accessories are a slot of their own (built and tested; the model measurement is pending)
+
+**Why.** Nothing in the slot list could hold a ring, a pair of hairpins or a string of beads. The real-story gate lost two of its
+controls that way (hairpins on one character, jade beads on another), and a later soak showed the cost: the reader's only way to
+file "iridescent beads in her braids" was as hair, the shape rules rightly refused it, and the beads were dropped. Garments are the
+outfit's (a list with a vocabulary and a decay window), marks are scars and tattoos; an ornament worn on the person is neither.
+
+**Decision.** `identity.accessories`, one ledger slot per item like marks (`identity.accessories.<item>`), first write wins per item,
+nothing ages off the card, `add` only (a removal is the author's call, as for marks).
+- **Shape rule** (`canon/shape.py` `_accessory`): the value names an ornament (hairpin, circlet, earring, necklace, pendant, locket,
+  choker, bracelet, bangle, anklet, brooch, monocle, spectacles; and ring, bead, ribbon, glasses, chain, comb, pin, hoop, stud, clip,
+  cuff, band, which have other meanings), and the quote has it worn: a place on the body (hair, braid, ear, neck, throat, wrist, ankle,
+  finger, brow, nose ...) or a verb for wearing it (wore, pinned, threaded, woven ...). Refused: "beads of sweat" (a liquid), an
+  ornament being taken off ("slipped the ring off her finger"), a locket on a table or clutched in a fist, a ring of men, glasses set
+  down, and any garment. Reasons: `not_an_accessory`, `not_worn`.
+- **Validator**: the same item worded another way is the item said again ("hairpins" and "gold hairpins", "jade beads" and "green
+  beads"), recorded under the slot it already has. `same_value` is the wrong test for items (it calls "silver ring" and "silver
+  hairpins" one thing because both say silver, which the first draft of the tests caught), so `_same_item` needs a shared ornament
+  word and colours that do not disagree. A character holds at most 12 (`too_many_accessories`): identity items cannot age off.
+- **Card**: "wears gold hairpins, jade beads" after the marks, as a phrase (D-029), dropped before build and age when the line is too
+  long, offered like the other looks when the character has dropped out of the recent turns or the player's action asks about
+  jewellery.
+- **Corrections** (`accessories`, also `accessory`, `jewellery`, `jewelry`): `- Name: accessories = silver ring` adds one at author
+  authority, `is not gold hairpins` retracts the matching one and makes the validator refuse it, removing the line releases it. The
+  corrections code treats marks and accessories as the same kind of slot (`LIST_SLOTS`) instead of copying every branch.
+- The Canon panel lists it, the identity table and the shadow report show it, and the Scribe's schema and prompt can ask for it
+  (gated, below).
+
+**Tests.** `canon_accessories_test.py` (7 cases: the shape rule on 18 sentences, one slot per item and sameness, the bound, the
+schema and prompt and op rules, the card, corrections, the tables); 27 of 27 guard mutations caught after one test gap was closed (a
+taken-off quote with no body place was refused for a different reason, so the taken-off guard was never exercised). The evaluation
+corpus gained 4 accessory passages (2 dev, 2 test, a new group) and 3 look-alike traps (beads of sweat, a ring taken off, a ring of
+men), all invented, so the next model run can score the slot.
+
+**The prompt line is gated.** The slot adds a line to the Scribe's prompt, which can move what the reader does with every other slot,
+and the identity capture is the part that has been measured carefully. So the Scribe is asked about accessories only when
+`canon: {accessories: true}` (a literal true, default false; `Scribe(llm, accessories=True)`; `--accessories` on `python -m soak
+scribe`). With it off the schema and the prompt are exactly what they were (10 slots), so every earlier recording is still a valid
+replay of the default. Everything after the reader works either way: the validator, the card, the corrections file and the Canon
+panel, so an author can add or retract an accessory by hand today.
+
+**Evaluation.** The corpus has a `legacy` slice (the 26 passages that existed before this entry) and an `accessory` slice (4 new
+passages with 6 labelled facts, 2 dev and 2 test), and the 3 look-alike traps sit in the trap slice. A run with and without
+`--accessories` on the same corpus is therefore comparable on exactly the old passages, and the accessory slice scores the new slot.
+
+**Pending (needs a model, the GPU).** (1) The evaluation corpus with and without the slot: the legacy slice must not drop and the
+accessory slice must score above zero with few false positives on the look-alikes. (2) A re-read of the fixed narration-first
+transcript with `accessories: true`, to see what the reader files as an accessory and whether the held hair, eye, build and mark
+values change. Only then is the default flipped.
+
+**Tests (added with the gate).** `canon_accessories_test.py` 4 (the schema and prompt ask only when told to, the Scribe passes the
+gate on), `canon_shadow_test.py` 1 (the setting) and `soak_scribe_corpus_test.py` 7 (the slices); 11 of 11 gate guards caught.

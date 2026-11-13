@@ -10,8 +10,8 @@
 import {$, api, esc, guard, toast} from "./util.js";
 import {closeModal, openModal, promptModal} from "./modal.js";
 
-const SLOTS = ["hair", "eyes", "build", "age", "marks"];
-const LABEL = {hair: "Hair", eyes: "Eyes", build: "Build", age: "Age", marks: "Mark"};
+const SLOTS = ["hair", "eyes", "build", "age", "marks", "accessories"];
+const LABEL = {hair: "Hair", eyes: "Eyes", build: "Build", age: "Age", marks: "Mark", accessories: "Accessory"};
 const INJECT = {
   off: "Nothing is sent to the writer. The reader only watches.",
   preview: "The card is built every turn but NOT sent. Read it below before turning it on.",

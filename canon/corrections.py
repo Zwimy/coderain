@@ -26,7 +26,7 @@ Removing a line releases what it set: the value is retracted and the story may s
 replaced or retracted is not brought back, because the ledger no longer holds it as open; the story can state
 it again, and the history keeps it.
 
-Identity only (hair, eyes, build, age, marks): state changes every few turns and is the story's to say.
+Identity only (hair, eyes, build, age, marks, accessories): state changes every few turns and is the story's to say.
 Standard library only, plus the rest of canon/.
 """
 from __future__ import annotations
@@ -39,9 +39,12 @@ from canon.state import Canon
 from canon.validate import _slugify, norm, same_value
 
 FILE = "corrections.md"
-SLOTS = ("hair", "eyes", "build", "age", "marks")
+SLOTS = ("hair", "eyes", "build", "age", "marks", "accessories")
 _SLOT_WORDS = {"hair": "hair", "eyes": "eyes", "eye": "eyes", "build": "build", "age": "age",
-               "marks": "marks", "mark": "marks"}
+               "marks": "marks", "mark": "marks", "accessories": "accessories", "accessory": "accessories",
+               "jewellery": "accessories", "jewelry": "accessories"}
+# Slots that hold several items, one ledger slot each: a "=" line adds one, "is not" removes the matching one.
+LIST_SLOTS = ("marks", "accessories")
 MAX_VALUE = 80
 MAX_WHO = 120
 MAX_FILE = 20_000
@@ -51,13 +54,14 @@ HEADER = """# Canon corrections
 
 What you say here is true outranks what the story's own text says, and is kept across undo, retry and a rebuild.
 Write each correction as a bullet line: a dash, the character, a colon, the slot, then either "= value" or
-"is not value". These three examples are shown without the dash on purpose, so they are not read as real lines:
+"is not value". These examples are shown without the dash on purpose, so they are not read as real lines:
 
     Name: hair = raven               the value to use (outranks the story)
     Name: hair is not raven          that value is wrong: remove it, and do not accept it again
     Name: marks = scar on his chin   a mark to add (marks is a list; add one line per mark)
+    Name: accessories = gold hairpins   an ornament worn (a list too; add one line per item)
 
-Slots: hair, eyes, build, age, marks. Anything that is not a bullet is ignored, so you can write notes.
+Slots: hair, eyes, build, age, marks, accessories. Anything that is not a bullet is ignored, so you can write notes.
 """
 
 _LINE = re.compile(
@@ -98,7 +102,7 @@ def parse(text: str) -> tuple[list[Correction], list[dict]]:
         who, slot = _clean(m.group("who")), _SLOT_WORDS.get(m.group("slot").lower())
         value = _clean(m.group("value").partition(" -- ")[0])       # " -- " starts a note
         op = "set" if m.group("eq") else "wrong"
-        why = ("unknown slot %r (use hair, eyes, build, age or marks)" % m.group("slot") if slot is None
+        why = ("unknown slot %r (use hair, eyes, build, age, marks or accessories)" % m.group("slot") if slot is None
                else "no character name" if not who or len(who) > MAX_WHO
                else "no value" if not value
                else f"the value is longer than {MAX_VALUE} characters" if len(value) > MAX_VALUE
@@ -121,13 +125,13 @@ def parse(text: str) -> tuple[list[Correction], list[dict]]:
     # a scalar slot has one value: the last "=" for it wins, and the earlier one is reported
     keep: dict[tuple[str, str], Correction] = {}
     for c in out:
-        if c.op == "set" and c.slot != "marks":
+        if c.op == "set" and c.slot not in LIST_SLOTS:
             old = keep.get((c.who.lower(), c.slot))
             if old is not None:
                 problems.append({"line": old.line, "text": old.text()[:100],
                                  "why": f"replaced by line {c.line}, the later value for the same slot"})
             keep[(c.who.lower(), c.slot)] = c
-    final = [c for c in out if not (c.op == "set" and c.slot != "marks"
+    final = [c for c in out if not (c.op == "set" and c.slot not in LIST_SLOTS
                                     and keep[(c.who.lower(), c.slot)] is not c)]
     return final, sorted(problems, key=lambda p: p["line"])
 
@@ -165,16 +169,16 @@ def plan(canon: Canon, corrections, *, turn: int) -> tuple[list[dict], list[dict
                              "why": f"no single character is called {c.who!r} (yet)"})
             continue
         if c.op == "set":
-            wanted.add((eid, f"identity.marks.{_slugify(c.value)}" if c.slot == "marks"
+            wanted.add((eid, f"identity.{c.slot}.{_slugify(c.value)}" if c.slot in LIST_SLOTS
                         else f"identity.{c.slot}"))
-        if c.slot == "marks":
+        if c.slot in LIST_SLOTS:
             if c.op == "set":
-                slot = f"identity.marks.{_slugify(c.value)}"
+                slot = f"identity.{c.slot}.{_slugify(c.value)}"
                 cur = canon.current(eid, slot)
                 if cur is None or norm(str(cur)) != norm(c.value):
                     out.append(_record(eid, slot, c.value, turn))
             else:
-                for slot in [s for s in canon.slots.get(eid, {}) if s.startswith("identity.marks.")]:
+                for slot in [s for s in canon.slots.get(eid, {}) if s.startswith(f"identity.{c.slot}.")]:
                     cur = canon.current(eid, slot)
                     if cur is not None and same_value(str(cur), c.value):
                         out.append(_record(eid, slot, None, turn))
@@ -218,7 +222,7 @@ def apply_to(canon: Canon, corrections, *, turn: int) -> tuple[list[dict], list[
 
 def refusals(canon: Canon, corrections) -> dict[tuple[str, str], list[str]]:
     """(entity id, claim slot) -> the values the author says are wrong, for the validator to refuse. A claim
-    slot is 'identity.hair' and so on, and 'identity.marks' for every mark."""
+    slot is 'identity.hair' and so on, and 'identity.marks' or 'identity.accessories' for every item of a list."""
     out: dict[tuple[str, str], list[str]] = {}
     for c in corrections:
         if c.op != "wrong":
@@ -239,7 +243,7 @@ def held_values(canon: Canon) -> list[dict]:
             if not slot.startswith("identity.") or not ivs or ivs[-1].end_id is not None:
                 continue
             iv = ivs[-1]
-            key = "marks" if slot.startswith("identity.marks.") else slot.split(".", 1)[1]
+            key = next((s for s in LIST_SLOTS if slot.startswith(f"identity.{s}.")), None) or slot.split(".", 1)[1]
             rows.append({"who": e["name"], "slug": eid, "slot": key, "value": iv.value,
                          "since_turn": iv.start_turn, "confirmations": iv.confirmations,
                          "by": iv.authority})

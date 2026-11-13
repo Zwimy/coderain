@@ -46,7 +46,7 @@ def _scribe(args) -> int:
                    min_interval=args.min_interval, allow_paid=args.allow_paid)
     label = args.model + ("" if args.provider == "ollama" else f"@{args.provider}")
     try:
-        result = run(llm, label, split=args.split, out_dir=args.out)
+        result = run(llm, label, split=args.split, out_dir=args.out, accessories=args.accessories)
     except RunAborted as exc:
         print(f"aborted, no results written: {exc}", file=sys.stderr)
         return 4
@@ -139,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--out", type=Path, required=True,
                     help="where to write the results (required, so they never land "
                          "in the repo by accident)")
+    sc.add_argument("--accessories", action="store_true",
+                    help="also ask about worn ornaments (D-044); the report then has an accessory slice")
     sc.add_argument("--think", choices=["on", "off"], default=None,
                     help="ollama reasoning models: turn thinking on or off")
     sc.add_argument("--host", default="http://localhost:11434", help="ollama server")

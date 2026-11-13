@@ -58,8 +58,8 @@ FRESH_TURNS = {"outfit": 120, "held": 30, "injury": 120, "location": 40, "mood":
 _STATE = (("outfit", "wearing"), ("held", "holding"), ("injury", "injured"),
           ("mood", "mood"), ("location", "at"))
 _STATE_PRIORITY = ("injury", "outfit", "held", "location", "mood")
-_IDENTITY_PRIORITY = ("hair", "eyes", "marks", "build", "age")
-_IDENTITY_ORDER = ("hair", "eyes", "build", "age", "marks")
+_IDENTITY_PRIORITY = ("hair", "eyes", "marks", "accessories", "build", "age")
+_IDENTITY_ORDER = ("hair", "eyes", "build", "age", "marks", "accessories")
 
 
 # --- text hygiene -------------------------------------------------------------
@@ -314,6 +314,11 @@ def _identity(canon: Canon, eid: str) -> dict[str, str]:
              if slot.startswith("identity.marks.") and ivs and ivs[-1].end_id is None]
     if marks:
         out["marks"] = _listed([v for _i, v in sorted(marks)], 60, 4)
+    worn = [(ivs[-1].start_id, ivs[-1].value)
+            for slot, ivs in canon.slots[eid].items()
+            if slot.startswith("identity.accessories.") and ivs and ivs[-1].end_id is None]
+    if worn:
+        out["accessories"] = "wears " + _listed([v for _i, v in sorted(worn)], 60, 4)   # a phrase, like the others (D-029)
     return {k: v for k, v in out.items() if v}
 
 
@@ -338,7 +343,7 @@ def bible(canon: Canon, eid: str, *, max_chars: int = BIBLE_CHARS,
 _LOOK_NOUNS = {"hair": ("hair", "haired"), "eyes": ("eyes", "eye", "eyed")}
 _ASKS_ABOUT_LOOKS = re.compile(
     r"\b(hair|eyes?|face|looks?|looking|stud(?:y|ies|ying)|appearance|describe|notice|stares?|staring|gaze|"
-    r"examine|scars?|tattoos?|marks?)\b", re.IGNORECASE)
+    r"examine|scars?|tattoos?|marks?|jewel\w*|necklaces?|earrings?|bracelets?|accessor\w+)\b", re.IGNORECASE)
 
 
 def _identity_raw(canon: Canon, eid: str) -> dict[str, list[str]]:
@@ -352,6 +357,10 @@ def _identity_raw(canon: Canon, eid: str) -> dict[str, list[str]]:
              if slot.startswith("identity.marks.") and ivs and ivs[-1].end_id is None]
     if marks:
         out["marks"] = [str(m) for m in marks]
+    worn = [ivs[-1].value for slot, ivs in canon.slots[eid].items()
+            if slot.startswith("identity.accessories.") and ivs and ivs[-1].end_id is None]
+    if worn:
+        out["accessories"] = [str(w) for w in worn]
     return out
 
 

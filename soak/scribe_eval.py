@@ -30,7 +30,7 @@ from canon.claims import Claim
 from canon.pipeline import process_turn
 from canon.scribe import OllamaChat, OpenAIChat, Scribe
 from canon.validate import is_pronoun, resolve_loose, validate
-from soak.scribe_cases import CASES, PAIRS, ROSTER, Case, Pair, Truth
+from soak.scribe_cases import CASES, D044_IDS, PAIRS, ROSTER, Case, Pair, Truth
 
 
 class RunAborted(RuntimeError):
@@ -138,7 +138,7 @@ def run_extraction(scribe: Scribe, cases: list[Case], root: Path,
         kept = [d.claim for d in decisions if d.status in ("commit", "noop")]
         val = score(case.truth, kept, store.canon)
         for stage, m in (("raw", raw), ("validated", val)):
-            for key in ("all", case.group, f"split:{case.split}"):
+            for key in ("all", case.group, f"split:{case.split}", *(("legacy",) if case.id not in D044_IDS else ())):
                 totals[stage][key] = add(totals[stage][key], m)
         rows.append({"id": case.id, "group": case.group, "split": case.split,
                      "status": ext.status, "seconds": round(ext.seconds, 2),
@@ -236,13 +236,14 @@ def make_llm(provider: str, model: str, *, think=None, host="http://localhost:11
     raise ValueError(f"unknown provider {provider!r}")
 
 
-def run(llm, label: str, *, split: str, out_dir: Path, log=print) -> dict:
+def run(llm, label: str, *, split: str, out_dir: Path, log=print, accessories: bool = False) -> dict:
     cases = [c for c in CASES if split == "all" or c.split == split]
-    scribe = Scribe(llm)
+    scribe = Scribe(llm, accessories=accessories)
     root = Path(tempfile.mkdtemp(prefix="scribe-eval-"))
     started = time.time()
     try:
-        log(f"model {label}  split {split}  {len(cases)} passages + {len(PAIRS)} pairs")
+        log(f"model {label}  split {split}  {len(cases)} passages + {len(PAIRS)} pairs"
+            f"{'  (asked about accessories)' if accessories else ''}")
         log("extraction:")
         ex = run_extraction(scribe, cases, root, log)
         log("sequences:")
@@ -250,7 +251,7 @@ def run(llm, label: str, *, split: str, out_dir: Path, log=print) -> dict:
     finally:
         llm.unload()
         shutil.rmtree(root, ignore_errors=True)
-    result = {"model": label, "split": split,
+    result = {"model": label, "split": split, "accessories": accessories,
               "dropped_fields": sorted(llm.dropped),
               "wall_seconds": round(time.time() - started, 1),
               "tokens": {"in": getattr(llm, "tokens_in", None),
@@ -282,7 +283,7 @@ def summarize(r: dict) -> str:
              f"refused: {r['dropped_fields'] or 'none'}.{spent}", "",
              "| slice | stage | recall | precision | tp | fp | fn | off-roster |",
              "|---|---|---|---|---|---|---|---|"]
-    keys = ["all", "identity", "state", "multi", "trap", "split:dev", "split:test"]
+    keys = ["all", "legacy", "identity", "state", "multi", "trap", "accessory", "split:dev", "split:test"]
     for k in keys:
         for stage in ("raw", "validated"):
             m = ex[stage].get(k)

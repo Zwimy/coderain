@@ -61,7 +61,7 @@ def test_corpus_is_well_formed():
                     (c.id, "pattern does not match its own quote", t.value)
     for g in {c.group for c in CASES}:
         assert groups[(g, "dev")] and groups[(g, "test")], f"{g} missing a split"
-    assert {c.group for c in CASES} == {"identity", "state", "multi", "trap"}
+    assert {c.group for c in CASES} == {"identity", "state", "multi", "trap", "accessory"}
     pids = [p.id for p in PAIRS]
     assert len(pids) == len(set(pids))
     assert Counter(p.kind for p in PAIRS) == {"restate": 6, "contradict": 3, "novel": 3}
@@ -164,12 +164,12 @@ def test_scorer_counts_what_it_should():
 
 def test_traps_have_no_labels():
     traps = [c for c in CASES if c.group == "trap"]
-    assert len(traps) == 8 and all(not c.truth for c in traps)
+    assert len(traps) == 11 and all(not c.truth for c in traps)   # 8, and 3 ornament look-alikes (D-044)
     store = fresh_store(_root(), "trap")
     s = score((), [Claim("Odile Marsh", "identity.hair", "set", "gold", "x", "high")],
               store.canon)
     assert (s["tp"], s["fp"], s["fn"]) == (0, 1, 0)
-    print("4. the eight trap passages carry no labels, so any claim on one counts "
+    print("4. the eleven trap passages carry no labels, so any claim on one counts "
           "against the model")
 
 
@@ -315,12 +315,34 @@ def test_a_run_stops_when_the_model_cannot_be_asked_again():
           "the openrouter provider sets its URL, key variable and free-tier pacing")
 
 
+def test_the_accessory_and_legacy_slices_separate_the_passages():
+    """7. D-044: a run with and without the accessory slot must be comparable on the passages that existed
+    before it, so the report scores them as a "legacy" slice, and the new ones as "accessory" and (the
+    look-alikes) in the trap slice."""
+    from soak.scribe_cases import D044_IDS
+    assert D044_IDS <= {c.id for c in CASES}
+    by_text = {c.text: [(t.entity, t.slot, t.op, re.search(t.value, t.evidence, re.I).group(0), t.evidence)
+                        for t in c.truth] for c in CASES}
+    r = run_extraction(Scribe(Oracle(by_text)), CASES, _root(), log=lambda *_: None)
+    legacy_truth = sum(len(c.truth) for c in CASES if c.id not in D044_IDS)
+    acc_truth = sum(len(c.truth) for c in CASES if c.group == "accessory")
+    assert r["raw"]["legacy"]["tp"] == legacy_truth and r["raw"]["legacy"]["recall"] == 1.0, r["raw"]["legacy"]
+    assert r["raw"]["accessory"]["tp"] == acc_truth == 6, acc_truth        # ac-1 and ac-2 state two each, ac-3 and ac-4 one
+    assert r["raw"]["all"]["tp"] == legacy_truth + acc_truth
+    from soak.scribe_eval import summarize
+    text = summarize({"model": "x", "split": "all", "wall_seconds": 0, "dropped_fields": [], "extraction": r,
+                      "sequences": {"by_kind": {}}})
+    assert "| legacy | raw |" in text and "| accessory | raw |" in text, text
+    print("7. the report scores the passages that existed before D-044 as a legacy slice and the accessory passages on their own")
+
+
 try:
     for fn in (test_corpus_is_well_formed, test_oracle_scores_perfectly,
                test_scorer_counts_what_it_should, test_traps_have_no_labels,
                test_sequences_behave_as_designed_on_the_oracle,
                test_the_metrics_can_fail,
-               test_a_run_stops_when_the_model_cannot_be_asked_again):
+               test_a_run_stops_when_the_model_cannot_be_asked_again,
+               test_the_accessory_and_legacy_slices_separate_the_passages):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

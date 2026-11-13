@@ -169,6 +169,8 @@ def to_markdown(report: dict) -> str:
             if row["marks"]:
                 parts.append("marks: " + "; ".join(row["marks"][:6])
                              + (f" (+{len(row['marks']) - 6} more)" if len(row["marks"]) > 6 else ""))
+            if row.get("accessories"):
+                parts.append("accessories: " + "; ".join(row["accessories"][:6]))
             lines.append(f"- {row['name']}: " + ", ".join(parts))
         lines.append(f"Held-back changes by slot: {report.get('conflicts_by_slot')}")
     held = [r for r in report["facts"] if r["canon"] == F.HELD]

@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
-from canon.claims import SLOT_HELP, Claim, Parsed, parse, schema
+from canon.claims import SLOT_HELP, Claim, Parsed, parse, schema, slots
 
 CHUNK_CHARS = 5000        # a passage longer than this is read in pieces
 MAX_CTX = 16384           # refuse a larger window: nobody needs it for this job
@@ -78,9 +78,10 @@ Answer: {{"claims":[]}}
 """
 
 
-def build_prompt(prose: str, roster: list[dict]) -> tuple[str, str]:
+def build_prompt(prose: str, roster: list[dict], accessories: bool = False) -> tuple[str, str]:
     """(system, user). Pure, so it can be tested and its size reasoned about."""
-    slots = "\n".join(f"- {k}: {v}" for k, v in SLOT_HELP.items())
+    asked = slots(accessories)
+    slot_lines = "\n".join(f"- {k}: {v}" for k, v in SLOT_HELP.items() if k in asked)
     if roster:
         names = "; ".join(
             r["name"] + (f" (also called {', '.join(r['aliases'])})"
@@ -88,7 +89,7 @@ def build_prompt(prose: str, roster: list[dict]) -> tuple[str, str]:
         known = f"Characters in this story: {names}."
     else:
         known = "No characters are known yet; name anyone the passage describes."
-    return SYSTEM.format(slots=slots), f'{known}\n\nPassage:\n"""\n{prose}\n"""'
+    return SYSTEM.format(slots=slot_lines), f'{known}\n\nPassage:\n"""\n{prose}\n"""'
 
 
 def chunks(prose: str, limit: int = CHUNK_CHARS) -> list[str]:
@@ -138,17 +139,18 @@ class Extraction:
 class Scribe:
     """`llm` is anything with complete(system, user, schema) -> str."""
 
-    def __init__(self, llm):
+    def __init__(self, llm, accessories: bool = False):
         self.llm = llm
+        self.accessories = accessories      # ask about worn ornaments too (D-044): off until measured
 
     def extract(self, prose: str, roster: list[dict]) -> Extraction:
         started = time.time()
         out = Extraction()
         raws: list[str] = []
         for piece in chunks(prose):
-            system, user = build_prompt(piece, roster)
+            system, user = build_prompt(piece, roster, self.accessories)
             try:
-                raw = self.llm.complete(system, user, schema())
+                raw = self.llm.complete(system, user, schema(self.accessories))
             except ScribeError as exc:
                 out.status, out.error = "error", str(exc)
                 break
@@ -298,14 +300,14 @@ def require_local(llm) -> None:
                    "only ever sent to a server on this machine")
 
 
-def strict_schema() -> dict:
+def strict_schema(base: dict | None = None) -> dict:
     """The claim schema in the form OpenAI's structured outputs accept.
 
     Strict mode wants additionalProperties false on every object and does not take
     maxItems, so those are adjusted on a copy; the cap is enforced by the parser
     (MAX_CLAIMS) either way.
     """
-    s = copy.deepcopy(schema())
+    s = copy.deepcopy(base if base is not None else schema())
     s["additionalProperties"] = False
     arr = s["properties"]["claims"]
     arr.pop("maxItems", None)
@@ -381,7 +383,7 @@ class OpenAIChat:
              "temperature": 0, "seed": self.seed}
         if schema_ is not None:
             p["response_format"] = {"type": "json_schema",
-                                    "json_schema": strict_schema()}
+                                    "json_schema": strict_schema(schema_)}
         if self.reasoning_effort:
             p["reasoning_effort"] = self.reasoning_effort
         for name in self.dropped:

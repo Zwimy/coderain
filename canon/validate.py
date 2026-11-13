@@ -371,6 +371,25 @@ def _fields(eid, slot, kind, value, c: Claim, turn, world):
                 source_turn=turn, span=c.evidence)
 
 
+def _colour_groups(text: str) -> set:
+    """The colours a value names, each as its _SAME group (jade and green are one) or itself."""
+    out = set()
+    for w in norm(text).split():
+        if w in shape._COLOURS:
+            out.add(next((i for i, g in enumerate(_SAME) if w in g), w))
+    return out
+
+
+def _same_item(a: str, b: str) -> bool:
+    """Do two accessory values name the same item? They share an ornament word ("hairpin" and "hairpins")
+    and their colours do not disagree: a value with no colour agrees with any. same_value is the wrong tool
+    here, it calls "silver ring" and "silver hairpins" one thing because both say silver."""
+    if not (shape.accessory_nouns(a) & shape.accessory_nouns(b)):
+        return False
+    ca, cb = _colour_groups(a), _colour_groups(b)
+    return not ca or not cb or bool(ca & cb)
+
+
 def _said_again(scratch: Canon, eid: str, c: Claim) -> bool:
     """Does this claim say what canon already holds? (A repeat is recorded, not
     dropped: see _plan.)"""
@@ -390,6 +409,20 @@ def _plan(scratch: Canon, eid: str, c: Claim, turn: int, world):
     slot, op = c.slot, c.op
     if slot == "identity.marks":
         return [_fields(eid, f"identity.marks.{_slugify(c.value)}",
+                        "fact_established", c.value, c, turn, world)], None
+    if slot == "identity.accessories":
+        # One ledger slot per item, like marks. The same item worded another way ("hairpins" and
+        # "gold hairpins", "jade beads" and "green beads") is the item said again, recorded under the
+        # slot and wording it already has, not a second item (the marks list has that duplicate gap).
+        held = [(s, scratch.current(eid, s)) for s in scratch.slots.get(eid, {})
+                if s.startswith("identity.accessories.")]
+        held = [(s, v) for s, v in held if isinstance(v, str)]
+        for s, v in held:
+            if _same_item(v, c.value):
+                return [_fields(eid, s, "fact_established", v, c, turn, world)], None
+        if len(held) >= MAX_ACCESSORIES:
+            return None, ("reject", "too_many_accessories")
+        return [_fields(eid, f"identity.accessories.{_slugify(c.value)}",
                         "fact_established", c.value, c, turn, world)], None
     if slot.startswith("identity."):
         value = c.value
@@ -440,6 +473,7 @@ def _plan(scratch: Canon, eid: str, c: Claim, turn: int, world):
 
 _ONE_OWNER = frozenset({"identity.hair", "identity.eyes", "identity.build", "identity.age"})
 _COLOUR_SLOTS = frozenset({"identity.hair", "identity.eyes"})
+MAX_ACCESSORIES = 12          # one character's worn ornaments; identity items cannot age off, so the count is bounded
 
 
 def _owner_key(canon: Canon, name: str, prose: str) -> str | None:

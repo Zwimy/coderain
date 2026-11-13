@@ -85,6 +85,23 @@ CASES: list[Case] = [
          "Corin pushed up his sleeve, showing a black raven tattooed on his forearm.",
          (T("corin", "identity.marks", "add", r"raven|tattoo",
             "a black raven tattooed on his forearm"),)),
+    # --- accessories (D-044): jewellery and ornaments worn on the person -----------
+    Case("ac-1", "accessory", "dev",
+         "Odile Marsh bent over the map. Her hair was pinned up with gold hairpins, "
+         "and a silver ring shone on her finger.",
+         (T("odile", "identity.accessories", "add", r"hairpins", "pinned up with gold hairpins"),
+          T("odile", "identity.accessories", "add", r"ring", "a silver ring shone on her finger"))),
+    Case("ac-2", "accessory", "test",
+         "Ansel wore round glasses that kept sliding down his nose, and a jade pendant "
+         "hung at his throat.",
+         (T("ansel", "identity.accessories", "add", r"glasses", "wore round glasses"),
+          T("ansel", "identity.accessories", "add", r"pendant", "a jade pendant hung at his throat"))),
+    Case("ac-3", "accessory", "dev",
+         "Tamsin turned, and the jade beads threaded through her braids clicked softly.",
+         (T("tamsin", "identity.accessories", "add", r"beads", "the jade beads threaded through her braids"),)),
+    Case("ac-4", "accessory", "test",
+         "Corin Hale wore a gold hoop in his left ear and a scowl on his face.",
+         (T("corin", "identity.accessories", "add", r"hoop", "wore a gold hoop in his left ear"),)),
     # --- state --------------------------------------------------------------
     Case("st-1", "state", "dev",
          "Odile shrugged off her wet coat and hung it by the door.",
@@ -148,7 +165,19 @@ CASES: list[Case] = [
          "You notice your own hands are cold, your coat soaked through."),
     Case("tr-8", "trap", "test",
          "Odile met Tamsin at the bridge. She wore a yellow cloak."),
+    # ornament look-alikes (D-044): a liquid, an ornament being taken off, other meanings of the word
+    Case("tr-9", "trap", "dev",
+         "Beads of sweat ran down Corin's brow as he hauled the net."),
+    Case("tr-10", "trap", "test",
+         "Odile took off her ring and dropped it into the dish by the door."),
+    Case("tr-11", "trap", "dev",
+         "A ring of men stood around the pit while the glasses on the bar rattled."),
 ]
+
+
+# The passages added with the accessory slot (D-044). The report scores everything else as the "legacy" slice, so a
+# run with and without the slot can be compared on exactly the passages that existed before it.
+D044_IDS = frozenset({"ac-1", "ac-2", "ac-3", "ac-4", "tr-9", "tr-10", "tr-11"})
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,7 @@ SLOTS: dict[str, str] = {
     "identity.build": "scalar",
     "identity.age": "scalar",
     "identity.marks": "list",       # scars, tattoos, birthmarks: several at once
+    "identity.accessories": "list", # hairpins, beads, rings, a necklace, glasses: worn on the person, several at once
     "state.outfit": "list",
     "state.held": "list",
     "state.injury": "list",
@@ -37,6 +38,9 @@ SLOT_HELP: dict[str, str] = {
     "identity.build": "body type or height (set)",
     "identity.age": "stated or clearly described age (set)",
     "identity.marks": "a scar, tattoo or birthmark: one per claim (add)",
+    "identity.accessories": "jewellery or an ornament worn on the person, such as hairpins, "
+                            "beads in the hair, a ring, earrings, a necklace or glasses: one per "
+                            "claim (add); not a garment, not something carried",
     "state.outfit": "a garment worn right now (add when put on, remove when taken off)",
     "state.held": "an item carried or held right now (add / remove)",
     "state.injury": "a wound or ailment, naming the body part, such as swollen left "
@@ -46,6 +50,9 @@ SLOT_HELP: dict[str, str] = {
                       "building; not the light or the weather (set)",
     "state.mood": "a clearly stated emotional state right now (set)",
 }
+# Slots the Scribe is not asked about until they have been measured on a model (D-044). The slot is
+# complete everywhere else (validator, card, corrections, panel): an author can already add one by hand.
+OPTIONAL_SLOTS = ("identity.accessories",)
 OPS = ("set", "add", "remove", "clear")
 CONFIDENCE = ("low", "medium", "high")
 MAX_CLAIMS = 24
@@ -76,14 +83,19 @@ class Parsed:
     status: str = "ok"
 
 
-def schema() -> dict:
+def slots(accessories: bool = False) -> dict[str, str]:
+    """The slots the Scribe is asked about: all of them, less the optional ones unless asked for."""
+    return {k: v for k, v in SLOTS.items() if accessories or k not in OPTIONAL_SLOTS}
+
+
+def schema(accessories: bool = False) -> dict:
     """JSON Schema for constrained decoding. It removes the malformed-JSON failure
     class; it does not make the CONTENT right, which is what validate.py is for."""
     item = {
         "type": "object",
         "properties": {
             "entity": {"type": "string"},
-            "slot": {"type": "string", "enum": list(SLOTS)},
+            "slot": {"type": "string", "enum": list(slots(accessories))},
             "op": {"type": "string", "enum": list(OPS)},
             "value": {"type": "string"},
             "evidence": {"type": "string"},
@@ -102,7 +114,7 @@ def op_ok(slot: str, op: str) -> bool:
     state = slot.startswith("state.")
     if shape == "scalar":
         return op == "set" or (op == "clear" and state)
-    if slot == "identity.marks":
+    if slot in ("identity.marks", "identity.accessories"):
         return op == "add"
     return op in ("add", "remove") or (op == "clear" and state)
 

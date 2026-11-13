@@ -388,6 +388,53 @@ def _marks(value: str, evidence: str) -> str | None:
     return "not_a_mark"
 
 
+# What an accessory is (D-044): jewellery or an ornament worn on the person. The first group names one
+# by itself; the second has other meanings ("a ring of men", "beads of sweat", "drinking glasses", "a chain
+# of command") and needs a place on the body in the value or the quote. Plural and singular both count.
+_ACC_STRONG = frozenset("""hairpin barrette hairclip circlet tiara diadem headband earring necklace
+pendant locket choker bracelet bangle anklet brooch monocle eyepatch spectacle spectacles""".split())
+_ACC_AMBIGUOUS = frozenset("""ring bead ribbon glass glasses chain comb pin hoop stud clip cuff band
+bangles""".split())
+_WORN_SITES = frozenset("""hair braid plait bun ear earlobe lobe neck throat wrist ankle finger brow
+forehead head nose temple waist nape scalp""".split())
+_LIQUIDS = frozenset("sweat water rain dew blood tear moisture condensation".split())
+_CARRIED = frozenset("""held holding holds hold clutched clutching clutch gripped gripping grip carried
+carrying carries pocketed handed gave dropped""".split())
+_TAKEN_OFF = frozenset("removed unclasped unpinned unfastened off".split())
+_WEARING = frozenset("""wore wear wears wearing worn adorned decorated pinned threaded woven braided
+tied clipped looped draped strung studded""".split())
+
+
+def _forms(text: str) -> set[str]:
+    toks = _tokens(text)
+    return set(toks) | {_stem(w) for w in toks}
+
+
+def accessory_nouns(value: str) -> set[str]:
+    """The ornament words in a value, singular and plural both, so "hairpin" and "hairpins" meet."""
+    return _forms(value) & (_ACC_STRONG | _ACC_AMBIGUOUS)
+
+
+def _accessory(value: str, evidence: str) -> str | None:
+    """A value that names jewellery or an ornament and a quote that has it WORN: a place on the body or
+    a verb for wearing it, and not taken off, and not carried. "beads of sweat" is never one, and a
+    locket gleaming on a table is an object, not something a character wears."""
+    words = _forms(value)
+    if not (words & (_ACC_STRONG | _ACC_AMBIGUOUS)):
+        return "not_an_accessory"
+    seen = _forms(evidence) | words
+    if _LIQUIDS & words or ("bead" in words and _LIQUIDS & seen):
+        return "not_an_accessory"
+    if _TAKEN_OFF & seen:
+        return "not_worn"                                   # "took off her ring" is not one being worn
+    site = bool(_WORN_SITES & seen)
+    if not (site or _WEARING & seen):
+        return "not_worn"
+    if _CARRIED & seen and not site:
+        return "not_worn"                                   # "wore a coat and clutched the locket": held
+    return None
+
+
 def _outfit(value: str) -> str | None:
     return None if wardrobe.category(value) else "not_a_garment"
 
@@ -415,6 +462,8 @@ def problem(slot: str, value: str, evidence: str) -> str | None:
         return _on_noun(slot, value, evidence)
     if slot == "identity.marks":
         return _marks(value, evidence)
+    if slot == "identity.accessories":
+        return _accessory(value, evidence)
     if slot == "state.outfit":
         return _outfit(value)
     if slot == "state.held":

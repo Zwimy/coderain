@@ -43,12 +43,14 @@ Off unless config.yaml says so:
       backfill: 200               # earlier narrator turns to read the first time, or "all"
       inject: preview             # off (default) | preview | true. Needs shadow: true
       card_chars: 2400            # the most the card may add to a prompt (about 600 tokens)
-      inject_state: true          # false: identity only (hair, eyes, marks), no clothing etc.
+      inject_state: true          # false: identity only (hair, eyes, marks, accessories), no clothing etc.
       identity: needed            # needed (default): a look is shown only when it matters; always: every turn
       identity_via_pronoun: false # true: a look said with "he"/"she" is read for the one character the nearest
                                   # sentences name (about 94% right when it answers, D-035); off = D-024
       think: false                # default: ask the model not to reason first (a reasoning model such as
                                   # Qwen3.5 otherwise spends its whole answer budget thinking, D-040)
+      accessories: false          # true: the reader also files worn ornaments (hairpins, beads, rings, D-044).
+                                  # Off until measured on a model; the slot works by hand either way
 
 What a turn's card did is in <save>/canon/injections.jsonl (one row of counts per turn)
 and <save>/canon/card-last.txt (the last card in full, marked sent or preview).
@@ -85,7 +87,8 @@ BACKFILL_ALL = 10 ** 9
 DEFAULTS = {"shadow": False, "model": "gemma3:4b", "host": "http://localhost:11434",
             "num_ctx": 8192, "backfill": 200, "max_errors": 3,
             "inject": "off", "card_chars": 2400, "inject_state": True,
-            "identity": "needed", "identity_via_pronoun": False, "think": False}
+            "identity": "needed", "identity_via_pronoun": False, "think": False,
+            "accessories": False}
 _ROWS_KEEP = 6000                    # rows.jsonl is trimmed to this many lines
 IDENTITY_REACH = 2                   # sentences a pronoun may look back for its name when identity_via_pronoun is on
 RECENT_FOR_CARD = 4                  # latest turns whose names pick the cast
@@ -136,6 +139,10 @@ def settings(raw) -> dict:
     # default) spent the whole 1,200-token answer budget thinking and returned nothing, on every
     # call of an 86 minute read (D-040). So the request says think: false unless this is a literal true.
     out["think"] = sec.get("think") is True
+    # Ask the reader about worn ornaments too (D-044). Off until the prompt line has been measured on a
+    # model, because it changes the prompt every other slot is read through. The slot itself (card,
+    # corrections, panel) works either way, so an author can add one by hand.
+    out["accessories"] = sec.get("accessories") is True
     out["identity"] = "always" if isinstance(sec.get("identity"), str) and sec["identity"].strip().lower() == "always" else "needed"
     pl = sec.get("player")
     out["player"] = (pl.strip() if isinstance(pl, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", pl.strip())
@@ -376,7 +383,8 @@ class CanonShadow:
     def _get_scribe(self) -> Scribe:
         if self.scribe is None:
             self.scribe = Scribe(OllamaChat(self.cfg["model"], host=self.cfg["host"],
-                                            num_ctx=self.cfg["num_ctx"], think=self.cfg["think"]))
+                                            num_ctx=self.cfg["num_ctx"], think=self.cfg["think"]),
+                                 accessories=self.cfg["accessories"])
         require_local(self.scribe.llm)
         return self.scribe
 
@@ -664,6 +672,8 @@ class CanonShadow:
             parts = [f"{k} {v[0]} (turn {v[1]}, x{v[2]})" for k, v in row["fields"].items()]
             if row["marks"]:
                 parts.append("marks: " + "; ".join(row["marks"][:6]))
+            if row.get("accessories"):
+                parts.append("accessories: " + "; ".join(row["accessories"][:6]))
             lines.append(f"  {row['name']}: " + ", ".join(parts))
         tmp = self.dir / "report.txt.tmp"
         tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")

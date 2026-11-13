@@ -326,7 +326,7 @@ def identity_table(canon) -> list[dict]:
     canon then defended (first write wins). Values and turn numbers only."""
     rows = []
     for eid, e in canon.entities.items():
-        fields, marks = {}, []
+        fields, marks, worn = {}, [], []
         for slot, ivs in identity_history(canon, eid).items():
             live = [h for h in ivs if h["current"]]
             if not live:
@@ -334,12 +334,14 @@ def identity_table(canon) -> list[dict]:
             h = live[-1]
             if slot.startswith("identity.marks."):
                 marks.append(h["value"])
+            elif slot.startswith("identity.accessories."):
+                worn.append(h["value"])
             else:
                 fields[slot.split(".", 1)[1]] = [h["value"], h["from_turn"],
                                                  h["confirmations"]]
-        if fields or marks:
+        if fields or marks or worn:
             rows.append({"entity": eid, "name": e["name"], "fields": fields,
-                         "marks": marks})
+                         "marks": marks, "accessories": worn})
     return rows
 
 

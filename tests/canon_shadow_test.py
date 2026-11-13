@@ -182,6 +182,13 @@ def test_settings():
     for junk in ("true", 1, "on", None, [], "false"):
         assert settings({"canon": {"shadow": True, "think": junk}})["think"] is False, junk
     assert settings({"canon": {"shadow": True, "think": True}})["think"] is True
+    assert settings({"canon": {"shadow": True}})["accessories"] is False, "off until measured (D-044)"
+    for junk in ("true", 1, "on", None, [], "yes"):
+        assert settings({"canon": {"shadow": True, "accessories": junk}})["accessories"] is False, junk
+    assert settings({"canon": {"shadow": True, "accessories": True}})["accessories"] is True
+    for flag in (False, True):
+        scribe = CanonShadow(new_save(), settings({"canon": {"shadow": True, "accessories": flag}}))._get_scribe()
+        assert scribe.accessories is flag, "the reader's Scribe does not follow the setting"
     print("1. shadow needs a literal true; every value is bounded; junk falls back")
 
 
