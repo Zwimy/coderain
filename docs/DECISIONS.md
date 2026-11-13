@@ -2007,3 +2007,28 @@ kind-prefixed link not), a clean world to report nothing and never be written to
 `--out`, a missing folder, no argument), and the look check on sheets that do and do not state a colour. 24 guard mutations across
 this and the scripted player were caught after two gaps were closed (the default-scenario check only looked for a word that the
 findings also contain, and nothing pinned that the dice seed reaches the player's save).
+
+## D-050 — A per-piece AI assist is told about the world, not only the premise
+
+**What was wrong.** `/api/assist` (the builder's "Seed from idea" and "Improve with AI" for a character, place, item, faction, thread or
+event) sent the model the premise and nothing else. A character generated from an idea knew nothing of the world's places and
+factions or of the people already in it, which the full generator's own entity stages always see (they chain a growing roster through
+every call). Two pieces generated one after the other could duplicate each other, and a new character could not refer to a place that
+exists. The engine architect found this reading `srv/pieces.py` `_scenario_context` against `generator._run_entity_stages`.
+
+**Decision.** A PIECE assist now reads `generator.assist_context(store)`: the premise, an excerpt of the world bible (1,200 characters),
+and a roster of what already exists, one line per character, place, faction and item (`[[ref:slug]] Title - status or first line`, at
+most 40 lines of about 110 characters, in that order), under a header that says not to duplicate them and that they may be referred to.
+A section with nothing in it is left out, and the verbatim opening is never included. The world, premise and introduction FIELDS keep
+the premise alone, on purpose: they rewrite those very texts, and giving the world field its own bible would make it rewrite itself.
+Both branches of the route (a scenario slug from the builder, a save slug from the story editor) follow the rule, and an unknown
+scenario still runs context-free as before. The cost is a longer prompt on a piece assist (up to about 1,200 + 4,400 characters), paid
+only when the author asks for one.
+
+**Not done.** The full generator's `created()` formats its roster lines with the title twice (`Title - Title - ...`, because
+`Entry.oneline()` already begins with the title); this entry's roster does not, and the generator's was left alone. A character
+added to a story already under way is still not known to the canon ledger beyond what its sheet says (D-029 seeds only stories of at
+most three narrator turns).
+
+**Tests.** `assist_context_test.py` (the roster's order, count and length bounds and no repeated title, the context's sections and
+cuts and omissions, and the route on both slugs with a stub model that captures what was sent); 15 guard mutations caught.

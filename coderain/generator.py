@@ -517,6 +517,39 @@ _SEED_DETAIL_SYS = (
 )
 
 
+ROSTER_MAX = 40          # entries listed to an assist, so a big world cannot blow up a prompt
+ROSTER_LINE = 110        # characters per entry line
+WORLD_EXCERPT = 1200     # characters of the world bible an assist reads
+
+
+def roster_lines(store) -> list[str]:
+    """One line per existing character, location, item and faction: `[[ref:slug]] Title - status or first line`, the same
+    shape the full generator chains through its own entity stages, bounded. What a new piece must not duplicate and
+    may refer to."""
+    out: list[str] = []
+    for ref, rel in (("char", "characters.md"), ("location", "locations.md"), ("faction", "factions.md"),
+                     ("item", "items.md")):
+        for e in store.entries(rel):
+            if len(out) >= ROSTER_MAX:
+                return out
+            out.append(f"[[{ref}:{e.slug}]] {e.oneline()}"[:ROSTER_LINE + 20])      # oneline() already starts with the title
+    return out
+
+
+def assist_context(store) -> str:
+    """What the per-piece AI assist reads: the premise, an excerpt of the world bible and the roster of what already
+    exists. It used to be the premise alone, so a character generated from an idea knew nothing of the world's
+    places, factions or the people already in it, which the full generator's own stages always see (D-050)."""
+    parts = [_split_premise_body(store.read("premise.md"))]
+    world = "\n".join(ln for ln in store.read("world-bible.md").splitlines() if not ln.startswith("# ")).strip()
+    if world:
+        parts.append("WORLD (excerpt):\n" + world[:WORLD_EXCERPT])
+    roster = roster_lines(store)
+    if roster:
+        parts.append("ALREADY IN THIS WORLD (do not duplicate; you may refer to them):\n" + "\n".join(roster))
+    return "\n\n".join(p for p in parts if p)
+
+
 def assist_field(llm, kind: str, mode: str, text: str, context: str = "",
                  improve: bool = False):
     """One-shot AI assist for the scenario builder. Returns ``(result, err)``:

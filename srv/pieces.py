@@ -63,8 +63,14 @@ def _entry_from_dict(d: dict) -> Entry:
                  attrs=attrs, body=str(d.get("body", "")).strip())
 
 
-def _scenario_context(store: MemoryStore) -> str:
-    """What the per-field AI assists see: the premise (and tone lives in it)."""
+def _scenario_context(store: MemoryStore, pieces: bool = False) -> str:
+    """What the per-field AI assists see: the premise (and tone lives in it). For a PIECE (a character, a place, an
+    item ...) it also sees an excerpt of the world bible and the roster of what already exists (D-050), so a new
+    piece fits the world instead of being written in a vacuum. The world, premise and introduction fields keep the
+    premise alone: they rewrite those very texts."""
+    if pieces:
+        from coderain.generator import assist_context
+        return assist_context(store)
     return _split_premise_body(store.read("premise.md"))
 
 

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from coderain import templates
 from coderain.generator import ScenarioSpec
+from coderain.generator import _FIELD_SPECS
 from coderain.generator import assist_field
 from coderain.generator import complete_scenario
 from coderain.llm import LLM
@@ -47,12 +48,13 @@ def assist(body: dict):
     improve = bool(body.get("improve", False))
     context = ""
     scen = str(body.get("scenario", "")).strip()
+    piece = kind not in _FIELD_SPECS          # a character, place, item ...: sees the roster too (D-050)
     if scen and lib.scenarios.exists(scen):
-        context = _scenario_context(_scen_store(scen))
+        context = _scenario_context(_scen_store(scen), piece)
     elif scen and templates.slugify(scen) == scen and lib.saves.exists(scen):
         # The story editor (#edit/<save>) sends a SAVE slug here. That used to
         # miss every branch above and run the assist context-blind.
-        context = _scenario_context(_save_store(scen))
+        context = _scenario_context(_save_store(scen), piece)
     if not _gen_lock.acquire(blocking=False):
         raise HTTPException(409, "another generation is running")
     try:
