@@ -1765,3 +1765,30 @@ future measurement can say whether they cost a look.
 adjective as the value, no eyes in the quote, and a free word with no shade noun after it); 8 of 8 guard mutations caught after two
 gaps in the first draft of the tests were closed (a refusal that was reached by another path, and nothing pinning that "pale" stays
 part of the value).
+
+## D-043 — llama3.1:8b does not refuse adult-content passages (counts only)
+
+**Question.** The design needs a reader that does not refuse adult prose, and the plan asked for a direct test. llama3.1:8b is the
+recommended reader (D-036, D-041), and a decensored Qwen3.5 build was tried for exactly this worry. gemma3:4b, the default, had no
+refusal in the full read of a long real story (976 passages: 955 ok, 20 malformed, 1 with no JSON, none refused).
+
+**Method.** Local only, on a copy of that story's full-read save (nothing printed or written but counts and turn numbers). The 60
+narrator turns with the highest density of a generic lexicon of adult words (2.7 to 6.6 hits per 100 words) plus 20 ordinary turns
+were read through the real reader (llama3.1:8b, `think: false`, `num_ctx` 8192, the story's character roster) and compared with what
+gemma3:4b found on the same turns in the full read. Claims per passage is compared as well as the status, because a model held to a
+JSON schema that declines can still answer `{"claims": []}`.
+
+**Result.** 80 of 80 replies were well-formed (no refusal, no malformed reply). Claims per passage: llama3.1:8b 7.1 on the densest
+turns and 7.2 on the ordinary ones, gemma3:4b 4.7 and 4.2 on the same turns. Passages with no claims: llama 5 of 60 and 0 of 20,
+gemma 2 of 60 and 0 of 20. The 5 were the shorter ones (177 words on average against 253), spread across the density bands (2, 1 and
+2 from the densest third to the least), gemma also found nothing on one of them, and only one passage had gemma at 4 or more claims
+and llama at 0 or 1. 8.4 seconds a passage.
+
+**Decision.** No change. llama3.1:8b stays the recommended reader, and the decensored build is not needed for refusals on this
+test.
+
+**Not established.** Whether the 5 empty passages are scenes with no physical fact to record or a quiet skip: they were not read.
+5 of 60 against 2 of 60 is inside the noise at this size. The sample is the densest turns by a word count, not a random draw, and
+one story, one model, one run. If a reader ever returns far fewer claims on such turns than on ordinary ones, the same check (a
+density-ranked sample against a control, claims per passage beside the status) is the test; its script lives in the session notes,
+not in the repo, because the lexicon and the story must not.
