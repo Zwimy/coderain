@@ -1928,3 +1928,20 @@ by name, and `collect()` dropping the carried attributes was not asserted).
 **Not done.** The rest of the creation flow the product designer listed: chapter 1 planned at story start with progress, a world
 from one sentence on the web, and the assist context (the roster and world bible) for characters. The editor itself is not driven in a
 browser by a test here; the DOM binding is thin and the logic that decides what changes is the tested part.
+
+## D-047 — The test runner says what it skipped
+
+**What was wrong.** A suite whose optional dependency is missing (the browser suite without playwright, the piece-editor suite
+without node) prints a line starting `SKIP` or `SKIPPED` and exits 0. That is right for a dev-only dependency (CLAUDE.md), but the
+runner's last line was then a bare "ALL SUITES PASSED", so on a machine without playwright every browser claim was green and
+unchecked, and nobody could tell from the output.
+
+**Decision.** `run_tests.py` now runs each suite through `run_one`, echoes its output as it arrives (unbuffered, so a long suite still
+shows progress) and collects its SKIP lines. After the verdict it lists every skipped suite and why ("SKIPPED, so NOT checked here").
+A skip does not fail the run. Because the runner now re-writes the children's output, it makes its own stdout UTF-8 first: the first
+version crashed the whole run with a `UnicodeEncodeError` the moment a suite printed an arrow while the console or a redirect was
+cp1252, which only the full suite found.
+
+**Tests.** `run_tests_skip_test.py` (SKIP lines are found and a line that only mentions the word is not, a failing suite and a timeout,
+a cp1252 console, and the source shape of the summary); 10 of 10 guard mutations caught after one gap was closed (main() not calling
+the UTF-8 setup was not asserted).
