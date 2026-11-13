@@ -1649,3 +1649,31 @@ That is the same trade D-030 made, a duplicate that can be merged later over a w
 two shared aliases stay ambiguous, ordinary resolution unchanged); 4 of 5 guard mutations caught and the fifth is equivalent (two own
 names leave two candidates either way). `fold_entity_resolution_test.py` 13 (a merge and a new entry both refuse another entry's
 name and slug, another registry and a nickname are accepted); 6 of 6 guard mutations caught.
+
+## D-040 — The reader asks a model not to reason first, and an empty reply is a failure, not a turn that was read
+
+**What happened.** Qwen3.5 9B (a community decensored build, Q4_K_M) was installed to try as the reader and run over the fixed
+161-turn transcript. All 161 passages (255 chunk calls) came back empty: 86.6 minutes of GPU for no facts. Nothing in the app said
+so. The shadow recorded every one of those turns as read, and the report counted them as processed.
+
+**Cause, measured** with two real Scribe requests against the model: with `think` unset the server let the model reason, it used
+its whole 1,200-token answer budget on 4,944 characters of reasoning (`done_reason=length`) and `message.content` was empty; with
+`think: false` it answered in 6 tokens with `{"claims": []}` (a passage with no looks) in 2 seconds. A plain `/api/generate` test of
+the same model had looked fine (valid JSON in both modes), which is why the load test passed and the real read did not: the load
+test's prompt was a one-line passage and a different endpoint.
+
+**Decision.**
+1. `canon: {think: false}` is the reader's default: every request says `think: false` unless the setting is a literal `true`. The
+   Scribe wants a JSON answer and nothing else, and D-019 measured qwen3:4b with thinking off. A server that rejects the field
+   gets it dropped once, as before (`OllamaChat` already does that), so models that cannot reason are unaffected.
+2. An empty reply (`empty_output`) is handled like an unreachable model: the turn is NOT recorded as read, the next pass tries it
+   again, and after `max_errors` in a row the pass stops and the health log says so once ("the Scribe sent back an empty reply N
+   times in a row ... needs canon: think: false"). With a schema a model always has at least `{"claims": []}` to say, so nothing at
+   all is a failure. Malformed JSON, a refusal and a bad shape are unchanged (still read, counted, not retried).
+
+**Not measured.** Whether this model is a better reader than llama3.1:8b: the read that would say has to be run again with
+`think: false`.
+
+**Tests.** `canon_shadow_test.py` 1 (the setting) and 24 (the payload carries `think`, an empty reply is retried, reported once and
+not recorded, a working model afterwards reads everything and agrees with a fresh read); 8 of 9 guard mutations caught, the ninth
+is equivalent (`DEFAULTS["think"]` is overwritten by `settings()` on every call).

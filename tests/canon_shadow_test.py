@@ -178,6 +178,10 @@ def test_settings():
     for junk in ("true", 1, "on", None, []):
         assert settings({"canon": {"shadow": True, "identity_via_pronoun": junk}})["identity_via_pronoun"] is False, junk
     assert settings({"canon": {"shadow": True, "identity_via_pronoun": True}})["identity_via_pronoun"] is True
+    assert settings({"canon": {"shadow": True}})["think"] is False, "the reader asks for no reasoning by default (D-040)"
+    for junk in ("true", 1, "on", None, [], "false"):
+        assert settings({"canon": {"shadow": True, "think": junk}})["think"] is False, junk
+    assert settings({"canon": {"shadow": True, "think": True}})["think"] is True
     print("1. shadow needs a literal true; every value is bounded; junk falls back")
 
 
@@ -940,6 +944,48 @@ def test_a_look_through_a_pronoun_reaches_canon_only_when_switched_on():
     print("23. a look said with 'she' reaches canon only when identity_via_pronoun is on")
 
 
+def test_a_reasoning_model_is_told_not_to_think_and_an_empty_reply_is_a_failure():
+    """24. D-040: Qwen3.5 reasons first by default and spent the whole 1,200-token answer budget
+    thinking, so all 161 calls of an 86 minute read came back empty, and the reader recorded every
+    turn as read with no facts and said nothing."""
+    store = new_save()
+    story(store, M1)
+    for cfg_think, want in ((None, False), (True, True)):
+        over = {} if cfg_think is None else {"think": cfg_think}
+        sh = CanonShadow(store, settings({"canon": {"shadow": True, **over}}))
+        payload = sh._get_scribe().llm._payload("system", "user", None)
+        assert payload.get("think") is want, (over, payload.get("think"))
+
+    class Silent:
+        stays_local = True
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, system, user, schema_=None):
+            self.calls += 1
+            return ""
+
+    store = new_save()
+    story(store, M1, M2, M3, M4)
+    silent = Silent()
+    cfg = settings({"canon": {"shadow": True, "backfill": "all", "max_errors": 3}})
+    sh = CanonShadow(store, cfg, scribe=Scribe(silent))
+    out = sh.reconcile()
+    assert out["processed"] == 0 and out["errors"] == 3 and silent.calls == 3, (out, silent.calls)
+    state = json.loads((Path(store.dir) / "canon" / "shadow.json").read_text())
+    assert state["hashes"] == {}, "an empty reply was recorded as a turn that had been read"
+    reasons = [h["reason"] for h in _health(store)]
+    assert len(reasons) == 1 and "empty reply" in reasons[0] and "think" in reasons[0], reasons
+    sh.reconcile()
+    assert len(_health(store)) == 1, "reported once, not per pass"
+    sh.scribe = Scribe(Stub())                                  # the model answers properly again
+    out = sh.reconcile()
+    assert out["processed"] == 4, out
+    assert view(sh._store().canon) == fresh_view(M1, M2, M3, M4)
+    print("24. the reader asks a model not to think first, and an empty reply is retried and reported, not recorded as read")
+
+
 try:
     for fn in (test_settings, test_off_by_default_costs_nothing, test_observe_only,
                test_a_pass_and_its_report, test_it_follows_every_kind_of_change,
@@ -956,7 +1002,8 @@ try:
                test_canon_settings_survive_the_config_file,
                test_authored_sheets_seed_a_new_story,
                test_sheets_are_not_authored_once_a_story_is_under_way,
-               test_a_look_through_a_pronoun_reaches_canon_only_when_switched_on):
+               test_a_look_through_a_pronoun_reaches_canon_only_when_switched_on,
+               test_a_reasoning_model_is_told_not_to_think_and_an_empty_reply_is_a_failure):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)

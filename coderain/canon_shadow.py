@@ -45,6 +45,8 @@ Off unless config.yaml says so:
       identity: needed            # needed (default): a look is shown only when it matters; always: every turn
       identity_via_pronoun: false # true: a look said with "he"/"she" is read for the one character the nearest
                                   # sentences name (about 94% right when it answers, D-035); off = D-024
+      think: false                # default: ask the model not to reason first (a reasoning model such as
+                                  # Qwen3.5 otherwise spends its whole answer budget thinking, D-040)
 
 What a turn's card did is in <save>/canon/injections.jsonl (one row of counts per turn)
 and <save>/canon/card-last.txt (the last card in full, marked sent or preview).
@@ -81,7 +83,7 @@ BACKFILL_ALL = 10 ** 9
 DEFAULTS = {"shadow": False, "model": "gemma3:4b", "host": "http://localhost:11434",
             "num_ctx": 8192, "backfill": 200, "max_errors": 3,
             "inject": "off", "card_chars": 2400, "inject_state": True,
-            "identity": "needed", "identity_via_pronoun": False}
+            "identity": "needed", "identity_via_pronoun": False, "think": False}
 _ROWS_KEEP = 6000                    # rows.jsonl is trimmed to this many lines
 IDENTITY_REACH = 2                   # sentences a pronoun may look back for its name when identity_via_pronoun is on
 RECENT_FOR_CARD = 4                  # latest turns whose names pick the cast
@@ -128,6 +130,10 @@ def settings(raw) -> dict:
     out["card_chars"] = _int(sec.get("card_chars"), DEFAULTS["card_chars"], 600, 4000)
     out["inject_state"] = sec.get("inject_state") is not False
     out["identity_via_pronoun"] = sec.get("identity_via_pronoun") is True      # a literal true, like shadow: it changes what gets locked
+    # The reader wants a JSON answer and nothing else. A model that reasons first (Qwen3.5 does by
+    # default) spent the whole 1,200-token answer budget thinking and returned nothing, on every
+    # call of an 86 minute read (D-040). So the request says think: false unless this is a literal true.
+    out["think"] = sec.get("think") is True
     out["identity"] = "always" if isinstance(sec.get("identity"), str) and sec["identity"].strip().lower() == "always" else "needed"
     pl = sec.get("player")
     out["player"] = (pl.strip() if isinstance(pl, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", pl.strip())
@@ -368,7 +374,7 @@ class CanonShadow:
     def _get_scribe(self) -> Scribe:
         if self.scribe is None:
             self.scribe = Scribe(OllamaChat(self.cfg["model"], host=self.cfg["host"],
-                                            num_ctx=self.cfg["num_ctx"]))
+                                            num_ctx=self.cfg["num_ctx"], think=self.cfg["think"]))
         require_local(self.scribe.llm)
         return self.scribe
 
@@ -535,16 +541,27 @@ class CanonShadow:
                                    refused=refused)
                 v = gender_votes(cstore.canon, prose, player)
                 row = turn_row(idx, rep, v)
-                if rep.extraction.status == "error":
-                    # The model could not be reached. Not recorded as done, so the next
-                    # pass tries this turn again, and a down server is not hammered.
+                if rep.extraction.status in ("error", "empty_output"):
+                    # The model could not be reached, or sent back nothing at all (with a
+                    # schema it always has at least {"claims": []}, so nothing is a failure:
+                    # a model that reasons first can spend its whole answer budget thinking).
+                    # Not recorded as done, so the next pass tries this turn again, and a
+                    # down server is not hammered. Recording an empty reply as "read" would
+                    # mark a whole story done with no facts and say nothing (D-040).
                     errors += 1
                     out["errors"] += 1
                     if errors >= self.cfg["max_errors"]:
-                        self._degrade(
-                            f"the Scribe could not be reached {errors} times in a row; "
-                            f"shadow mode will retry after the next turn "
-                            f"({rep.extraction.error[:100]})")
+                        if rep.extraction.status == "error":
+                            self._degrade(
+                                f"the Scribe could not be reached {errors} times in a row; "
+                                f"shadow mode will retry after the next turn "
+                                f"({rep.extraction.error[:100]})")
+                        else:
+                            self._degrade(
+                                f"the Scribe sent back an empty reply {errors} times in a row; "
+                                f"shadow mode will retry after the next turn (a model that "
+                                f"reasons before it answers needs canon: think: false, "
+                                f"which is the default)")
                         break
                     continue
                 errors = 0
