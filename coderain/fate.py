@@ -175,6 +175,17 @@ def _unlabel(s: str) -> str:
     return _LABEL.sub("", s, count=1)
 
 
+def _trim_stray_quote(s: str) -> str:
+    """Drop a closing double quote that nothing opened: a model that wraps its sentence in quotes or ends speech twice leaves
+    `...into the rain.<close>`. 6 of 68 stored lines in one real run ended that way, and the line is rendered into the Writer's
+    prompt. A balanced pair (speech that opens and closes) is untouched."""
+    if s.endswith('"') and s.count('"') % 2 == 1:
+        return s[:-1].rstrip()
+    if s.endswith(chr(0x201D)) and s.count(chr(0x201C)) < s.count(chr(0x201D)):
+        return s[:-1].rstrip()
+    return s
+
+
 def _unwrap(s: str) -> str:
     """Drop quotes that wrap the WHOLE line (and only those): a line that ends in dialogue ends in a closing quote that is
     part of it. The first version stripped quote characters off both ends and cut the closing quote of every spoken line."""
@@ -194,7 +205,7 @@ def clean_line(text) -> tuple[str, str]:
         return "", "no direction"
     s = _unwrap(" ".join(text.split()))
     s = re.sub(r"^[-*#>\s]+", "", s)
-    s = _unwrap(_unlabel(s))
+    s = _trim_stray_quote(_unwrap(_unlabel(s)))
     if not s:
         return "", "empty direction"
     if "```" in s or "`" in s:

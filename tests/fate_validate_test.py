@@ -78,6 +78,16 @@ def test_clean_line():
               "The clerk mutters, " + chr(0x201C) + "Not today." + chr(0x201D)]
     for line in spoken:
         assert fate.clean_line(line) == (line, ""), (line, fate.clean_line(line))
+    # a closing quote that nothing opened is dropped (6 of 68 stored lines in one real run ended that way); a pair is kept
+    for stray, kept in (("Bram storms out of the tavern, disappearing into the rain." + chr(0x201D),
+                         "Bram storms out of the tavern, disappearing into the rain."),
+                        ("Bram turns and says, " + chr(0x2018) + "The ferry is late." + chr(0x2019) + chr(0x201D),
+                         "Bram turns and says, " + chr(0x2018) + "The ferry is late." + chr(0x2019)),
+                        ('The clerk says the office is closed"', "The clerk says the office is closed")):
+        assert fate.clean_line(stray) == (kept, ""), (stray, fate.clean_line(stray))
+    for pair in ('The clerk says, "The office is closed."', "The clerk says, " + chr(0x201C) + "Closed." + chr(0x201D),
+                 'The clerk says "closed" and "later".'):
+        assert fate.clean_line(pair) == (pair, ""), (pair, fate.clean_line(pair))
     assert fate.clean_line("'The lamp gutters.'") == ("The lamp gutters.", "")
     assert fate.clean_line(chr(0x201C) + "The lamp gutters." + chr(0x201D)) == ("The lamp gutters.", "")
     assert fate.clean_line('"He said "go" and left."')[0].startswith('"He said'), "four quote marks are not a wrapper"
