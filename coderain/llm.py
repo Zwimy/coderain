@@ -10,6 +10,7 @@ import contextlib
 import json
 import re
 from typing import Iterator
+from urllib.parse import urlparse
 
 from openai import OpenAI
 
@@ -20,10 +21,54 @@ from . import streaming
 from .streaming import THINK_CLOSE, THINK_OPEN, ThinkFilter, filter_think  # noqa: F401
 
 
+_LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def is_local(base_url) -> bool:
+    """True when the endpoint is a server on this machine (Ollama, llama.cpp, LM Studio ...)."""
+    try:
+        return (urlparse(str(base_url)).hostname or "").lower() in _LOOPBACK
+    except ValueError:
+        return False
+
+
+def fold_late_system(messages: list[dict]) -> list[dict]:
+    """Fold a run of system messages at the END of the request into the last user turn.
+
+    The engine puts its per-turn directives (the chapter goal, the canon card, fate's note, the continuity pass) AFTER the
+    player's action on purpose: the end of the prompt binds hardest (D-027). llama3.1:8b through Ollama renders a system
+    message after a user turn as the start of ITS reply, and began every narration with the literal line "assistant"
+    (6 of 6 replies with one such message, 0 of 6 with the same words inside the user turn; gemma3:4b is unaffected).
+    Folding keeps the words in the same place in the prompt and makes the template read an ordinary exchange. When the
+    last non-system message is not a user turn (a Continue after the narrator), the notes become a user turn of their own.
+    Nothing else is touched, and the caller's list is not modified."""
+    end = len(messages)
+    start = end
+    while start > 0 and messages[start - 1].get("role") == "system":
+        start -= 1
+    if start == end or start == 0:
+        return messages                                 # no late system message, or only system messages
+    notes = [str(m.get("content") or "").strip() for m in messages[start:]]
+    note = "\n\n".join(n for n in notes if n)
+    head = list(messages[:start])
+    if not note:
+        return head
+    prev = head[-1]
+    if prev.get("role") == "user" and isinstance(prev.get("content"), str):
+        head[-1] = {**prev, "content": prev["content"] + "\n\n" + note}
+    else:
+        head.append({"role": "user", "content": note})
+    return head
+
+
 class LLM:
     def __init__(self, profile: Profile, generation: dict):
         self.profile = profile
         self.gen = generation
+        # `generation.fold_late_system`: true or false forces it; unset means "on for a server on this machine", where the
+        # chat template is the model's own and fragile, and off for a hosted provider, which handles roles itself.
+        forced = generation.get("fold_late_system") if isinstance(generation, dict) else None
+        self.fold_late = forced if isinstance(forced, bool) else is_local(profile.base_url)
         self.client = OpenAI(
             base_url=profile.base_url,
             api_key=profile.api_key,
@@ -171,10 +216,14 @@ class LLM:
             p["extra_body"] = eb
         return p
 
+    def _wire(self, messages: list[dict]) -> list[dict]:
+        """The messages as they go over the wire (see fold_late_system)."""
+        return fold_late_system(messages) if self.fold_late else messages
+
     def _raw_stream(self, messages: list[dict], params: dict) -> Iterator[str]:
         resp = self._create_stream(
             model=self.profile.model,
-            messages=messages,
+            messages=self._wire(messages),
             stream=True,
             **params,
         )
@@ -201,7 +250,7 @@ class LLM:
         it produces a final answer. Used for the optional memory-lookup tool on
         capable/hosted models. Not streamed."""
         params = self._params(**overrides)
-        convo = list(messages)
+        convo = list(self._wire(messages))
         for _ in range(max_rounds):
             resp = self.client.chat.completions.create(
                 model=self.profile.model, messages=convo,
