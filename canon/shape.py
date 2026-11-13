@@ -210,6 +210,13 @@ def _descriptor(w: str) -> bool:
     return w in _COLOURS or w in _MODS
 
 
+def has_colour(value) -> bool:
+    """Does the value name a colour? A hair or eye value that passed the shape rules and
+    does not is a shade ("dark") or a style ("elaborate braids"): real, but not the colour
+    the slot is mostly asked for."""
+    return any(w in _COLOURS for w in _tokens(str(value)))
+
+
 def _body_descriptor(w: str) -> bool:
     # A measurement sits between the verb and the word ("is 200cm tall").
     return w in _BUILD or w in _MODS or re.fullmatch(r"\d+(?:cm|m|ft)?", w) is not None

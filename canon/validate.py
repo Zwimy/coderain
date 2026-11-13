@@ -398,7 +398,15 @@ def _plan(scratch: Canon, eid: str, c: Claim, turn: int, world):
             # A restatement: record it with the EXISTING wording so canon sees
             # the same value and counts a corroboration, not a contradiction.
             value = cur
-        return [_fields(eid, slot, "fact_established", value, c, turn, world)], None
+        rec = _fields(eid, slot, "fact_established", value, c, turn, world)
+        if slot in _COLOUR_SLOTS and isinstance(value, str) and not shape.has_colour(value):
+            # A hair or eye value with no colour in it ("dark", "elaborate braids") is true but
+            # weak, and identity is first write wins, so it used to lock the slot against the
+            # colour the story states next (a real colour held back 6 to 33 times behind
+            # "dark", D-041). Filed as `inferred`, the lowest authority, it holds an empty
+            # slot and is replaced by the first narrated colour; nothing else can displace it.
+            rec["authority"] = "inferred"
+        return [rec], None
 
     kind = _KIND.get(slot, "state_set")
     cur = scratch.current(eid, slot)
@@ -431,6 +439,7 @@ def _plan(scratch: Canon, eid: str, c: Claim, turn: int, world):
 
 
 _ONE_OWNER = frozenset({"identity.hair", "identity.eyes", "identity.build", "identity.age"})
+_COLOUR_SLOTS = frozenset({"identity.hair", "identity.eyes"})
 
 
 def _owner_key(canon: Canon, name: str, prose: str) -> str | None:

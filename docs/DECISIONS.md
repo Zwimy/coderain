@@ -1563,6 +1563,9 @@ for 2 characters out of 9. Revisit when a story shows a style changing under a l
 separate `hairstyle` slot would be the cleaner schema and is a larger change (a Scribe prompt line, an eval case, the card, the
 panel) than the evidence calls for.
 
+**Revisited in D-041.** A style (or a bare shade) is now filed as a weak value that the story's first colour replaces, which
+answers the "colour blocked by a style" half of this question without a new slot.
+
 **Also checked.** "Aldric", the first entry in every soak save's characters.md, is the template's example inside an HTML comment:
 the entry parser strips comments and the canon ledger never held it.
 
@@ -1677,3 +1680,55 @@ test's prompt was a one-line passage and a different endpoint.
 **Tests.** `canon_shadow_test.py` 1 (the setting) and 24 (the payload carries `think`, an empty reply is retried, reported once and
 not recorded, a working model afterwards reads everything and agrees with a fresh read); 8 of 9 guard mutations caught, the ninth
 is equivalent (`DEFAULTS["think"]` is overwritten by `settings()` on every call).
+
+## D-041 — A hair or eye value with no colour in it is weak, and Qwen3.5 9B is not a better reader than llama3.1:8b here
+
+**Context.** With D-040 in place the Qwen3.5 9B heretic build read the fixed 161-turn narration-first transcript (24.8 minutes,
+0 errors; llama3.1:8b took 31.4, gemma3:4b 47 in D-036). Both recordings were replayed through the same validator, D-039 included.
+The story establishes 6 real looks (the seventh in D-036 was the scorer's mistake, D-039). Numbers below are before the rule
+this entry adds.
+
+| | llama3.1:8b | Qwen3.5 9B (heretic) |
+|---|---|---|
+| looks held / agree with the story / differ | 6 / 5 / 1 | 6 / 3 / 3 |
+| identity records | 57 | 126 |
+| claims proposed, thrown out by the parser | 1,174, 311 | 915, 114 |
+| passages with a malformed reply | 5 of 161 | 1 of 161 |
+| held-back changes (contradictions) | 21 | 52 |
+| extra values with no truth to check | 2 | 4 |
+
+Qwen proposes fewer claims and breaks the format less, but files more identity facts and more of them are wrong or weak: a hair
+style ("elaborate braids") and a bare "dark" as a character's first values, a man's build ("stout man") on a woman, a braid on a
+second character. Every one of the 3 "differs" is the same mechanism, below.
+
+**The mechanism.** Identity is first write wins. A reader that files a shade ("dark eyes") or a style ("a tight braid") before the
+sentence that states the colour locks the slot, and the colour is then held back as a contradiction every time the story says it
+again. Counted on the recordings: slots locked on a colourless value while a colour was held back, llama 1 (the colour held back 21
+times), Qwen 3 (12, 6 and 33 times). On the full-read copy of the real story: 13 of 43 held hair and eye slots have no colour word
+(11 hair, 2 eyes), and 2 of those had a real colour held back (once and 4 times).
+
+**Decision.** A hair or eye value with no colour in it is filed at the lowest authority, `inferred`. The ledger already lets a
+higher authority replace a lower one, so nothing in the ledger changes: the first narrated colour replaces it, the old interval
+is closed, and no contradiction is recorded. Everything else about first write wins is as it was: a colour is never replaced by
+another colour (a raven that becomes platinum is still a contradiction), nor by a later shade; one colourless value does not
+replace another; build, age and marks are untouched; an author's value and a sheet still outrank all of it. `shape.has_colour`
+decides what counts (the `_COLOURS` list); a value only reaches this point after the shape rules, so it is made of known colour,
+modifier or style words, and an unlisted real colour cannot be taken for a weak value.
+
+**Measured** by replaying the same two recordings: both readers now hold the 6 real looks and agree on all 6 (llama 5 to 6, Qwen
+3 to 6); no colourless slot blocks a colour any more. The real story could not be replayed (no raw replies were kept): the held-back
+counts above say 2 of its 43 slots would change.
+
+**Cost.** One value per slot reaches the card, so when a colour replaces a style the style ("tight braid") is no longer shown, and
+it stays in the ledger's history only. D-037 found hair styles never vary in the real story, so that loses little. A shade that the
+story later contradicts with an opposite colour ("dark" then "blonde") is no longer reported as a held-back change for a weak value.
+Revisit with a `hairstyle` slot if a story needs both.
+
+**Not decided.** Whether Qwen3.5 9B is a better reader for the owner's own story. It was tried for one reason, that a decensored
+build might not refuse explicit passages, and the transcript here has none (and none may live in this repo). Until that is checked
+on a local copy, llama3.1:8b stays the recommended reader (D-036; after the rule it ties Qwen on the real looks and has half the
+extra values) and gemma3:4b the default.
+
+**Tests.** `canon_colourless_values_test.py` (8 cases: filed as inferred, replaced by the first colour with no contradiction, a held
+colour not replaced, one shade not replacing another, a restatement, hair and a style, build and marks untouched, the author still
+outranks); 10 of 10 guard mutations caught.
