@@ -16,7 +16,8 @@ fate.derive_roll, so each case names the tier it exercises.
     try that names the refusal, and the recovered line is cached and names the model (D-053, from the first real runs)
  5c) a nearly-JSON reply (speech closing the sentence, the JSON string's closing quote missing) is repaired on the first
     try; the model is never shown the Writer's world-update block
- 6) a quiet scene (stakes none) on a setback or a windfall gives no steering; a natural roll ignores the label
+ 6) a quiet scene (stakes none) on a setback or a windfall gives no steering; a surprise roll ignores the label
+ 6b) a natural roll steers nothing and asks the model nothing, in every mode (D-055), shows as 'natural, no steering'
  7) a setback that kills the player is vetoed; a direction that repeats an earlier one is asked for again once
  8) RPG saves skip it (one health row for the whole save, not per turn); the opening and a Continue never use it
  9) the quad pipeline: in simple mode (no Logic Agent) fate runs and the Writer is steered; once an authored event rule
@@ -131,7 +132,7 @@ def test_off():
 
 
 def test_on_order_and_event():
-    force(5)                                               # natural
+    force(12)                                              # surprise
     eng, store, stub = make("on", with_chapter=True)
     stub.replies = [reply("A bell rings in the harbour.")]
     play(eng)
@@ -147,7 +148,7 @@ def test_on_order_and_event():
     assert idx["Hidden steering"] < idx["# THIS CHAPTER"], "the steering must come BEFORE the chapter directive"
     assert msgs[-1]["content"].startswith("# THIS CHAPTER"), "the chapter goal must stay the last thing read"
     note = steering(msgs)[0].lower()
-    for banned in ("d20", "natural", "stakes", "tier", " 5"):
+    for banned in ("d20", "natural", "surprise", "stakes", "tier", " 12"):
         assert banned not in note.replace("never mention it, dice, luck, odds or fate in the story", ""), banned
     assert not eng._rpg_events, "the die was shown without show_die"
     assert stub.fate_msgs[0][0]["content"].endswith("/no_think"), "the model was not told to skip reasoning"
@@ -156,12 +157,12 @@ def test_on_order_and_event():
     play(thinker)
     assert not thinker_stub.fate_msgs[0][0]["content"].endswith("/no_think"), "the soft switch was sent to a thinking setup"
     rec = fate.read(store)[0]
-    assert rec["tier"] == "natural" and rec["roll"] == 5 and rec["text"] == "A bell rings in the harbour."
+    assert rec["tier"] == "surprise" and rec["roll"] == 12 and rec["text"] == "A bell rings in the harbour."
     assert stub.fate_msgs[0][1]["content"].count("CHAPTER GOAL:") == 1 and "Reach the northern gate." in stub.fate_msgs[0][1]["content"]
     eng2, _s2, stub2 = make("on", show_die=True)
     stub2.replies = [reply("A bell rings.")]
     play(eng2)
-    assert eng2._rpg_events == ["fate d20 5: natural"], eng2._rpg_events
+    assert eng2._rpg_events == ["fate d20 12: surprise"], eng2._rpg_events
     assert "A bell rings." not in " ".join(eng2._rpg_events), "on must never show the sentence"
     print("2. on: one call; the steering sits after the action and before the chapter goal; no die in the note; "
           "the die shows only when asked")
@@ -206,7 +207,7 @@ def test_retry_swipe_undo():
 
 
 def test_failures():
-    force(5)
+    force(12)
     base_eng, _bs, base_stub = make("off")
     play(base_eng)
     base_roles = [m["role"] for m in base_stub.writer_msgs[0]]
@@ -289,12 +290,46 @@ def test_quiet_scene():
         stub_on.replies = [reply("A beam falls across the path.", stakes="none")]
         play(eng_on)
         assert not steering(stub_on.writer_msgs[0]), "a quiet scene was steered"
-    force(5)                                                # a natural roll ignores the label
+    force(12)                                               # a surprise roll ignores the label
     eng, store, stub = make("on")
     stub.replies = [reply("A beam creaks overhead.", stakes="none")]
     play(eng)
     assert len(steering(stub.writer_msgs[0])) == 1
-    print("6. stakes none switches a setback or a windfall off; a natural roll ignores the label")
+    print("6. stakes none switches a setback or a windfall off; a surprise roll ignores the label")
+
+
+def test_natural_is_silent():
+    """D-055: a natural roll steers nothing and asks the model nothing, in every mode."""
+    force(5)
+    for mode in ("on", "preview"):
+        eng, store, stub = make(mode, show_die=True)
+        play(eng)
+        assert stub.fate_calls == 0, (mode, "a natural roll asked the model")
+        assert not steering(stub.writer_msgs[0]), (mode, "a natural roll steered the Writer")
+        rec = fate.read(store)[0]
+        assert rec["tier"] == "natural" and rec["roll"] == 5 and rec["text"] == "" and rec["stakes"] == "none", rec
+        assert not health(store), (mode, health(store))
+    eng, store, stub = make("preview")
+    play(eng)
+    assert eng._rpg_events == ["fate (preview) d20 5: natural, no steering"], eng._rpg_events
+    eng, store, stub = make("on", show_die=True)
+    play(eng)
+    assert eng._rpg_events == ["fate d20 5: natural"], eng._rpg_events      # not "quiet scene": nothing was judged quiet
+    # a retry finds the record and still asks nothing; the same exchange cannot steer on a retry either
+    ok, action = eng.rollback_for_retry()
+    "".join(eng.regenerate(action))
+    assert stub.fate_calls == 0 and not steering(stub.writer_msgs[1]) and len(fate.read(store)) == 1
+    # putting natural back into the steered tiers restores the old behaviour: the model is asked and the Writer steered
+    saved = fate.SILENT_TIERS
+    fate.SILENT_TIERS = ()
+    try:
+        eng, store, stub = make("on")
+        stub.replies = [reply("A bell rings in the harbour.")]
+        play(eng)
+        assert stub.fate_calls == 1 and len(steering(stub.writer_msgs[0])) == 1
+    finally:
+        fate.SILENT_TIERS = saved
+    print("6b. a natural roll steers nothing and asks nothing, shows as 'natural, no steering', survives a retry")
 
 
 def test_veto_and_repeat():
@@ -316,7 +351,7 @@ def test_veto_and_repeat():
         play(eng)
         assert bool(steering(stub.writer_msgs[0])) is (not protected), (victim, steering(stub.writer_msgs[0]))
         assert bool(fate.read(store)) is (not protected) and len(health(store)) == (1 if protected else 0), victim
-    force(5)
+    force(12)
     eng, store, stub = make("on")
     stub.replies = [reply("A rival smuggler offers a bargain at the quay.")]
     play(eng, "I walk to the quay.")
@@ -336,7 +371,7 @@ def test_veto_and_repeat():
 
 
 def test_skips():
-    force(5)
+    force(12)
     eng, store, stub = make("on")
     st = store.rpg_state()
     st["enabled"] = True
@@ -372,7 +407,7 @@ class TrinityStub(Stub):
 
 
 def test_trinity():
-    force(5)
+    force(12)
     # Simple Story mode on the quad pipeline: the Logic Agent is skipped, so nothing else plans the turn and fate runs,
     # and the Writer gets the steering where it would without the quad pipeline.
     eng, store, stub = make("on", trinity=True, stub=TrinityStub())
@@ -395,7 +430,7 @@ def test_trinity():
 
 
 for fn in (test_off, test_on_order_and_event, test_preview, test_retry_swipe_undo, test_failures, test_second_try,
-           test_repaired_reply, test_quiet_scene, test_veto_and_repeat, test_skips, test_trinity):
+           test_repaired_reply, test_quiet_scene, test_natural_is_silent, test_veto_and_repeat, test_skips, test_trinity):
     fate.derive_roll = REAL_ROLL
     fn()
 fate.derive_roll = REAL_ROLL

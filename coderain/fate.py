@@ -5,7 +5,7 @@ the result picks a KIND of development, and one model call writes a single sente
 told it as hidden steering and never sees a die:
 
     1-2    setback    something goes wrong in the world (a delay, a loss of position, a failed attempt)
-    3-10   natural    the natural, expected continuation
+    3-10   natural    the ordinary next beat: NOTHING is steered, no model call (D-055; it was a model-written line before)
     11-18  surprise   a surprising but harmless development
     19-20  windfall   a small stroke of luck
 
@@ -45,6 +45,12 @@ MODES = ("off", "preview", "on")
 # (tier, lowest face, highest face). Fixed in v1: the owner's 10 / 40 / 40 / 10, with his overlapping
 # "10 to 18" read as 11 to 18.
 BANDS = (("setback", 1, 2), ("natural", 3, 10), ("surprise", 11, 18), ("windfall", 19, 20))
+# Tiers that steer nothing: no model call, a record with no line. Real soaks on a 4B Writer (D-053, D-055): steering 80% of the
+# turns made narration about twice as long, and with the note carried in the user turn the story looped in its last third. The
+# natural lines were the least informative of the four (half a person reacting, half weather or a retelling) and the chapter
+# directive already carries the scene forward. With natural silent, 60% of the turns are steered and the loops were gone.
+# Emptying this tuple gives the earlier behaviour back.
+SILENT_TIERS = ("natural",)
 STEERED_ONLY_WITH_STAKES = ("setback", "windfall")      # a quiet scene switches these two off
 MAX_TEXT = 300              # measured (D-053): asked for 20 words, a 4B and an 8B model write 25 to 45
 MIN_WORDS = 3               # "help arrives" is a label, not a direction
@@ -400,11 +406,13 @@ def event_line(rec: dict, mode: str, show_die: bool) -> str | None:
     """The one line the player sees in the turn's event bar, or None. Preview shows everything; on shows the die
     only when the save asks for it, and never the sentence."""
     quiet = not rec.get("text")
+    silent = quiet and rec.get("tier") in SILENT_TIERS            # a roll that steers nothing by design, not a quiet scene
     if mode == "preview":
-        body = ("quiet scene, no steering" if quiet else f"{rec['tier']}: {rec['text']}")
+        body = (f"{rec['tier']}, no steering" if silent else "quiet scene, no steering" if quiet
+                else f"{rec['tier']}: {rec['text']}")
         return f"fate (preview) d20 {rec['roll']}: {body}"
     if mode == "on" and show_die:
-        return f"fate d20 {rec['roll']}: " + ("quiet scene" if quiet else rec["tier"])
+        return f"fate d20 {rec['roll']}: " + (rec["tier"] if silent else "quiet scene" if quiet else rec["tier"])
     return None
 
 
@@ -432,6 +440,10 @@ def run_stage(store, llm, messages: list[dict], action: str, *, seed, card: str 
         return hit, None
     roll = derive_roll(seed, n, action)
     tier = tier_of(roll)
+    if tier in SILENT_TIERS:
+        rec = {"n": n, "key": key, "nonce": 0, "roll": roll, "tier": tier, "stakes": "none", "text": "", "model": ""}
+        put(store, rec)
+        return rec, None
     t0 = time.monotonic()
     if on_stage:
         on_stage("Fate: weighing the next turn")

@@ -181,7 +181,13 @@ def test_event_line():
     assert fate.event_line(rec, "on", True) == "fate d20 14: surprise", "on shows the die, never the sentence"
     assert fate.event_line(quiet, "on", True) == "fate d20 2: quiet scene"
     assert fate.event_line(rec, "off", True) is None
-    print("8. preview shows the idea; on shows the die only when asked and never the sentence")
+    # a natural roll steers nothing BY DESIGN (D-055): it must not read as a quiet scene, which means something else
+    nat = {"roll": 5, "tier": "natural", "text": ""}
+    assert fate.SILENT_TIERS == ("natural",), "natural is the tier that steers nothing"
+    assert fate.event_line(nat, "preview", False) == "fate (preview) d20 5: natural, no steering"
+    assert fate.event_line(nat, "on", True) == "fate d20 5: natural"
+    assert fate.event_line(nat, "on", False) is None
+    print("8. preview shows the idea; on shows the die only when asked and never the sentence; natural says so")
 
 
 def test_salvage_and_ask():
