@@ -12,6 +12,7 @@ from coderain.generator import ScenarioSpec
 from coderain.generator import _FIELD_SPECS
 from coderain.generator import assist_field
 from coderain.generator import complete_scenario
+from coderain.generator import generate_scenario
 from coderain.llm import LLM
 from coderain.memory import Entry
 from coderain.profiles import character_from_entry
@@ -91,6 +92,51 @@ def scenario_complete(slug: str, body: dict):
         detail="fast" if body.get("detail") == "fast" else "rich",
         improve=bool(body.get("improve", False)))
 
+    def job(llm, on_stage):
+        return slug, complete_scenario(lib, llm, slug, spec, on_stage=on_stage)
+    return _stream_generation(job)
+
+
+IDEA_MAX = 600          # a world idea is a sentence or a short paragraph; the rest is the model's job
+
+
+@router.post("/api/scenarios-generate")
+def scenario_generate(body: dict):
+    """A whole new world from one sentence (SSE, D-052): the full generator, the same one the desktop app
+    and the CLI use. Nothing is created unless the premise stage works, so a failed run leaves no
+    "Untitled World" behind. The `done` frame carries the new world's slug."""
+    raw = body.get("idea")
+    # A JSON null (or a number) must not become the text "None" and be generated as a world.
+    idea = " ".join(raw.split()) if isinstance(raw, str) else ""
+    if not idea:
+        raise HTTPException(400, "describe the world in a sentence")
+    if len(idea) > IDEA_MAX:
+        raise HTTPException(400, f"keep the idea under {IDEA_MAX} characters; the AI writes the rest")
+
+    def _n(key, default=5):
+        try:
+            return max(0, min(12, int(body.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+    spec = ScenarioSpec(
+        type=str(body.get("type", "")).strip()[:80],
+        tone=str(body.get("tone", "")).strip()[:200],
+        premise=idea,
+        n_npcs=_n("n_npcs"), n_locations=_n("n_locations"), n_items=_n("n_items"),
+        detail="fast" if body.get("detail") == "fast" else "rich",
+        improve=bool(body.get("improve", False)))
+
+    def job(llm, on_stage):
+        slug = generate_scenario(lib, llm, spec, on_stage=on_stage)
+        return slug, list(generate_scenario.last_warnings)
+    return _stream_generation(job)
+
+
+def _stream_generation(job):
+    """Run `job(llm, on_stage) -> (slug, warnings)` on a worker thread and stream its stages as SSE.
+
+    One implementation for every generation route: the lock (one generation at a time), the stage
+    frames, the error frame, and the step that copies what the AI made into the reusable library."""
     def gen():
         if not _gen_lock.acquire(blocking=False):
             yield _sse({"t": "error", "text": "another generation is running"})
@@ -102,8 +148,7 @@ def scenario_complete(slug: str, body: dict):
             def worker():
                 try:
                     llm = LLM(core._cfg.profile, core._cfg.generation)
-                    result["warnings"] = complete_scenario(
-                        lib, llm, slug, spec, on_stage=lambda s: q.put(s))
+                    result["slug"], result["warnings"] = job(llm, lambda s: q.put(s))
                 except Exception as e:  # noqa: BLE001
                     result["error"] = str(e)
                 q.put(None)
@@ -117,6 +162,7 @@ def scenario_complete(slug: str, body: dict):
             if "error" in result:
                 yield _sse({"t": "error", "text": result["error"]})
             else:
+                slug = result["slug"]
                 # Everything the AI just made also becomes a reusable library
                 # piece (the play-test ask: "add everything to pieces as well").
                 added = _mirror_scenario_to_library(slug)

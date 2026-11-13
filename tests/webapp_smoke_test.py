@@ -19,7 +19,9 @@ Asserts, once it can run:
  4) a slow view cannot paint over a newer navigation;
  5) a Memory-panel edit repaints the transcript, so the pen cannot address a
     turn that moved (this one destroys user prose when it regresses);
- 6) an empty Continue is reported to the reader, not swallowed.
+ 6) an empty Continue is reported to the reader, not swallowed;
+ 7) the first-run escape hatch does not throw;
+ 8) the "World from an idea" dialog opens, refuses an empty sentence, and reports a failed run without leaving a world.
 """
 import os
 import shutil
@@ -261,6 +263,34 @@ with sync_playwright() as p:
         failures.append(f"'Look around first' cannot satisfy the readiness "
                         f"probe: {skip_result}")
     print("7) the first-run screen's escape hatch works")
+
+    # --- "World from an idea" (D-052) -------------------------------------
+    # Check 7 left the readiness probe satisfied, so the Library renders even with no model. The dialog must open,
+    # refuse an empty sentence without closing, and, when the run fails (the model is stubbed to answer nothing),
+    # SAY so, keep the sentence for a retry and leave no world behind.
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_selector("#idea-world", timeout=8000)
+    worlds_before = len(c.get("/api/saves").json()["scenarios"])
+    page.click("#idea-world")
+    page.wait_for_selector("#iw-idea", timeout=4000)
+    page.click("#iw-go")
+    page.wait_for_timeout(300)
+    if page.locator("#iw-idea").count() == 0 or not page.evaluate(
+            "!document.querySelector('#modal-root').classList.contains('hidden')"):
+        failures.append("an empty sentence closed the 'World from an idea' dialog")
+    page.fill("#iw-idea", "A lamplighter finds a lit lamp.")
+    page.click("#iw-go")
+    try:
+        page.wait_for_function("document.querySelector('#iw-log').textContent.includes('failed:')", timeout=15000)
+    except Exception:  # noqa: BLE001 - report it, don't abort the run
+        failures.append("a failed 'World from an idea' run never said it failed: "
+                        + repr(page.inner_text("#iw-log")[:120]))
+    if page.input_value("#iw-idea") != "A lamplighter finds a lit lamp." or page.is_disabled("#iw-go"):
+        failures.append("a failed run did not keep the sentence and re-enable the button")
+    if len(c.get("/api/saves").json()["scenarios"]) != worlds_before:
+        failures.append("a failed 'World from an idea' run left a world behind")
+    close_modal()
+    print("8) the 'World from an idea' dialog opens, refuses an empty sentence and reports a failed run")
 
     browser.close()
 

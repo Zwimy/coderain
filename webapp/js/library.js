@@ -2,6 +2,7 @@
 import {$, api, esc, guard, toast, view} from "./util.js";
 import {closeModal, confirmModal, openModal, promptModal} from "./modal.js";
 import {render} from "./app.js";
+import {ideaWorldModal} from "./ideaworld.js";
 
 /* ---------- library ---------- */
 export async function renderLibrary() {
@@ -45,17 +46,24 @@ export async function renderLibrary() {
       <h1>Worlds</h1>
       <button id="import-card" title="import a SillyTavern / Tavern character card">Import card…</button>
       <button id="import-world">Import…</button>
+      <button id="idea-world" title="describe a world in one sentence and let the AI build it">+ World from an idea</button>
       <button id="new-world">+ New world</button>
     </div>
     <p class="muted">A world is a reusable scenario: name, premise, and an
-    introduction — the first message every story in it opens with. Open the
-    builder to write every detail yourself, seed sections from an idea, or
-    let the AI generate the rest.</p>
+    introduction (the first message every story in it opens with). Start from
+    one sentence and let the AI build the whole world, or open the builder to
+    write every detail yourself, seed sections from an idea, or generate the
+    rest.</p>
     <div class="cards">${worlds ||
       '<p class="muted">No worlds yet — build one.</p>'}</div>
   </div>`;
 
   $("#new-save").addEventListener("click", () => newSaveModal(data));
+  $("#idea-world").addEventListener("click", () =>
+    ideaWorldModal((slug, watching) => {
+      if (slug && watching) location.hash = `#world/${slug}`;
+      else render();                    // not watching: just show the new card in the list
+    }));
   $("#new-world").addEventListener("click", async () => {
     const out = await api("/api/scenarios",
                           {method: "POST", body: {title: "Untitled World"}});

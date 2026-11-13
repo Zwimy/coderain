@@ -2071,3 +2071,35 @@ once, announces it once, puts the directive last, leaves old stories to the fold
 up and announces it). 23 guard mutations caught after three gaps were closed (the slug, a hand-added second chapter, and the note
 appearing when nothing would be planned). `validator_test.py` case 9 counts every call on one shared stub and now switches the outline
 off, with the reason written in, because the new call would otherwise be counted as a Director call.
+
+## D-052 — A whole world from one sentence, in the browser
+
+**What was missing.** The web app could build a world only by hand: open the builder, write a premise, press "Generate the rest". The
+full generator (title, premise, world bible, factions, characters, places, items, threads, the opening message) existed for the
+desktop app and the command line but had no HTTP route.
+
+**Decision.** `POST /api/scenarios-generate` (server-sent events) runs `generate_scenario` on a worker thread and streams its stages;
+the `done` frame carries the new world's slug and the generator's warnings, and what the AI made is copied to the Pieces library as
+"Generate the rest" already did. The streaming scaffolding (the one-generation-at-a-time lock, stage frames, error frame, library
+copy) moved out of `scenario_complete` into `_stream_generation`, so both routes share one implementation. The idea must be a
+non-empty string (a JSON null no longer becomes the text "None": the first test run found that), at most 600 characters, with line
+breaks and runs of spaces collapsed; counts are clamped to 0..12 and fall back to 5, only `"fast"` selects the fast mode, and type and
+tone are cut to 80 and 200 characters. Nothing is created unless the premise stage works, so a failed run leaves no world behind.
+
+The Library page gets "+ World from an idea" beside "+ New world". The dialog (`webapp/js/ideaworld.js`) takes the sentence and a
+"faster and shallower" box, shows each stage as it arrives, keeps the sentence for a retry when the run fails, and opens the new
+world in the builder when it finishes. If the author closed the dialog while the AI worked, the world is announced and the library
+refreshed instead of pulling them into the builder.
+
+**Not done.** There is no cancel: closing the dialog hides it but the run continues on the server (the same as "Generate the rest"),
+and the lock holds until it ends. The idea has no title field; the title comes from the model. The result was checked in a browser
+with a stub model standing in for a real one (the sandbox has none), at desktop and phone width; it has not been run against a real
+model, so the quality of a world made from one sentence is unmeasured.
+
+**Tests.** `world_from_idea_test.py` (stages and the done frame, the sentence reaching the premise stage, the world and library
+contents; a stage that produced nothing is named; empty, blank, null and over-long ideas are refused and run nothing, the limit itself
+is accepted, whitespace collapses; the knobs and their bounds; a failed premise stage creates no world and frees the lock, a busy lock
+is refused without calling the generator; "Generate the rest" still streams the same frames and keeps the author's text).
+21 guard mutations caught after one gap was closed (generator warnings were not asserted). `webapp_smoke_test.py` case 8 drives the
+dialog in a real browser (it opens, an empty sentence is refused without closing it, a failed run says so, keeps the sentence,
+re-enables the button and leaves no world); 5 mutations of the dialog and the button caught.
