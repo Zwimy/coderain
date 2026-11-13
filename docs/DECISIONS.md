@@ -1894,9 +1894,11 @@ ships with the button, after the owner has read previews); moving odds and stat 
 and a play.js split (no value for this build).
 
 **Not verified.** The latency and the model-swap cost of one extra call per turn on an 8 GB card; how a small model does at the JSON
-and at four-sentence-free one-liners; whether the Writer enacts or copies the note (the leak scan only logs); the path where the
-Director is built but skipped in simple mode (the code handles it, no test drives it); whether the setting should also be a world's
-default. The first run is a PREVIEW on a temp story, reading `memory/fate.jsonl` and the event lines.
+and at four-sentence-free one-liners; whether the Writer enacts or copies the note (the leak scan only logs); whether the setting
+should also be a world's default. The first run is a PREVIEW on a temp story, reading `memory/fate.jsonl` and the event lines.
+(The quad pipeline in simple mode, where the Director is built but skipped, is now driven by `fate_engine_test.py` case 9: fate runs
+and the Writer is steered; with an authored event rule the Director plans the turn and fate steps aside with one health row. Five
+mutations of that gate caught.)
 
 **Tests.** `fate_roll_test.py` (bands, pinned dice values, the key), `fate_validate_test.py` (the checks, the Writer's note, the event
 line), `fate_store_test.py` (cache, prune, settings, branch with and without a snapshot), `fate_engine_test.py` (off costs nothing, the

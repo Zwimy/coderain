@@ -15,6 +15,8 @@ fate.derive_roll, so each case names the tier it exercises.
  6) a quiet scene (stakes none) on a setback or a windfall gives no steering; a natural roll ignores the label
  7) a setback that kills the player is vetoed; a direction that repeats an earlier one is asked for again once
  8) RPG saves skip it (one health row for the whole save, not per turn); the opening and a Continue never use it
+ 9) the quad pipeline: in simple mode (no Logic Agent) fate runs and the Writer is steered; once an authored event rule
+    brings the Director back, fate steps aside with one health row for the save
 """
 import json
 import os
@@ -65,7 +67,7 @@ def reply(text, stakes="some"):
     return json.dumps({"stakes": stakes, "direction": text})
 
 
-def make(mode="off", show_die=False, with_chapter=False, think=False):
+def make(mode="off", show_die=False, with_chapter=False, think=False, trinity=False, stub=None):
     _n[0] += 1
     slug = lib.create_story(f"Fate engine {_n[0]}", "A courier crosses a frozen kingdom.")
     store = lib.store(slug)
@@ -76,10 +78,15 @@ def make(mode="off", show_die=False, with_chapter=False, think=False):
     if mode != "off" or show_die:
         fate.set_settings(store, mode, show_die)
     cfg = load_config()
-    cfg.generation["trinity_brain"] = False
+    cfg.generation["trinity_brain"] = trinity
+    if trinity:
+        cfg.raw["trinity"] = {}
     cfg.generation["think"] = think
+    # The stub below refuses every call that is not a fate call, so the story must not plan a first chapter of its
+    # own (D-051). The one case that checks the chapter directive supplies its chapter by hand and keeps the outline on.
+    cfg.generation["chapter_outline"] = with_chapter
     eng = Engine(cfg, store)
-    stub = Stub()
+    stub = stub or Stub()
     eng.llm = stub
     return eng, store, stub
 
@@ -295,8 +302,45 @@ def test_skips():
     print("8. RPG saves skip fate with one health row for the save; the opening and a Continue never use it")
 
 
+class TrinityStub(Stub):
+    """Also plays the Director: anything that is not a fate call is a Director plan with nothing to apply."""
+
+    def __init__(self, replies=None):
+        super().__init__(replies)
+        self.director_calls = 0
+
+    def complete(self, messages, **k):
+        if messages[0]["content"].startswith(FATE_SIG):
+            return super().complete(messages, **k)
+        self.director_calls += 1
+        return json.dumps({"beat_plan": "b", "envelope": {"v": 1, "deltas": {}}})
+
+
+def test_trinity():
+    force(5)
+    # Simple Story mode on the quad pipeline: the Logic Agent is skipped, so nothing else plans the turn and fate runs,
+    # and the Writer gets the steering where it would without the quad pipeline.
+    eng, store, stub = make("on", trinity=True, stub=TrinityStub())
+    assert eng.trinity is not None, "the quad pipeline did not come up; this case would prove nothing"
+    play(eng, "I keep walking north.")
+    assert stub.fate_calls == 1 and stub.director_calls == 0, (stub.fate_calls, stub.director_calls)
+    assert len(steering(stub.writer_msgs[0])) == 1, "the Writer was not steered in simple mode on the quad pipeline"
+    assert not health(store), health(store)
+    # An authored event rule forces the Director back on, and the Director already plans the turn as fact:
+    # fate steps aside, with one health row for the save however many turns follow.
+    eng, store, stub = make("on", trinity=True, stub=TrinityStub())
+    store.upsert_entry("events.md", Entry(title="The gate shuts", slug="the-gate-shuts", attrs={},
+                                          body="When the courier reaches the gate, it shuts."))
+    play(eng, "I reach the gate.")
+    play(eng, "I wait.")
+    assert stub.fate_calls == 0 and stub.director_calls >= 1, (stub.fate_calls, stub.director_calls)
+    assert len(health(store)) == 1 and "Director" in health(store)[0]["reason"], health(store)
+    assert not steering(stub.writer_msgs[0]), "fate steered a turn the Director planned"
+    print("9. the quad pipeline in simple mode is steered like any other; with the Director planning, fate steps aside once")
+
+
 for fn in (test_off, test_on_order_and_event, test_preview, test_retry_swipe_undo, test_failures, test_quiet_scene,
-           test_veto_and_repeat, test_skips):
+           test_veto_and_repeat, test_skips, test_trinity):
     fate.derive_roll = REAL_ROLL
     fn()
 fate.derive_roll = REAL_ROLL
