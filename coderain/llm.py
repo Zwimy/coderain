@@ -32,6 +32,18 @@ def is_local(base_url) -> bool:
         return False
 
 
+def needs_fold(base_url, model) -> bool:
+    """Does this model need fold_late_system by default? A llama-family model on a server on this machine, and nothing else.
+
+    Measured, not assumed (D-054): llama3.1:8b through Ollama begins every reply with the word "assistant" when a system
+    message follows the user's turn (6 of 6), gemma3:4b does not (0 of 6). A first version folded for EVERY local model, and
+    a fate-on soak on gemma3:4b then looped in its last third (103 eight-word runs recurring in three or more turns, against
+    9 without the fold and 10 with fate off; 11 turns shared an opening with another, against 0): a note carried in the user
+    turn was copied back. So the fold is for the model that needs it. qwen3, deepseek-r1 and others were not tested for the
+    fault and keep the request as it was; `generation.fold_late_system: true` turns it on for one that shows it."""
+    return is_local(base_url) and "llama" in str(model or "").lower()
+
+
 def fold_late_system(messages: list[dict]) -> list[dict]:
     """Fold a run of system messages at the END of the request into the last user turn.
 
@@ -65,10 +77,10 @@ class LLM:
     def __init__(self, profile: Profile, generation: dict):
         self.profile = profile
         self.gen = generation
-        # `generation.fold_late_system`: true or false forces it; unset means "on for a server on this machine", where the
-        # chat template is the model's own and fragile, and off for a hosted provider, which handles roles itself.
+        # `generation.fold_late_system`: true or false forces it. Unset means "only where it is known to be needed" (see
+        # needs_fold): every other model keeps the request exactly as it always was.
         forced = generation.get("fold_late_system") if isinstance(generation, dict) else None
-        self.fold_late = forced if isinstance(forced, bool) else is_local(profile.base_url)
+        self.fold_late = forced if isinstance(forced, bool) else needs_fold(profile.base_url, profile.model)
         self.client = OpenAI(
             base_url=profile.base_url,
             api_key=profile.api_key,

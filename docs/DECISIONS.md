@@ -2246,12 +2246,16 @@ did). Isolated with a raw client, 6 replies per shape: [system, user] 0 of 6; [s
 system] 6 of 6; the same words folded into the user turn 0 of 6. gemma3:4b was clean in all four. The engine puts the chapter goal, the
 canon card, fate's note and the continuity pass after the player's action on purpose (the end of the prompt binds hardest, D-027), and
 the default chapter outline puts one there from the first turn, so every llama3.1 user on Ollama was exposed. `LLM` now folds a trailing
-run of system messages into the last user turn (after an assistant turn they become a user turn of their own) when the endpoint is on
-this machine; a hosted provider is sent what it always was. `generation: {fold_late_system: true|false}` overrides either way. The
-words stay at the end of the prompt, so the D-027 argument still holds; whether a directive carried in the user turn binds exactly as
-well as one in a system turn was not measured, only that the reply stops starting with the role word. qwen3:4b, deepseek-r1:8b and
-the Qwen3.5 build were not tested for the same fault.
+run of system messages into the last user turn (after an assistant turn they become a user turn of their own), so the words stay at
+the end of the prompt and the template reads an ordinary exchange. **It is narrow on purpose: a llama-family model on a server on this
+machine, and nothing else** (`needs_fold`; `generation: {fold_late_system: true|false}` overrides either way). The first version folded
+for every local model, and the fate-on soak that followed showed why that was wrong: on gemma3:4b, which never had the fault, the
+story looped in its last third when fate's note rode in the user turn (103 eight-word runs recurring in three or more turns against
+9 with the note left as a system message and 10 with fate off; 11 turns sharing their opening with another turn against 0 and 0).
+Same dice, same moves, one run each, so treat the size as indicative; the direction was unmistakable. qwen3:4b, deepseek-r1:8b and
+the Qwen3.5 build were not tested for the llama fault and keep the request as it was. Whether a directive in the user turn binds as well
+as one in a system turn was not measured on llama, only that the reply stops starting with the role word.
 
 **Tests.** `generator_slugs_test.py` (4), `chapter_distinctness_test.py` case 7 (the player rule is in both instructions),
-`llm_late_system_test.py` (4: the fold, the locality check, the client with the override, the tool-calling path). 10 and 15 guard
+`llm_late_system_test.py` (5: the fold, the locality check, the llama-only rule, the client with the override, the tool-calling path). 10 and 19 guard
 mutations caught.
