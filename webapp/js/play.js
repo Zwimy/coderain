@@ -807,6 +807,7 @@ export async function renderPlay(slug) {
 
   $("#aids-btn").addEventListener("click", async () => {          // ST-30 + ST-31
     const aids = await api(`/api/saves/${slug}/aids`);
+    const fate = await api(`/api/saves/${slug}/fate`);          // D-045
     openModal(`
       <h1>Play aids</h1>
       <label>Quick actions <span class="muted">(this story — one per line)</span></label>
@@ -817,6 +818,14 @@ export async function renderPlay(slug) {
       applied to narration &amp; saved)</span></label>
       <div id="rx-rows"></div>
       <button id="rx-add" class="mini">+ rule</button>
+      <label>Fate <span class="muted">(a hidden D20 nudges where the next turn goes)</span></label>
+      <select id="fate-mode" ${fate.blocked ? "disabled" : ""}>
+        <option value="off">Off</option>
+        <option value="preview">Preview: roll and show the idea, send nothing</option>
+        <option value="on">On: steer the story</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="fate-die" ${fate.blocked ? "disabled" : ""}> Show the roll after each turn</label>
+      ${fate.blocked ? `<p class="muted">${esc(fate.blocked)}.</p>` : ""}
       <div class="modal-actions">
         <button id="aids-cancel">Cancel</button>
         <button class="primary" id="aids-save">Save</button>
@@ -834,6 +843,8 @@ export async function renderPlay(slug) {
       rxRows.appendChild(div);
     };
     (aids.regex_rules || []).forEach(addRow);
+    $("#fate-mode").value = fate.mode || "off";
+    $("#fate-die").checked = !!fate.show_die;
     $("#rx-add").addEventListener("click", () => addRow({}));
     $("#aids-cancel").addEventListener("click", closeModal);
     $("#aids-save").addEventListener("click", async () => {
@@ -843,6 +854,13 @@ export async function renderPlay(slug) {
         replace: r.querySelector(".rx-repl").value,
         flags: r.querySelector(".rx-flags").value,
       })).filter(r => r.find.trim());
+      const fm = $("#fate-mode").value, fd = $("#fate-die").checked;
+      if (!fate.blocked && (fm !== fate.mode || fd !== !!fate.show_die)) {
+        const saved = await guard(
+          () => api(`/api/saves/${slug}/fate`, {method: "PUT", body: {mode: fm, show_die: fd}}),
+          "Couldn't save the fate setting");
+        if (saved === undefined) return;       // keep the modal + their edits
+      }
       const ok = await guard(
         () => api(`/api/saves/${slug}/aids`,
                   {method: "PUT", body: {quick_actions: quick, regex_rules: rules}}),

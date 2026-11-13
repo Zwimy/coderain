@@ -2754,6 +2754,9 @@ class SaveLibrary:
         # the branch's own log = everything up to the fork
         _write_event_log(dst_store,
                          [r for r in records if r.get("turn", 0) <= turn_n])
+        # fate's cache (memory/fate.jsonl) was copied with the save: keep only the exchanges the branch has (D-045)
+        from . import fate as fate_mod
+        fate_mod.prune(dst_store, turn_n)
 
         # 4) drop folds/timeline lines that cover post-branch turns, then make
         # the fold counter agree with the scenes that actually remain — a

@@ -1845,3 +1845,61 @@ values change. Only then is the default flipped.
 
 **Tests (added with the gate).** `canon_accessories_test.py` 4 (the schema and prompt ask only when told to, the Scribe passes the
 gate on), `canon_shadow_test.py` 1 (the setting) and `soak_scribe_corpus_test.py` 7 (the slices); 11 of 11 gate guards caught.
+
+## D-045 — Fate: a hidden D20 nudges where the next turn goes (built; the first model run is pending)
+
+**The idea (the owner's).** An add-on for the immediate story progression: the model writes directions for where the scene goes next, a
+D20 picks one (1-2 a setback, 3-10 and 11-18 two neutral developments, 19-20 a stroke of luck), and the Writer is steered by it. "Or
+something similar if you have a better suggestion." His "10 to 18" overlaps the neutral band, so it is read as 11 to 18: 10 / 40 / 40 / 10.
+
+**How it was decided.** Three read-only architects (engine, product and web UI, skeptic and test lead) each proposed an implementation from
+the code, then critiqued each other's proposals over two rounds on 13 contested points. All three accepted the result. The name is
+"fate" because "beat" is already taken (the `## Beats` list in arc.md and `beat_advance`).
+
+**What was built.**
+- `coderain/fate.py`, pure except for one model call. The roll is DERIVED, never stored as state: `Random(seed, turn, action, nonce)`, so
+  the same action at the same point always rolls the same die (retry, swipe, undo-and-redo and a branch agree) and a different action
+  rolls again. The roll is first, then ONE sentence of the rolled kind (setback, natural, surprise or windfall). The two neutral bands
+  are two different prompts ("the natural, expected continuation" and "a surprising but harmless development").
+- The model's reply is `{"stakes": "none" or "some", "direction": "..."}`. Stakes can only switch a setback or a windfall OFF (a quiet
+  scene gets no steering that turn); a missing or invalid label counts as none, and it never widens a band. Pure code checks the rest:
+  one line of at most 200 characters with no fences or list markers; not a restatement of the last three directions (`planner._restates`,
+  asked for once more naming the repeat); a setback that kills or removes the player or any pinned or critical character is vetoed.
+- The sentence is cached in `memory/fate.jsonl` (newest 100), keyed by (turn, action, the narration before it), NOT in `events.jsonl`:
+  it is not state, and that ledger's count-based rollback has a long bug history. Retry and swipe are a cache hit (same tier, same
+  sentence, no model call, new prose). An undo, a transcript edit that shortens the story and a branch prune records past the end.
+- The setting is per save in `meta.json` (`fate: {mode: off|preview|on, show_die}`), like `mode`: a branch copies meta.json whole, while
+  it reverts a `state.json` key to the snapshot's value (two architects verified this in `branch()`). Off by default. Preview rolls, asks
+  the model, records, and sends the Writer nothing; the idea is on the turn's event line. On sends the Writer a hidden note (it never
+  carries the die or the tier) and shows the die on the event line only when `show_die` is set, never the sentence.
+- The note is a system message AFTER the player's action and the canon card and BEFORE the chapter directive, so the chapter goal stays
+  the last thing read (D-027). It says it does not override the chapter goal or continuity and that nothing the story marks important
+  may be killed, crippled or removed.
+- Fate runs only for an action turn (not the opening, not a Continue) and only when nothing else authors the turn: skipped in an RPG
+  save (the RPG check is already a d20) and when the Director plans the turn, logged once per save. It uses the Writer's own client,
+  asks the model not to reason (`/no_think`) and caps the answer at 700 tokens with `retry=0`. Any failure leaves the turn exactly as
+  if fate were off and writes one row to `memory/health.jsonl` (invariant 2).
+- Controls: `GET/PUT /api/saves/{slug}/fate` and a selector (Off, Preview, On) with a "show the roll" checkbox in the existing Play aids
+  modal, disabled with the reason in an RPG story. No new header button.
+
+**Where this differs from the owner's words.** He described four directions with a D20 picking one. The architects settled on rolling
+first and asking for one sentence: a quarter of the output, and the planner already learned that one malformed element must not cost a
+batch. The skeptic moved from roll-first to four sentences and back after the retry/swipe question was settled, with a pre-declared
+fallback: switch back to four if the first-try validity of a roll-first sentence on the target local model is poor over about 50 scenes.
+A "you pick" mode (four cards) stays possible later.
+
+**Deferred on purpose.** A mercy rule (at fixed bands two setbacks in a row are about 1% of turns, so it is nearly dead code until a
+run shows streaks); a reroll control and the tier chip with tap-to-expand (a reroll endpoint without its button would be dead code, so it
+ships with the button, after the owner has read previews); moving odds and stat shifts; coupling with RPG checks; a docked "Story" panel
+and a play.js split (no value for this build).
+
+**Not verified.** The latency and the model-swap cost of one extra call per turn on an 8 GB card; how a small model does at the JSON
+and at four-sentence-free one-liners; whether the Writer enacts or copies the note (the leak scan only logs); the path where the
+Director is built but skipped in simple mode (the code handles it, no test drives it); whether the setting should also be a world's
+default. The first run is a PREVIEW on a temp story, reading `memory/fate.jsonl` and the event lines.
+
+**Tests.** `fate_roll_test.py` (bands, pinned dice values, the key), `fate_validate_test.py` (the checks, the Writer's note, the event
+line), `fate_store_test.py` (cache, prune, settings, branch with and without a snapshot), `fate_engine_test.py` (off costs nothing, the
+message order, preview, retry/swipe/undo, every failure shape, quiet scenes, veto and repeat, RPG and opening/Continue skips, the real
+seed and turn reach the die), `fate_api_test.py` (the routes and the transcript-edit prune). The guard-breaking pass is in the commit
+message.

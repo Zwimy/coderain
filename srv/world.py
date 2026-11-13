@@ -7,6 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
+from coderain import fate
 from coderain.generator import _split_premise_body
 from coderain.generator import _write_premise_md
 from coderain.profiles import entry_from_character
@@ -99,6 +100,28 @@ def put_aids(slug: str, body: dict):
         state["regex_rules"] = rules
         store.set_world_state(state)
     return {"ok": True}
+
+
+@router.get("/api/saves/{slug}/fate")
+def get_fate(slug: str):
+    """Fate (D-045): the save's setting, and why it cannot run here when it cannot."""
+    store = _save_store(slug)
+    return {**fate.settings(store),
+            "blocked": "RPG checks already roll the dice in this story" if store.rpg_enabled() else ""}
+
+
+@router.put("/api/saves/{slug}/fate")
+def put_fate(slug: str, body: dict):
+    """Set fate to off, preview or on, and whether to show the die. Read fresh each turn, so no engine rebuild."""
+    store = _save_store(slug)
+    mode = body.get("mode")
+    show = body.get("show_die")
+    if mode is not None and str(mode).strip().lower() not in fate.MODES:
+        raise HTTPException(400, f"mode must be one of {', '.join(fate.MODES)}")
+    if show is not None and not isinstance(show, bool):
+        raise HTTPException(400, "show_die must be true or false")
+    with _exclusive():                           # don't race a live turn
+        return fate.set_settings(store, mode, show)
 
 
 @router.put("/api/saves/{slug}/world/main")

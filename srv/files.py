@@ -89,6 +89,8 @@ def write_save_file(slug: str, rel: str, body: dict):
             store.snapshot(keep=8, reason="transcript-edit")
             store.clamp_event_log_to_transcript()
             store.trim_folds_to_transcript()
+            from coderain import fate    # a cached fate direction for a removed exchange is stale (D-045)
+            fate.prune(store, len(store.turns()))
     return {"ok": True, "layer": store.layer_of(rel)}
 
 

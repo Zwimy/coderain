@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Iterator
 
+from . import fate as fate_mod
 from . import features
 from . import sidecar as sidecar_mod
 from . import streaming
@@ -273,6 +274,9 @@ class Engine:
             # Frequency only: trinity does its own enablement check.
             self.trinity.lore_due = self.lore_cadence_due
         self._rpg_events: list[str] = []
+        # The player's action while a turn() is generating, else None: fate (D-045) steers an ACTION turn only, never the
+        # opening or a Continue.
+        self._fate_action: str | None = None
         self._swipes = None            # ST-02 alternates for the last narrator turn
         self._pre_turn_rpg = None
         # Md mutations aren't covered by the state.json snapshot, so undo/retry
@@ -625,9 +629,11 @@ class Engine:
         history = self.history_window(drop_last=True)
         messages = self._messages(history, player_input)
         stored = False
+        self._fate_action = player_input
         try:
             stored = yield from self._generate_and_store(messages, on_stage)
         finally:
+            self._fate_action = None
             # If we didn't store a narrator turn, the player's action must not stay
             # in the transcript with no response. This runs on EVERY exit including
             # GeneratorExit — the client Stop / a disconnect closes this generator
@@ -802,6 +808,7 @@ class Engine:
             return False
         self.restore_pre_turn_rpg()
         self.store.trim_folds_to_transcript()
+        fate_mod.prune(self.store, len(self.store.turns()))     # a retry or swipe keeps its record; an undo does not
         return True
 
     def rollback_for_retry(self) -> tuple[bool, str | None]:
@@ -991,13 +998,19 @@ class Engine:
         card = self._canon_card(messages)
         if card:
             messages = [*messages, {"role": "system", "content": card}]
+        chapter = (_chapter_directive(self.store)
+                   if self.cfg.generation.get("chapter_outline", True) else "")
+        # Fate (D-045, off unless the save turns it on): one hidden steering line for an action turn. BEFORE the
+        # chapter directive, so the chapter goal stays the last thing read (as the card, D-027). A failure is logged
+        # and the turn runs exactly as if fate were off.
+        steer = self._fate_stage(messages, on_stage, rpg_on, card, chapter)
+        if steer:
+            messages = [*messages, {"role": "system", "content": steer}]
         # The active chapter, restated where it binds. Costs no extra call: the
         # plan is already on disk. Placed AFTER any continuity directive so the
         # chapter goal is the last thing read before writing.
-        if self.cfg.generation.get("chapter_outline", True):
-            chapter = _chapter_directive(self.store)
-            if chapter:
-                messages = [*messages, {"role": "system", "content": chapter}]
+        if chapter:
+            messages = [*messages, {"role": "system", "content": chapter}]
         if self.trinity is not None:
             # Quad pipeline: the Logic Agent's envelope is validated and RESOLVED
             # before the Narrator writes (so prose narrates the actual outcome);
@@ -1287,6 +1300,67 @@ class Engine:
         exchange = sum(1 for t in self.store.turns()
                        if t.get("role") == "narrator") + 1
         return exchange % every == 0
+
+    # --- fate (D-045) --------------------------------------------------------
+    _FATE_SKIPPED: set = set()      # saves already told why fate is skipped, so health.jsonl is not flooded
+
+    def _fate_stage(self, messages, on_stage, rpg_on: bool, card: str, chapter: str) -> str:
+        """The hidden steering message for this action turn, or "". Never raises, never delays a turn on failure."""
+        action = self._fate_action
+        if action is None:
+            return ""                                   # the opening and a Continue have no action to roll for
+        cfg = fate_mod.settings(self.store)
+        if cfg["mode"] == "off":
+            return ""
+        # One authority per turn: an RPG check is already a d20, and a Director's plan is narrated "as fact".
+        simple = (not rpg_on and self.store.mode() == "simple" and not self.store.event_rules())
+        if rpg_on or (self.trinity is not None and not simple):
+            key = str(self.store.dir)
+            if key not in Engine._FATE_SKIPPED:
+                Engine._FATE_SKIPPED.add(key)
+                self.store.log_degraded(
+                    "fate", "skipped: " + ("RPG checks already roll" if rpg_on
+                                           else "the Director already plans each turn"))
+            return ""
+        try:
+            rec, why = fate_mod.run_stage(
+                self.store, self.llm, messages, action, seed=self._fate_seed(), card=card, chapter=chapter,
+                protected=self._fate_protected(), no_think=not self.cfg.generation.get("think", False),
+                on_stage=on_stage)
+        except Exception as e:  # noqa: BLE001 - never fatal
+            rec, why = None, f"{type(e).__name__}: {e}"
+        if rec is None:
+            if on_stage:
+                on_stage(f"Fate FAILED: {why} - continuing without it")
+            self.store.log_degraded("fate", str(why)[:280])
+            return ""
+        line = fate_mod.event_line(rec, cfg["mode"], cfg["show_die"])
+        if line:
+            self._rpg_events.append(line)
+        return fate_mod.directive(rec["text"]) if cfg["mode"] == "on" and rec.get("text") else ""
+
+    def _fate_seed(self):
+        ws = self.store.world_state()
+        rpg = ws.get("rpg") if isinstance(ws.get("rpg"), dict) else {}
+        try:
+            return int(rpg.get("seed", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _fate_protected(self) -> list[str]:
+        """Names a setback may not kill or remove: the player and every pinned or critical character."""
+        names: set[str] = set()
+        for rel in ("player.md", "characters.md"):
+            for e in self.store.entries(rel):
+                if rel == "player.md" or e.pinned() or e.weight() == "critical":
+                    for label in (e.title, *e.aliases):
+                        label = str(label).strip().lower()
+                        if label:
+                            names.add(label)
+                            first = label.split()[0]
+                            if len(first) >= 3:
+                                names.add(first)
+        return sorted(names)
 
     def _lore_check(self, messages, on_stage=None) -> str:
         """Standalone continuity pass — the lore-keeper WITHOUT the quad pipeline.
