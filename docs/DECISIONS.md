@@ -1594,3 +1594,49 @@ to a folded-away slug still points nowhere (D-030). The app has no button for it
 **Tests.** `dedupe_test.py` 9 and 10 (clusters, the player, a shared first name, a same-name pair left to the plan, every refusal
 writes nothing, the registry option, the backup restores the original byte for byte); 13 more guard mutations are caught and one is
 equivalent (clustering is undirected, so the direction of the word-subset test does not matter).
+
+## D-039 — A character's own name beats another character's alias when both match exactly (and why two "missed" looks were not both the reader's)
+
+**Question.** D-036 left two of the seven looks a story had established unheld by either reader model. Was the reader missing them,
+or was something after the reader dropping them?
+
+**Method.** The Scribe is deterministic (temperature 0, fixed seed), so its raw replies are a function of the passage and the
+roster. The 161 narrator turns of the fixed narration-first transcript were read once through llama3.1:8b and every raw reply
+recorded (31 minutes of GPU). The replies are then fed back through the real validator with a stub in place of the model, which takes
+seconds and no GPU, so a rule can be changed and scored on the same replies. The replay reproduces the live read exactly (5 looks
+held, 5 agree with the story, 29 identity records), which is the check that the method can be trusted.
+
+**Found.**
+1. **One of the two was the scorer's mistake.** The scorer counted a sentence that names a character and then describes a
+   creature's "scales shimmering with an unnatural silver light, its eyes glowing" as that character's silver eyes. The story had
+   established 6 looks, not 7, and the reader held 5 of them.
+2. **The other was a real defect.** One character's registry entry listed another character's slug as an alias
+   (`first-last`). `norm()` reads that as the name "first last", so the exact name matched two entities, `resolve_loose` called it
+   ambiguous and returned nothing, and every claim about that character was refused as `unknown_entity`: 28 identity claims (eyes 22,
+   build 5, marks 1), among them the colour the story stated plainly ("surprisingly sharp blue eyes", proposed correctly and
+   repeatedly by the reader). Nothing about the reader's quality was involved.
+
+**Decision.** When an exact name matches several entities and exactly one of them has it as its OWN name, that one wins. Two entities
+with the same own name, or two that only share an alias, stay ambiguous: that is still a guess and a wrong merge is worse than a
+duplicate. The fix is on the reading side, so it also covers saves that already hold such an alias. On the replay: identity records
+29 to 57, and that character now has facts. His eyes lock on a bare "dark" said 80 turns before the first real colour, so the score
+reads 6 held, 5 agree, 1 differs (a bare shade is compatible with the story's blue; the scorer cannot say so).
+
+**Checked and NOT changed, on evidence.**
+- **A bare shade locking a slot before the colour arrives.** On the full-read copy of the real story, 2 of 43 held hair and eye
+  values are a bare shade and none of the held-back changes on any slot carried a real colour. One slot in one soak story is not
+  enough to change first write wins; the mechanism exists if it ever is (a higher authority replaces a lower one, so a bare shade
+  could be filed as `inferred`).
+- **"Her eyes are an unnerving shade of grey" is refused** (`value_not_on_slot`) because a free adjective sits between "a" and
+  "shade", and so is anything with a trailing dash clause. 13 of the 14 distinct refused eye claims that carry a colour in this
+  transcript have that wording, and 0 looks were lost by it here (the colour was captured from another sentence). Left as a candidate
+  for a transcript where it costs something.
+
+**Not done.** The fold's alias union (`coderain/memory.py` `_union_aliases`) sees only the entry it is merging, so it cannot refuse
+an alias that equals ANOTHER entry's title, and the creation path takes aliases unfiltered. Preventing the collision at write time
+is a fold change (invariant 6) and wants its own review. On the real-story copy 1 alias equals another character's own name; the
+soak saves built after D-029's fold fixes hold none.
+
+**Tests.** `canon_alias_collision_test.py` (the own name wins, a claim about that character is committed to them, two own names and
+two shared aliases stay ambiguous, ordinary resolution unchanged); 4 of 5 guard mutations caught and the fifth is equivalent (two own
+names leave two candidates either way).

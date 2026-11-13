@@ -314,6 +314,16 @@ def resolve_loose(canon: Canon, name: str) -> str | None:
         return None
     labels = {eid: [e["name"], *e["aliases"]] for eid, e in canon.entities.items()}
     exact = {eid for eid, ls in labels.items() if any(norm(x) == full for x in ls)}
+    if len(exact) > 1:
+        # One character's OWN name beats another character's ALIAS. norm() turns the slug
+        # "tamsin-reeve" into "tamsin reeve", so a fold that wrote one character's slug as
+        # another's alias made the true name ambiguous, and every claim about that person
+        # was refused as an unknown name (28 of them in one soak, 0 of them kept). Two
+        # entities that share the same own name, or two that only share an alias, stay
+        # ambiguous: that is still a guess, and a wrong merge is worse than a duplicate.
+        own = {eid for eid in exact if norm(canon.entities[eid]["name"]) == full}
+        if len(own) == 1:
+            exact = own
     if exact:
         return next(iter(exact)) if len(exact) == 1 else None
     key = set(full.split()) - _STOP
