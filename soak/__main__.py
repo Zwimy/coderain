@@ -162,11 +162,54 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--min-interval", type=float, default=None,
                     help="hosted only: seconds between requests (default 3.2 for "
                          "openrouter ':free' models, else 0)")
+    pl = sub.add_parser(
+        "play", help="a scripted player plays an INVENTED story through the real engine (D-046)",
+        description="Builds a temp home (never the repo), plays N turns and writes turns.jsonl and summary.json. "
+                    "--stub needs no model; --model uses a local Ollama that must already be running.")
+    pl.add_argument("--out", type=Path, required=True, help="rows and summary (the story's own text): keep outside the repo")
+    pl.add_argument("--turns", type=int, default=30)
+    pl.add_argument("--seed", type=int, default=5)
+    pl.add_argument("--stub", action="store_true", help="an offline writer: no model, no network")
+    pl.add_argument("--model", default=None, help="a local Ollama model (omit with --stub)")
+    pl.add_argument("--host", default="http://localhost:11434", help="must be this machine")
+    pl.add_argument("--fate", choices=["off", "preview", "on"], default="off", help="the save's fate setting (D-045)")
+    pl.add_argument("--sheets", choices=["full", "role"], default="full")
+    pl.add_argument("--canon", choices=["off", "card"], default="off")
+    pl.add_argument("--window", type=int, default=4, help="verbatim turns kept (memory pressure)")
+    pl.add_argument("--budget", type=int, default=5000, help="context budget in tokens (memory pressure)")
+    pl.add_argument("--probe-every", type=int, default=8)
+    ca = sub.add_parser(
+        "creation-audit", help="lint a world's files with no model (shared names, dangling links, thin sheets ...)",
+        description="Reads Markdown only; never opens a store. Use --default for the shipped scenario.")
+    ca.add_argument("dir", nargs="?", type=Path, default=None, help="a scenario or save folder")
+    ca.add_argument("--default", action="store_true", help="audit the shipped default scenario")
+    ca.add_argument("--out", type=Path, default=None, help="also write the findings as JSON")
+    ca.add_argument("--strict", action="store_true", help="exit 1 when anything is found")
     args = ap.parse_args(argv)
     if args.cmd == "scribe":
         return _scribe(args)
     if args.cmd == "gate":
         return _gate(args)
+    if args.cmd == "play":
+        if args.turns < 1:
+            ap.error("--turns must be at least 1")
+        try:
+            home = isolated_home("soakplay-")           # before anything imports coderain
+        except UnsafeHome as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 3
+        from soak.play import run_play
+        return run_play(args, home)
+    if args.cmd == "creation-audit":
+        if not args.default and args.dir is None:
+            ap.error("give a folder, or --default")
+        try:
+            isolated_home("creationaudit-")             # importing coderain must not touch the real home
+        except UnsafeHome as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 3
+        from soak.creation_audit import run_creation_audit
+        return run_creation_audit(args)
     if args.cleanup and not args.out:
         ap.error("--cleanup would delete the report; pass --out as well")
 

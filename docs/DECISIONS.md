@@ -1945,3 +1945,63 @@ cp1252, which only the full suite found.
 **Tests.** `run_tests_skip_test.py` (SKIP lines are found and a line that only mentions the word is not, a failing suite and a timeout,
 a cp1252 console, and the source shape of the summary); 10 of 10 guard mutations caught after one gap was closed (main() not calling
 the UTF-8 setup was not asserted).
+
+## D-048 — A scripted player lives in the repo (`python -m soak play`)
+
+**Why.** Every comparison that needs a story played for many turns (the canon card on or off, fate on or off, one model against
+another) needs the same player making the same moves. The driver the consistency soaks used lived only in a session scratch folder, so
+no on/off comparison of fate could be run or reproduced from the repo. All three architects named this as the missing prerequisite.
+
+**What it is.** `soak/play.py` plays an invented story (a tidal ferry town, six characters with a stated hair and eye colour) through
+the real engine in a temp home: `Engine.turn` then `maybe_fold`, exactly the path the web app takes, with the memory squeezed on
+purpose (a few verbatim turns, a small budget) so that older facts can only come from memory. A seeded `ScriptedPlayer` makes the same
+moves for the same seed, with a probe every N turns where it studies one character's hair or eyes and the colour the narration states
+is scored against the sheet (held, drift or none). It writes one row per turn and a summary (probe verdicts, fate tiers, seconds,
+model calls, health rows) to `--out`; the rows hold the invented story's own text, so they belong outside the repo.
+- `--stub` is an offline writer (deterministic prose that states the sheet's colour when a look is studied; as a fate stage it answers
+  with one of twelve distinct directions, because a stub that repeats itself is refused by fate's own repeat check). The tests and a
+  dry run use it: no model, no network.
+- `--model NAME` uses a local Ollama. It must already be running (this never starts it) and any host that is not this machine is
+  refused. `--fate off|preview|on` sets the save's fate setting, `--canon card` turns the canon shadow and card on (a model is
+  needed for the reader), `--sheets role` writes no looks in the sheets.
+- The save's dice seed is pinned to `--seed`. A new story draws a random one, so without this the same player seed still rolled
+  different dice, which an on/off comparison of fate cannot have (found by the test that two runs of one seed must give
+  identical fate rows; the first draft also failed one run in several because the stub chose its directions by hashing the prompt).
+- The home is always a temp one (`isolated_home` before coderain is imported, `assert_isolated` before anything runs); a source of
+  live data is never opened.
+
+**Not done.** The scoring of a story against itself (what the first soaks called `soak_truth`) and the repetition and length measures
+(look sentences per turn, 8-gram overlap) are still only in the session notes; this driver gives the same moves and the raw rows to
+compute them from. The first model runs with it (fate off against preview against on; the card on against off) need the GPU.
+
+**Tests.** `soak_play_test.py`: the same seed gives the same story and another does not, probes land on the right turns and are held
+on the offline writer, fate off asks the model nothing, preview asks for every turn and steers nothing, on steers, the probe scoring,
+and the refusals (a remote host, the card with no model, no turns). Guard mutations are listed with the next entry.
+
+## D-049 — A no-model audit of a world's files (`python -m soak creation-audit`)
+
+**Why.** The owner wants chapter, scenario, world and character generation to be "as seamless as possible". The consistency work began
+by measuring; this does the same first step for creation. The skeptic's point was that most creation defects can be found with no
+model at all, by reading what is on disk.
+
+**What it checks** (`soak/creation_audit.py`, Markdown only, it never opens a store, so it is safe on a copy of a save and on the
+shipped scenario): two entries in one registry answering to the same name or alias (the D-039 class that cost 28 refused claims in one
+soak and 1,452 in the first); an alias that is another entry's own name or slug; a `[[slug]]` that no entry has; a sheet shorter than
+a floor (untuned: 20 words for a character, 12 for a place or faction, 5 for an item); four or more entries in a registry with the same
+importance; two outline chapters that share a run of content words (`planner._restates`); a character whose sheet states no hair or eye
+colour; an empty registry. `--default` audits the shipped scenario, `--strict` exits 1 on any finding, `--out` writes JSON.
+
+**First result, on the shipped default scenario:** 4 characters, 3 places, 3 factions, 2 items, 2 threads, 3 canon events, 1 event
+rule, and one class of finding: none of the four characters states a hair or eye colour, so the canon card has nothing to hold for them
+until the story first states one. The first version of this check passed three of the four sheets because the word "hair" or "eye"
+appeared ("hair wet to the scalp", "a face the eye slides off of"); reading the sheets showed that was the wrong test, and it now
+needs a colour word beside the noun. The Tall Man and the Arbiter are uncanny on purpose (the Arbiter is never the same twice), so a
+finding there is by design and the report says a shapeshifter may be that on purpose; Wren and Corin should have looks, which is the
+next change. Nothing was found for the other classes, which says the shipped world is clean, not that generated worlds are: the
+audit's real use is on a save a model has built.
+
+**Tests.** `creation_audit_test.py` builds a world with each defect and requires each to be found (and a real link and a
+kind-prefixed link not), a clean world to report nothing and never be written to, and the CLI (findings, `--strict`, `--default`,
+`--out`, a missing folder, no argument), and the look check on sheets that do and do not state a colour. 24 guard mutations across
+this and the scripted player were caught after two gaps were closed (the default-scenario check only looked for a word that the
+findings also contain, and nothing pinned that the dice seed reaches the player's save).
