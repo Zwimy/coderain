@@ -878,7 +878,7 @@ class Summarizer:
             # fold is making anyway, so it's rate-limited to fold cadence rather than
             # attempted every turn. Idempotent after the first success.
             if self.planner is not None:
-                if self.planner.enabled() and not self.planner.chapters():
+                if self.planner.needs_seed():
                     note("Planning chapters")
                 events += self.planner.ensure_seeded()
             chunk = turns[folded:folded + self.medium_size]

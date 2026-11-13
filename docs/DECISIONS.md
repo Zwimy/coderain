@@ -2032,3 +2032,42 @@ most three narrator turns).
 
 **Tests.** `assist_context_test.py` (the roster's order, count and length bounds and no repeated title, the context's sections and
 cuts and omissions, and the route on both slugs with a stub model that captures what was sent); 15 guard mutations caught.
+
+## D-051 — A new story gets its first chapter before the opening, not at the first fold
+
+**What was wrong.** The chapter outline was seeded by the first scene fold, which runs about twelve turns into a story
+(`medium_fold_after`). The opening scene and the first stretch of play were written with no chapter goal at all: the chapter
+directive that is restated after the player's action did not exist yet, so the writer drifted wherever it liked before the steering
+began. The planner's own instruction already says "if there are no chapters yet, plan chapter 1: where play begins", so only the
+trigger was late.
+
+**Decision.** `Engine._produce` calls `_plan_first_chapter` before anything else is built. When the outline is on, the premise is long
+enough, no chapter exists and the transcript holds at most three turns (`START_PLAN_TURNS`: the opening, a player action, a
+narrator reply), `ChapterPlanner.ensure_first` plans ONE chapter with the ordinary payload, retries and restatement checks and writes
+it as `ch-1`, status `active`, with the attribute `origin: start`. The reader sees "Planning chapter 1". The writer's messages for the
+opening then carry the chapter directive, still the last thing read. An authored `## Opening` is used verbatim without a model call,
+so for those stories the chapter is planned on the first player turn instead.
+
+The first fold finds a lone start chapter (`needs_seed`: no chapters, or exactly one that still carries `origin: start`) and tops the
+outline up to the horizon, one call per chapter as before; chapter 1 is kept as it was, and its marker is removed once it has company.
+`replace_all` (the Plan panel) writes chapters without the marker, and a second chapter added by hand also stops the top-up, so an
+outline the author has touched is never extended behind their back.
+
+A planning failure never costs the turn: the story starts without a chapter exactly as before, one `chapter-plan` health row says
+why, and the first fold plans the whole outline. A story already under way (more than three turns, for example one that had the outline
+switched off) is left to the fold, as before. The cost is one model call (two to four when the reply is malformed) before the first
+scene of a new story.
+
+**Not done / not measured.** The first chapter is planned from the premise, the world and the author's character traits alone, because
+nothing has happened yet; whether a model writes a usable chapter 1 from that on every local model is not measured. The opening's
+system prompt is assembled before `_produce` runs, so the "Story structure" section is absent from the opening itself and only the
+chapter directive steers it; from the next turn both are present. A hand-edited lone chapter is not topped up at the first fold; the
+planner tops the plan up when that chapter completes, as it always did.
+
+**Tests.** `chapter_start_test.py` (one call, one active start chapter numbered `ch-1`; nothing planned with the outline off, without a
+premise or over an existing chapter; a bad reply leaves one health row and the fold still plans; the top-up keeps chapter 1 and its
+text, forgets the marker and is idempotent; a hand-edited lone chapter and a hand-added second chapter are left alone; the engine plans
+once, announces it once, puts the directive last, leaves old stories to the fold, survives a planner exception; the first fold tops
+up and announces it). 23 guard mutations caught after three gaps were closed (the slug, a hand-added second chapter, and the note
+appearing when nothing would be planned). `validator_test.py` case 9 counts every call on one shared stub and now switches the outline
+off, with the reason written in, because the new call would otherwise be counted as a Director call.

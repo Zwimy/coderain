@@ -138,6 +138,10 @@ print("8) apply_envelope logs clean env + drops loudly; undo restores the world"
 # ---- 9) quad re-ask: rejected deltas go back to the Director once ----
 cfgq = load_config()
 cfgq.generation["trinity_brain"] = True
+# This case counts every call the ONE stub receives (the Director must be asked exactly twice). A new story
+# now plans its first chapter before the opening (D-051), and that call would land on the same stub and be
+# counted as a Director call. Chapters are not what is under test here, so the outline is off.
+cfgq.generation["chapter_outline"] = False
 cfgq.raw["trinity"] = {}
 storeq = lib.store(lib.create_story("Fix", "A correction."))
 stq = storeq.rpg_state(); stq["enabled"] = True   # rpg mode -> director engages

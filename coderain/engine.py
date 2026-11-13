@@ -963,6 +963,7 @@ class Engine:
         rpg_on = self.store.rpg_enabled()
         sidecar = None
         trinity_events = None
+        self._plan_first_chapter(on_stage)
         if self.trinity is None:
             # Single-brain: the one model IS the logic agent, so it gets the
             # event rules (in quad mode only the Director sees them). It also gets
@@ -1300,6 +1301,27 @@ class Engine:
         exchange = sum(1 for t in self.store.turns()
                        if t.get("role") == "narrator") + 1
         return exchange % every == 0
+
+    # --- chapter 1 at the start of a story (D-051) ---------------------------
+    START_PLAN_TURNS = 3     # only a story this young is planned from its first turn; an older one waits for the fold
+
+    def _plan_first_chapter(self, on_stage=None) -> None:
+        """Give a brand-new story its first chapter before the first scene is written. Never raises.
+
+        The outline used to appear at the first fold, so the opening and the first ten turns had no
+        chapter goal. A story already under way (a transcript longer than START_PLAN_TURNS, for example
+        one that had the outline turned off) is left to the fold, as before."""
+        planner = getattr(self, "planner", None)
+        if planner is None or not planner.needs_start():
+            return
+        if len(self.store.turns()) > self.START_PLAN_TURNS:
+            return
+        if on_stage:
+            on_stage("Planning chapter 1")
+        try:
+            planner.ensure_first()
+        except Exception as e:  # noqa: BLE001 - a turn never dies from a planning failure
+            self.store.log_degraded("chapter-plan", f"first chapter failed: {type(e).__name__}: {e}"[:280])
 
     # --- fate (D-045) --------------------------------------------------------
     _FATE_SKIPPED: set = set()      # saves already told why fate is skipped, so health.jsonl is not flooded

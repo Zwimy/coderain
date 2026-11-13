@@ -24,6 +24,7 @@ from .memory import Entry, MemoryStore
 
 OUTLINE = "memory/outline.md"
 DEFAULT_HORIZON = 4      # active + ~3 planned ahead
+START_ORIGIN = "start"   # attrs["origin"] on the one chapter planned at the start of a story (D-051)
 
 # SEED_INSTRUCTION (ask for all N chapters in one reply) is gone. Every path now
 # plans ONE chapter per call so each is built on the ones before it, and so a
@@ -215,12 +216,70 @@ class ChapterPlanner:
         return len(self.store.read("premise.md").strip()) > 20
 
     # --- lifecycle ----------------------------------------------------------
+    def needs_start(self) -> bool:
+        """True when a new story has no chapter yet and could be given its first one."""
+        return self._enabled and not self.chapters() and self._has_premise()
+
+    def _only_start_chapter(self) -> bool:
+        """The outline is exactly the one chapter `ensure_first` wrote and nobody has touched it since
+        (D-051). A hand edit goes through `replace_all`, which writes no `origin`, so an edited outline
+        is never topped up behind the author's back."""
+        rows = self.chapters()
+        return len(rows) == 1 and rows[0].attrs.get("origin") == START_ORIGIN
+
+    def needs_seed(self) -> bool:
+        """True when the first fold should still plan chapters: none exist, or only the start chapter."""
+        if not self._enabled or not self._has_premise():
+            return False
+        return not self.chapters() or self._only_start_chapter()
+
+    def ensure_first(self) -> list[str]:
+        """Plan chapter 1 at the START of a story, before the opening is written (D-051).
+
+        The outline used to wait for the first fold, about ten turns in, so the opening scene and the
+        first stretch of the story were written with no chapter goal at all, and the writer drifted
+        wherever it liked before the steering began. One call, one chapter, the same payload and the
+        same retries as every other chapter. A failure is logged and the story starts without a plan,
+        exactly as before; the first fold then plans the whole outline."""
+        if not self.needs_start():
+            return []
+        obj = self._plan_one(NEXT_INSTRUCTION, mark=0, avoid=[])
+        if obj is None:
+            self.store.log_degraded(
+                "chapter-plan", "the model did not return a usable first chapter; the story starts without "
+                                "one and the first fold plans the outline")
+            return []
+        entry = self._write_chapter(1, obj.get("title"), obj.get("goal"), "active")
+        entry.attrs["origin"] = START_ORIGIN
+        self.store.upsert_entry(OUTLINE, entry)
+        return [f"chapter planned: {entry.title}"]
+
     def ensure_seeded(self) -> list[str]:
         """Seed the outline once, lazily. Idempotent: a no-op after the first
-        success, and a graceful no-op when disabled or there's no premise yet."""
-        if not self._enabled or self.chapters() or not self._has_premise():
+        success, and a graceful no-op when disabled or there's no premise yet.
+
+        Also tops an outline that is ONLY the start chapter up to the horizon (D-051): that one chapter
+        was planned alone at the start of the story, so the rest of the plan still has to be made."""
+        if not self.needs_seed():
             return []
+        if self.chapters():
+            return self._top_up()
         return self.seed()
+
+    def _top_up(self) -> list[str]:
+        before = len(self.chapters())
+        events = self._reconcile()
+        made = len(self.chapters()) - before
+        if made:
+            events.append(f"outline: planned {made} chapter(s)")
+        # Once it has company the chapter is an ordinary one: forget where it came from, so a later
+        # fold that finds a short outline (a hand-deleted chapter) is not mistaken for a start.
+        rows = self.chapters()
+        if len(rows) > 1:
+            for c in rows:
+                if c.attrs.pop("origin", None) is not None:
+                    self.store.upsert_entry(OUTLINE, c)
+        return events
 
     def seed(self, force: bool = False) -> list[str]:
         """Fill the outline out to the horizon, ONE CHAPTER PER CALL.
