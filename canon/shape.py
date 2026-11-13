@@ -77,6 +77,11 @@ the a an of and or his her their its my your is are was were be been being very 
 still now just quite rather colour color colours colors shade shades hue tint
 """.split())
 _CONNECT = frozenset("is are was were be been looked looks seemed seems".split())
+# "a startling SHADE of grey": the noun that carries a colour. One free adjective between the
+# article and it ("startling", "unnerving", "unusual") is how narration says it, and the
+# vocabulary cannot list every one (D-042).
+_SHADE_NOUN = frozenset("shade shades hue hues tint tints colour color".split())
+_ARTICLE = frozenset("a an the".split())
 _COMPARE = frozenset("like as than but though yet".split())
 
 _STYLE = {                       # nouns that are a hair style by themselves
@@ -231,6 +236,13 @@ def _same_word(a: str, b: str) -> bool:
 
 
 # --- who does a descriptor belong to ------------------------------------------------
+def _free_before_shade(toks: list[str], j: int) -> bool:
+    """Is the word at `j` the one free adjective in "an unnerving shade of grey"?"""
+    return (j > 0 and j + 1 < len(toks) and toks[j - 1] in _ARTICLE and toks[j + 1] in _SHADE_NOUN
+            and toks[j] not in _SKIP and toks[j] not in _CONNECT and toks[j] not in (_SOFT, _HARD)
+            and not _descriptor(toks[j]))
+
+
 def _owners(toks: list[str], nouns: dict[str, str], desc) -> dict[int, int]:
     """token index -> index of the noun it describes, for descriptor tokens only.
 
@@ -255,7 +267,7 @@ def _owners(toks: list[str], nouns: dict[str, str], desc) -> dict[int, int]:
     for a in found:                                   # after the noun: "eyes, green like"
         j = a + 1
         while j < len(toks) and (toks[j] in _CONNECT or toks[j] == _SOFT
-                                 or toks[j] in _SKIP):
+                                 or toks[j] in _SKIP or _free_before_shade(toks, j)):
             j += 1
         run = []
         while j < len(toks) and (desc(toks[j]) or toks[j] in _SKIP or toks[j] == _SOFT):

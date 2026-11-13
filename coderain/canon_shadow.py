@@ -37,7 +37,9 @@ Off unless config.yaml says so:
 
     canon:
       shadow: true
-      model: gemma3:4b            # any local Ollama model
+      model: gemma3:4b            # any local Ollama model. llama3.1:8b reads more precisely (D-036, D-041)
+                                  # and fits an 8 GB card only when nothing else is loaded; a reasoning model
+                                  # such as Qwen3.5 works (think: false below) but was not more precise
       backfill: 200               # earlier narrator turns to read the first time, or "all"
       inject: preview             # off (default) | preview | true. Needs shadow: true
       card_chars: 2400            # the most the card may add to a prompt (about 600 tokens)

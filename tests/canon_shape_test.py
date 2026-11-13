@@ -115,6 +115,30 @@ def test_value_after_the_noun_is_kept_and_does_not_leak():
           "are kept; 'hair, pale skin' gives the pale to the skin")
 
 
+def test_a_free_adjective_before_a_shade_noun_is_part_of_the_phrase():
+    """13. D-042: "Her eyes are an unnerving shade of grey" was refused (value_not_on_slot) because the
+    free adjective between "an" and "shade" is not on any list. Both readers on a 161-turn transcript
+    proposed the clean value for it and 13 and 8 distinct claims were refused; it is how narration says it."""
+    check([
+        (EYES, "grey", "Her eyes are an unnerving shade of grey", None),
+        (EYES, "grey", "his eyes, a startling shade of grey, held hers", None),
+        (EYES, "grey-blue", "Her eyes are a startling shade of grey-blue", None),
+        (HAIR, "auburn", "Her hair is a surprising shade of auburn", None),
+        (EYES, "green", "Odile's eyes were an unusual colour, a deep green", None),          # unchanged
+        (EYES, "pale grey", "Her eyes are a pale shade of grey", None),                       # a modifier stays part of the value
+        (EYES, "pale", "Her eyes are a pale shade of grey", None),
+        # what must still be refused
+        (EYES, "grey", "Her eyes are startling shade of grey", ATTACH),                       # an article is required
+        (EYES, "grey", "Her eyes are a startling mess of grey", ATTACH),                      # only a shade noun counts
+        (EYES, "pale grey", "Her eyes are a strange, very pale grey", ATTACH),                # the free word needs a shade noun after it
+        (EYES, "grey", "Her eyes widened at an unusual shade of grey on the wall", ATTACH),   # a verb ends the phrase
+        (EYES, "unnerving", "Her eyes are an unnerving shade of grey", ATTACH),              # the free word is not the value
+        (EYES, "grey", "The harbour was an unusual shade of grey", NOUN),                     # no eyes in the quote
+    ])
+    print("13. 'an unnerving shade of grey' is the eyes' grey; no article, no shade noun, a verb in between, "
+          "or the adjective as the value is still refused")
+
+
 def test_a_hair_style_takes_one_unlisted_word():
     check([
         (HAIR, "tactical crop", "judging by the tactical crop of her hair", None),

@@ -1697,9 +1697,12 @@ this entry adds.
 | held-back changes (contradictions) | 21 | 52 |
 | extra values with no truth to check | 2 | 4 |
 
-Qwen proposes fewer claims and breaks the format less, but files more identity facts and more of them are wrong or weak: a hair
-style ("elaborate braids") and a bare "dark" as a character's first values, a man's build ("stout man") on a woman, a braid on a
-second character. Every one of the 3 "differs" is the same mechanism, below.
+Qwen proposes fewer claims and breaks the format less, but files more identity facts (126 against 57), and the extras include weak
+values: a hair style ("elaborate braids") and a bare "dark" as a character's first values. Every one of the 3 "differs" is the
+same mechanism, below. (Two of its other extra values first looked like misattributions, a "stout man" build and a braid on a
+character the story mostly writes as a woman. The quotes show the narration itself said both, "a stout man named ..." and
+"intricate braid that falls down her back": the reader recorded the story's own inconsistency correctly, and the Canon panel is
+where an author would see it. An earlier version of this entry, and its commit message, called them wrong.)
 
 **The mechanism.** Identity is first write wins. A reader that files a shade ("dark eyes") or a style ("a tight braid") before the
 sentence that states the colour locks the slot, and the colour is then held back as a contradiction every time the story says it
@@ -1732,3 +1735,33 @@ extra values) and gemma3:4b the default.
 **Tests.** `canon_colourless_values_test.py` (8 cases: filed as inferred, replaced by the first colour with no contradiction, a held
 colour not replaced, one shade not replacing another, a restatement, hair and a style, build and marks untouched, the author still
 outranks); 10 of 10 guard mutations caught.
+
+## D-042 — "An unnerving shade of grey" is the eyes' grey
+
+**Question.** D-039 left it open: the shape rule refused "Her eyes are an unnerving shade of grey" (`value_not_on_slot`) because the
+free adjective between "an" and "shade" is on no list. Does that cost anything?
+
+**Measured** on the two recordings of the same 161-turn transcript (replayed offline, no model): the clean value ("grey") was
+proposed by both readers and refused for this wording in 13 distinct claims (llama3.1:8b) and 8 (Qwen3.5 9B), every one of the 8
+refused eye colours in the Qwen read. It lost no look on this transcript, because each colour was captured from another sentence,
+but it delayed some: one character's eye colour was first captured at turn 7 instead of turn 3, and a delayed first capture is
+exactly when a wrong first write (D-041) gets in. On a story that states a colour only this way it would lose the look.
+
+**Decision.** In the run after a noun, ONE free word is part of the phrase when it sits between an article (a, an, the) and a shade
+noun (shade, hue, tint, colour, color): "an unnerving shade of grey", "a surprising shade of auburn". Nothing else is widened: a
+colour modifier ("a pale shade of grey") stays part of the value, the article and the shade noun are both required, a verb ends the
+phrase, and the adjective is never the value.
+
+**Measured after.** No held value changed in either reader (6 of 6 looks, all agree). Identity records 57 to 59 (llama) and 126 to
+165 (Qwen), most of the rise corroborations of values already held (restated 54 to 121 for Qwen). Every newly accepted claim was
+read by eye: the right named character and the right colour (2 for llama, 5 for Qwen).
+
+**Not changed.** A dash clause that ends in "are" ("Her eyes - pale grey-blue - are fixed on you", with or without a free adjective)
+is still refused: a run that crosses a dash carries on through skip words ("are"). So is a trailing clause after the colour
+("grey, the color of storm clouds"). They are older limits of the run rule, not of this change, and the cases are listed here so a
+future measurement can say whether they cost a look.
+
+**Tests.** `canon_shape_test.py` 13 (accepted, a modifier kept, and six refusals: no article, no shade noun, a verb between, the
+adjective as the value, no eyes in the quote, and a free word with no shade noun after it); 8 of 8 guard mutations caught after two
+gaps in the first draft of the tests were closed (a refusal that was reached by another path, and nothing pinning that "pale" stays
+part of the value).
