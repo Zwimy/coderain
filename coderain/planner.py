@@ -48,6 +48,15 @@ Your chapter must be its own STAGE of the story, not a rewording of a neighbour:
   that circles the same three nouns is the failure to avoid.
 """
 
+# The player is "you" in the story. The planner is not told a name unless the premise gives one, and a small model invents
+# one: gemma3:4b wrote "Elias finds himself drawn into ..." for a premise that said only "you arrive as a stranger" (the
+# first real run of chapter 1 from the premise alone, D-054). The Writer reads a goal as fact, so an invented name or gender
+# would become the player's.
+PLAYER_RULE = """\
+Refer to the player as "the player" (or "you"), or by the name the premise gives them.
+Never invent a name, a gender or a backstory for the player.
+"""
+
 NEXT_INSTRUCTION = """\
 You are the story ARCHITECT extending a book-style outline. You are given the
 premise, the world, the chapters so far (numbered, with their status) and WHAT
@@ -64,8 +73,9 @@ concrete and forward-looking: no fixed dialogue, and no predetermined outcomes â
 the play decides those. Do not pad; if you have only one sentence of substance,
 the chapter is too thin and needs a real obstacle.
 
+{player}
 Return ONLY a JSON object: {{"title": "Chapter title", "goal": "what it must accomplish"}}
-""".format(rules=DISTINCT_RULES)
+""".format(rules=DISTINCT_RULES, player=PLAYER_RULE)
 
 SLOT_INSTRUCTION = """\
 You are the story ARCHITECT rewriting ONE chapter of an existing outline. The
@@ -82,8 +92,9 @@ concrete and forward-looking: no fixed dialogue, and no predetermined outcomes â
 the play decides those. Do not pad; if you have only one sentence of substance,
 the chapter is too thin and needs a real obstacle.
 
+{player}
 Return ONLY a JSON object: {{"title": "Chapter title", "goal": "what it must accomplish"}}
-""".format(rules=DISTINCT_RULES)
+""".format(rules=DISTINCT_RULES, player=PLAYER_RULE)
 
 
 def _status(entry: Entry) -> str:

@@ -24,6 +24,7 @@ Entities are written straight into the scenario's Markdown files via a MemorySto
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from . import cast, templates
@@ -235,8 +236,20 @@ def _clamp_imp(v) -> int:
         return 3
 
 
+# The JSON shapes the model is shown carry placeholders ("slug": "kebab-id", "aliases": ["alt"]) and small models copy them:
+# a real run on a 4B model wrote four entries whose slug was `kebab-id` and an item whose alias was `alt`, an 8B one wrote
+# `kebab-aethera` and `kebab-marshview`. A slug that names nothing is worse than none (two entries with the same one make
+# the second replace the first, and every cross-reference to it is ambiguous), so a placeholder slug is dropped and the
+# title makes the slug, as it does when the model sends no slug at all.
+_PLACEHOLDER_SLUG = re.compile(r"^(?:kebab(?:-.*)?|slug|id|slug-id|new-slug)$")
+_PLACEHOLDER_ALIASES = frozenset({"alt"})
+
+
 def _entry_from(d: dict, body_key: str = "detail") -> Entry | None:
-    slug = templates.slugify(_s(d.get("slug")) or _s(d.get("title")))
+    slug = templates.slugify(_s(d.get("slug")))
+    if _PLACEHOLDER_SLUG.match(slug):
+        slug = ""
+    slug = slug or templates.slugify(_s(d.get("title")))
     title = _s(d.get("title")) or slug
     if not slug:
         return None
@@ -246,8 +259,9 @@ def _entry_from(d: dict, body_key: str = "detail") -> Entry | None:
     rarity = _s(d.get("rarity")).lower()
     if rarity in ("common", "uncommon", "rare", "epic", "legendary"):
         attrs["rarity"] = rarity
+    aliases = [_s(a) for a in d.get("aliases", []) if _s(a)]
     return Entry(title=title, slug=slug,
-                 aliases=[_s(a) for a in d.get("aliases", []) if _s(a)],
+                 aliases=[a for a in aliases if a.lower() not in _PLACEHOLDER_ALIASES],
                  importance=_clamp_imp(d.get("importance", 3)),
                  attrs=attrs, body=_s(d.get(body_key)))
 

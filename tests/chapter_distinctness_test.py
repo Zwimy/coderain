@@ -171,6 +171,9 @@ def test_both_instructions_carry_the_rules():
         assert "opens a question no other chapter opens" in text, name
         assert "may only set up chapters AFTER it" in text, name
         assert "Never restate another chapter's goal" in text, name
+        # D-054: a 4B model named the player ("Elias finds himself drawn into ...") from a premise that said only "you"
+        assert "Never invent a name, a gender or a backstory for the player" in text, name
+        assert "{player}" not in text and "{rules}" not in text, (name, "an unfilled placeholder")
     assert "empty slot at the END" in NEXT_INSTRUCTION
     assert "REWRITE THIS ONE" in SLOT_INSTRUCTION
     print("7. both instructions carry the same distinctness rules")
