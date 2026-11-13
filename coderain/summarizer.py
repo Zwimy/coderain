@@ -413,6 +413,13 @@ class Summarizer:
             # prompt. Nothing needs more than a handful of names.
             aliases = aliases[:LIST_LIMIT]
             taken = {name_key(title)}
+            if rel in ENTITY_FILES:
+                # Another entry's NAME is never this entry's alias. A small model wrote one
+                # character's slug ("first-last") into another character's alias list; both
+                # read as the same words, so the exact name matched two entities and the
+                # canon reader refused every claim about the real owner (D-039). The registry
+                # for `rel` is already loaded above for every entity promotion.
+                taken |= {name_key(e.title) for e in registry[rel] if e.slug != slug}
             clean: list[str] = []
             for a in aliases:
                 # aliases render as one comma-joined line, so a newline breaks the

@@ -20,6 +20,10 @@ run-on repeats until one line held 400+ characters. Both happened with canon swi
  10. merge_entry unions aliases without case variants and stops at the cap without shrinking old entries
  11. the merge is reported in the fold's events, not silent
  12. a duplicate inside the same fold merges into the entry the fold wrote a moment before
+ 13. another entry's name (or slug) is never written as this entry's alias, in a new entry or a
+     merge; the same words in a different registry, and a real nickname, are still accepted.
+     (A soak save had one character's slug as another's alias: the exact name then matched two
+     entities and every claim about the real owner was refused, D-039.)
 """
 import os
 import sys
@@ -216,12 +220,34 @@ def test_two_promotions_in_one_fold():
     print("12. a duplicate inside the same fold merges into the entry made a moment before")
 
 
+def test_another_entrys_name_is_not_an_alias():
+    """13."""
+    store, s = fresh()
+    tamsin(store)
+    store.upsert_entry("characters.md", Entry(title="Ines Bray", slug="ines-bray", aliases=["Ines"],
+                                              importance=3, attrs={}, body="The ropewalker."))
+    store.upsert_entry("locations.md", Entry(title="Salt Market", slug="salt-market", aliases=[],
+                                             importance=3, attrs={}, body="A market."))
+    s._apply_promotions({"promotions": [
+        promo("ines-bray", "Ines Bray", "Newer.",
+              aliases=["tamsin-reeve", "Tamsin Reeve", "the ropewalker", "Salt Market"])]})
+    got = [e for e in store.entries("characters.md") if e.slug == "ines-bray"][0].aliases
+    assert got == ["Ines", "the ropewalker", "Salt Market"], got   # a merge: the slug and the name are refused
+    s._apply_promotions({"promotions": [
+        promo("odile-marsh", "Odile Marsh", "New.", aliases=["tamsin-reeve", "Ines-Bray", "the courier"])]})
+    new = [e for e in store.entries("characters.md") if e.slug == "odile-marsh"][0].aliases
+    assert new == ["the courier"], new                              # a brand-new entry: same rule
+    assert slugs(store) == ["tamsin-reeve", "ines-bray", "odile-marsh"], slugs(store)
+    print("13. another entry's name or slug is never an alias (merge or new entry); "
+          "other registries and real nicknames are unaffected")
+
+
 for fn in (test_same_title_new_slug_merges, test_the_two_live_shapes,
            test_name_key_ignores_case_punctuation_and_the, test_a_different_name_is_a_different_entry,
            test_an_alias_is_not_a_match, test_an_existing_slug_is_used_as_written,
            test_duplicates_already_present_prefer_the_entry_under_its_own_slug,
            test_threads_and_events_are_untouched, test_new_aliases_are_cleaned,
            test_union_dedupes_and_caps_without_shrinking, test_the_merge_is_reported,
-           test_two_promotions_in_one_fold):
+           test_two_promotions_in_one_fold, test_another_entrys_name_is_not_an_alias):
     fn()
 print("ALL OK")

@@ -1632,11 +1632,20 @@ reads 6 held, 5 agree, 1 differs (a bare shade is compatible with the story's bl
   transcript have that wording, and 0 looks were lost by it here (the colour was captured from another sentence). Left as a candidate
   for a transcript where it costs something.
 
-**Not done.** The fold's alias union (`coderain/memory.py` `_union_aliases`) sees only the entry it is merging, so it cannot refuse
-an alias that equals ANOTHER entry's title, and the creation path takes aliases unfiltered. Preventing the collision at write time
-is a fold change (invariant 6) and wants its own review. On the real-story copy 1 alias equals another character's own name; the
-soak saves built after D-029's fold fixes hold none.
+**Also, at the source.** The fold's alias filter (`coderain/summarizer.py` `_apply_promotions`) now treats every OTHER entry's title
+in the same registry as taken, so a promotion can no longer write another character's name or slug as an alias, in a merge or in a
+new entry. The registry for the promotion's file is already loaded at that point, so it costs no extra read. Only the same registry
+counts (a character alias equal to a location's title is still accepted), and real nicknames pass. It does not touch aliases
+already on disk: the reading-side rule above is what covers those, and the dedupe tool lists the entries. Where it was seen: the
+narration-first soak save, built AFTER D-029's fold fixes (those fixes only compared an alias with its own entry, so they could not
+see it), and 1 alias on the real-story copy equals another character's own name. The eight soak saves that have a canon ledger
+hold none.
+
+**Cost to know.** A legitimate alias that happens to equal another entry's whole title is now refused. The case that exists is a
+character filed twice (a full name and a short name as separate entries): the short name stops being an alias of the full-name entry.
+That is the same trade D-030 made, a duplicate that can be merged later over a wrong merge that cannot be undone.
 
 **Tests.** `canon_alias_collision_test.py` (the own name wins, a claim about that character is committed to them, two own names and
 two shared aliases stay ambiguous, ordinary resolution unchanged); 4 of 5 guard mutations caught and the fifth is equivalent (two own
-names leave two candidates either way).
+names leave two candidates either way). `fold_entity_resolution_test.py` 13 (a merge and a new entry both refuse another entry's
+name and slug, another registry and a nickname are accepted); 6 of 6 guard mutations caught.
