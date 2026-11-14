@@ -41,7 +41,7 @@ export async function renderLibrary() {
       <button class="primary" id="new-save">+ New story</button>
     </div>
     <div class="cards">${cards ||
-      '<p class="muted">No stories yet — start one.</p>'}</div>
+      '<p class="muted">No stories yet. Start one.</p>'}</div>
     <div class="page-head" style="margin-top:34px">
       <h1>Worlds</h1>
       <button id="import-card" title="import a SillyTavern / Tavern character card">Import card…</button>
@@ -55,7 +55,7 @@ export async function renderLibrary() {
     write every detail yourself, seed sections from an idea, or generate the
     rest.</p>
     <div class="cards">${worlds ||
-      '<p class="muted">No worlds yet — build one.</p>'}</div>
+      '<p class="muted">No worlds yet. Build one.</p>'}</div>
   </div>`;
 
   $("#new-save").addEventListener("click", () => newSaveModal(data));
@@ -76,7 +76,7 @@ export async function renderLibrary() {
   $("#import-card").addEventListener("click", () =>
     uploadFile("/api/cards-import", ".png,.json,.charx", out => {
       const c = out.counts || {};
-      toast(`Imported "${out.slug}" — ${c.lore || 0} lore entr`
+      toast(`Imported "${out.slug}": ${c.lore || 0} lore entr`
             + `${(c.lore || 0) === 1 ? "y" : "ies"} + the character. `
             + "Opening the builder to review.");
       location.hash = `#world/${out.slug}`;
@@ -126,7 +126,7 @@ export async function renderLibrary() {
         ev.stopPropagation();
         const info = await api(`/api/saves/${slug}`);
         const n = await promptModal("Branch this story", {
-          placeholder: `1 – ${info.turns.length}`, okLabel: "Branch",
+          placeholder: `1 to ${info.turns.length}`, okLabel: "Branch",
           hint: `Copies the story and rewinds it to that turn. `
                 + `It currently has ${info.turns.length}.`});
         if (!n) return;
@@ -156,7 +156,7 @@ export function newSaveModal(data, preselect) {
     <label>Name</label><input id="ns-title" placeholder="My adventure">
     <label>World</label>
     <select id="ns-scenario">
-      <option value="">(blank world — write a premise)</option>${scen}
+      <option value="">(blank world: write a premise)</option>${scen}
     </select>
     <div id="ns-premise-wrap">
       <label>Premise</label>
@@ -272,7 +272,7 @@ export async function renderDefaults() {
       <button id="defaults-import">Import…</button>
       <button class="primary" id="defaults-export">Export</button>
     </div>
-    <p class="muted">Your own starting templates — every NEW world and story is
+    <p class="muted">Your own starting templates. Every NEW world and story is
     seeded from these instead of the shipped ones. Edit one to make it yours,
     or revert to the version the app ships with at any time.</p>
     <div class="cards" id="defaults-cards"><p class="muted">loading…</p></div>

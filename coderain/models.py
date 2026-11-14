@@ -70,9 +70,9 @@ PLATFORM_MODELS: list[tuple[str, str, str, str]] = [
 # (BYO model, comparable to, context with your own key, honest note)
 BYO_ALTERNATIVES: list[tuple[str, str, int, str]] = [
     ("Llama 3.3 70B",          "Nova (its base model)",       131_072,
-     "same base, full window — not their finetune"),
+     "same base, full window; not their finetune"),
     ("Mistral Small 3.2 24B",  "Harbinger/Hearthfire base",   128_000,
-     "the family they finetune — base flavor, not house style"),
+     "the family they finetune: base flavor, not house style"),
     ("DeepSeek V3.2",          "AI Dungeon DeepSeek / Atlas", 128_000,
      "same model they build on; 128k is its hard ceiling"),
     ("DeepSeek V4 Pro",        "AI Dungeon DeepSeek V4 Pro",  1_048_576,
@@ -90,7 +90,7 @@ BYO_ALTERNATIVES: list[tuple[str, str, int, str]] = [
 HOSTED_PRESETS: list[dict] = [
     {"label": "DeepSeek V4 Pro (recommended)", "model": "deepseek-v4-pro",
      "base_url": "https://api.deepseek.com/v1", "context": 1_048_576,
-     "note": "1M ctx, dual think modes — one model covers Director AND Writer"},
+     "note": "1M ctx, dual think modes: one model covers Director AND Writer"},
     {"label": "GLM 5.2 (recommended)", "model": "glm-5.2",
      "base_url": "https://api.z.ai/api/paas/v4", "context": 1_000_000,
      "note": "1M ctx, sparse attention keeps long calls cheap"},
@@ -102,7 +102,7 @@ HOSTED_PRESETS: list[dict] = [
      "note": "frontier prose (OpenAI-compatible endpoint)"},
     {"label": "OpenRouter (any model)", "model": "deepseek/deepseek-v4-pro",
      "base_url": "https://openrouter.ai/api/v1", "context": 1_048_576,
-     "note": "one key, hundreds of models — edit the model id freely"},
+     "note": "one key, hundreds of models; edit the model id freely"},
 ]
 
 # Plain-language walkthrough for the Settings "Hosted" panel — written for
@@ -112,17 +112,17 @@ HOSTED_HOWTO: list[str] = [
     "An API key is like a prepaid phone card for an AI model: you buy a little "
     "credit at the model's website, they give you a secret code (the key), and "
     "this app uses that code to talk to the model directly. No subscription, "
-    "no middleman — you pay only for what you actually play.",
+    "no middleman: you pay only for what you actually play.",
     "1. Go to platform.deepseek.com (our recommended provider) and sign up "
-    "with an email — like any other website account.",
+    "with an email, like any other website account.",
     "2. Add a small credit, ~$5 is plenty to start (Billing → Top up).",
     "3. Create an API key (API Keys → Create) and copy it. It looks like a "
-    "long random password. Treat it like one — don't share it.",
+    "long random password. Treat it like one: don't share it.",
     "4. Back here: flip to Hosted, pick the 'DeepSeek V4 Pro' preset, paste "
-    "your key, and hit Save & apply. That's it — your stories now run on a "
+    "your key, and hit Save & apply. That's it. Your stories now run on a "
     "top-tier model.",
     "What it costs: roughly $0.01-0.02 per story turn. Playing 20 turns a day, "
-    "every day, is about $6/month — and nothing at all in months you don't "
+    "every day, is about $6/month, and nothing at all in months you don't "
     "play.",
     "Privacy: the key is stored only on this PC (in the app's .env file) and "
     "every call goes straight from your machine to the provider.",
@@ -132,25 +132,25 @@ HOSTED_HOWTO: list[str] = [
 # who has never installed a local model. Rendered by the web app (reusable by the
 # desktop app later). Keep every model tag here in sync with LOCAL_SUGGESTIONS.
 LOCAL_HOWTO: list[str] = [
-    "Local models run entirely on your own PC — no key, no cost, completely "
+    "Local models run entirely on your own PC: no key, no cost, completely "
     "private. You install one free program (Ollama), download a couple of "
     "models once, and you're offline forever. A GPU with 8 GB+ is ideal; it "
     "runs on CPU too, just slower.",
     "1. Install Ollama: go to ollama.com/download, get the installer for your "
     "system (Windows / macOS / Linux) and run it. It starts on its own and "
-    "sits quietly in the background — nothing to configure.",
+    "sits quietly in the background. Nothing to configure.",
     "2. Download two models. Open a terminal (Windows: PowerShell) and run "
     "'ollama pull qwen3:4b' (the planner) then 'ollama pull gemma3:4b' (the "
     "writer). Each is a few GB and downloads once. Optional, for smarter "
     "memory recall: 'ollama pull nomic-embed-text'.",
-    "3. IMPORTANT — give the models room to think. Out of the box Ollama only "
+    "3. IMPORTANT: give the models room to think. Out of the box Ollama only "
     "remembers about 4,000 words, which starves longer stories. Set an "
     "environment variable OLLAMA_CONTEXT_LENGTH to 16384, then restart Ollama. "
     "(Windows: search 'Edit environment variables' → New user variable. "
     "macOS/Linux: add 'export OLLAMA_CONTEXT_LENGTH=16384' to your shell "
     "profile.)",
     "4. Come back here, keep the toggle on Local, and pick your models in the "
-    "dropdowns below — qwen3:4b for the Director, gemma3:4b for the Writer. Hit "
+    "dropdowns below: qwen3:4b for the Director, gemma3:4b for the Writer. Hit "
     "Save & apply. Your stories now run 100% on your machine.",
     "Hardware note: on an 8 GB GPU, qwen3:4b + gemma3:4b is the sweet spot "
     "(~5 GB, quick). Bigger models (qwen3:8b, llama3.1:8b) sharpen the prose "
@@ -201,6 +201,6 @@ def context_hint_lines() -> list[str]:
     lines.append("")
     lines.append(f"Recommended: at least {RECOMMENDED_MIN_CONTEXT:,} tokens.")
     lines.append(f"{LONG_CONTEXT:,}+ = long-context; set the memory budget to")
-    lines.append("'auto' to fill the whole window. Numbers are a snapshot —")
+    lines.append("'auto' to fill the whole window. Numbers are a snapshot, and")
     lines.append("your provider's model page has the final say.")
     return lines

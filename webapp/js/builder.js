@@ -88,7 +88,7 @@ export async function renderBuilder(slug, scope = "scenario") {
         + 'location, item &amp; faction here into your reusable Pieces library"'
         + '>Add all to library</button>'}
     </div>
-    ${isSave ? `<p class="muted">These are THIS story's own live files — edits
+    ${isSave ? `<p class="muted">These are THIS story's own live files: edits
       apply from your next turn. They started as copies of the world and have
       been evolving as you play.</p>` : ""}
     <div class="setting-panel">
@@ -103,7 +103,7 @@ export async function renderBuilder(slug, scope = "scenario") {
             isSave ? "The situation this story is set in (always in context)."
                    : "The situation every story in this world drops into.")}
     ${isSave ? "" : field("b-intro",
-            "Introduction — the first message of every story", 6,
+            "Introduction: the first message of every story", 6,
             w.introduction,
             "Second person, present tense. Blank = improvised per story.")}
     ${field("b-world", "World details", 8, w.world,
@@ -195,7 +195,7 @@ export async function renderBuilder(slug, scope = "scenario") {
         hint: "Leave it blank to let the AI decide."});
       if (text === null) return;
     } else if (!text) {
-      toast("Nothing to improve yet — write something or seed it first.");
+      toast("Nothing to improve yet. Write something or seed it first.");
       return;
     }
     // The status goes NEXT TO the field, never into it. The field's value is what Back, Save and every navigation write
@@ -263,7 +263,7 @@ export async function renderBuilder(slug, scope = "scenario") {
           blurb: p.entry.body || ""}));
       }
       if (!items.length) {
-        toast("Nothing of this type in your library yet — save a piece to "
+        toast("Nothing of this type in your library yet. Save a piece to "
               + "it first (piece editor → 'Save to library').");
         return;
       }
@@ -309,7 +309,7 @@ export async function renderBuilder(slug, scope = "scenario") {
   $("#b-addtype").addEventListener("click", async () => {
     const name = await promptModal("New lore type", {
       placeholder: "Races", okLabel: "Create",
-      hint: "A new registry alongside Characters and Locations — e.g. Races, "
+      hint: "A new registry alongside Characters and Locations, e.g. Races, "
             + "Factions, Technology."});
     if (!name) return;
     try {
@@ -403,10 +403,10 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
       ${isChar ? check("p-playable", "Playable ★", a.playable === "true") : ""}
       ${isEvent ? check("p-once", "Fires once", a.once === "true") : ""}
     </div>
-    ${isChar ? `<label>Wants (their goal right now — what they are trying to get)</label>
+    ${isChar ? `<label>Wants (their goal right now: what they are trying to get)</label>
       <input id="p-wants" value="${esc(a.wants || "")}"
              placeholder="e.g. win the qualifier without revealing her handler">
-      <label>Motivation (why they want it — the driver underneath)</label>
+      <label>Motivation (why they want it: the driver underneath)</label>
       <input id="p-motivation" value="${esc(a.motivation || "")}"
              placeholder="e.g. her sister's debt is owed to the people running it">
       <p class="muted">The story keeps these current: as the fiction changes what a

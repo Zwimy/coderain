@@ -32,11 +32,11 @@ export async function renderSettings() {
     <div class="setting-panel">
       <h2>Connection profiles</h2>
       <p class="muted">Save a connection (provider + model + context) under a name
-      and switch between them — e.g. "fast local" vs "quality cloud".</p>
+      and switch between them, e.g. "fast local" vs "quality cloud".</p>
       <div class="row">
         <div style="flex:1"><label>Saved profiles</label>
           <select id="pf-list">
-            <option value="">${profs.profiles.length ? "— pick —"
+            <option value="">${profs.profiles.length ? "pick one"
               : "(none saved yet)"}</option>
             ${profs.profiles.map(n => `<option ${n === profs.active
               ? "selected" : ""}>${esc(n)}</option>`).join("")}
@@ -56,23 +56,23 @@ export async function renderSettings() {
     </div>
 
     <div class="setting-panel" id="panel-local">
-      <h2>Local models — quad brain stages</h2>
+      <h2>Local models, one per stage</h2>
       <details class="howto">
         <summary>New to this? Install Ollama &amp; set up local models</summary>
         ${(local.howto || []).map(p => `<p>${esc(p)}</p>`).join("")}
       </details>
-      ${local.error ? `<p class="muted">${esc(local.error)} — showing
+      ${local.error ? `<p class="muted">${esc(local.error)}. Showing
         suggestions only.</p>` : ""}
       <div class="row">
-        <div><label>Director (plans the turn — thinking model)</label>
+        <div><label>Director (plans the turn; a thinking model)</label>
           <select id="lm-director">${localOpts(st.local.director)}</select></div>
-        <div><label>Writer (prose — non-thinking is fine)</label>
+        <div><label>Writer (prose; non-thinking is fine)</label>
           <select id="lm-writer">${localOpts(st.local.writer)}</select></div>
       </div>
       <div class="row">
         <div><label>Lore-keeper (optional continuity pass)</label>
           <select id="lm-keeper">
-            <option value="" ${!st.local.lorekeeper ? "selected" : ""}>(none — skip it)</option>
+            <option value="" ${!st.local.lorekeeper ? "selected" : ""}>(none: skip it)</option>
             ${localOpts(st.local.lorekeeper)}</select></div>
         <div><label title="How much the model can READ at once (its window)."
           >Context window</label>
@@ -85,11 +85,11 @@ export async function renderSettings() {
       <p class="muted">Installed via Ollama: ${local.installed.map(m =>
         `${esc(m.name)} (${esc(m.size)})`).join(", ") || "none detected"}.
       Suggested pulls: ${local.suggestions.map(s =>
-        `<b>${esc(s.name)}</b> — ${esc(s.note)}`).join("; ")}.</p>
+        `<b>${esc(s.name)}</b>: ${esc(s.note)}`).join("; ")}.</p>
     </div>
 
     <div class="setting-panel" id="panel-hosted">
-      <h2>Hosted model — one model runs every stage</h2>
+      <h2>Hosted model: one model runs every stage</h2>
       <details class="howto">
         <summary>New to this? How to get running in 5 minutes</summary>
         ${hosted.howto.map(p => `<p>${esc(p)}</p>`).join("")}
@@ -100,7 +100,7 @@ export async function renderSettings() {
       <div class="row">
         <div><label>Model id</label>
           <input id="hm-model" value="${esc(st.hosted.model)}"></div>
-        <div><label title="The model's context window — how much it can read.">
+        <div><label title="The model's context window: how much it can read.">
           Context window</label>
           <input id="hm-ctx" type="number" step="1024"
             value="${esc(st.hosted.context_tokens)}"></div>
@@ -108,7 +108,7 @@ export async function renderSettings() {
       <label>Base URL (OpenAI-compatible)</label>
       <input id="hm-base" value="${esc(st.hosted.base_url)}">
       <label>API key ${st.hosted.key_set
-        ? '<span style="color:var(--ok)">(saved — leave blank to keep)</span>'
+        ? '<span style="color:var(--ok)">(saved; leave blank to keep)</span>'
         : '<span style="color:var(--player)">(not saved yet)</span>'}</label>
       <input id="hm-key" type="password" placeholder="${st.hosted.key_set
         ? "••••••••" : "paste your key"}">
@@ -119,7 +119,7 @@ export async function renderSettings() {
       <h2>Supporting models (local, free)</h2>
       <p class="muted">The Director plans the turn and the Lore-keeper checks
         continuity. Both are structured work a small local model does well, and
-        both run every turn — pointing them at Ollama keeps the hosted model for
+        both run every turn, so pointing them at Ollama keeps the hosted model for
         the prose you are paying for. Leave either on
         <b>(use the hosted model)</b> to send it to the hosted endpoint instead.
         ${names.length ? "" : `<span style="color:var(--player)">Ollama is not
@@ -152,7 +152,7 @@ export async function renderSettings() {
         <button data-v="quality" type="button">Quality</button>
       </div>
       <p class="hint">The biggest lever on token cost. <b>Economy</b> /
-        <b>Balanced</b> = one call per turn — best for pure narrative.
+        <b>Balanced</b> = one call per turn, best for pure narrative.
         <b>Quality</b> = a planner runs first to resolve mechanics, worth it for
         RPG play at roughly 2× the tokens. Sets the two toggles below.</p>
       <div class="indent">
@@ -163,7 +163,7 @@ export async function renderSettings() {
         <label><input type="checkbox" id="gc-memtool"
           ${st.generation.use_memory_tool ? "checked" : ""}>
           Let the model look things up mid-turn</label>
-        <p class="hint">Only worth it on a big hosted model — small local models
+        <p class="hint">Only worth it on a big hosted model; small local models
           are unreliable at using tools.</p>
       </div>
 
@@ -185,14 +185,14 @@ export async function renderSettings() {
         ${st.generation.chapter_outline !== false ? "checked" : ""}>
         Plan the story in chapters (book plan)</label>
       <p class="hint">A rolling outline plans a few chapters ahead and writes a new
-        one as each completes. Not a per-turn brain — it only plans at the
+        one as each completes. Not a per-turn brain: it only plans at the
         memory-fold cadence. See the <b>Plan</b> button while playing.</p>
       <div class="indent">
         <label style="text-transform:uppercase;font-size:12px;color:var(--dim)"
           >Chapters planned ahead</label>
         <input type="number" id="gc-horizon" min="2" max="8" step="1"
           value="${st.generation.chapter_horizon || 4}" style="width:80px">
-        <p class="hint">Default 4 (range 2–8). Higher = a longer plotted arc.</p>
+        <p class="hint">Default 4 (range 2 to 8). Higher = a longer plotted arc.</p>
       </div>
 
       <div class="sub-head">Continuity</div>
@@ -201,7 +201,7 @@ export async function renderSettings() {
         Continuity check (lore-keeper)</label>
       <p class="hint">The only stage that <b>verifies</b> rather than recalls: it
         looks up what the turn must not contradict and hands the writer the facts
-        to honor. Strongest guard against contradictions, and the most expensive —
+        to honor. Strongest guard against contradictions, and the most expensive:
         one extra call each time it runs.</p>
       <div class="indent">
         <label style="text-transform:uppercase;font-size:12px;color:var(--dim)"
@@ -226,7 +226,7 @@ export async function renderSettings() {
       </label>
       <p class="muted">The strongest consistency feature: it surfaces the right
         past entry even when the wording doesn't match. Needs a provider that
-        serves embeddings — many hosted story models (DeepSeek among them) do NOT,
+        serves embeddings: many hosted story models (DeepSeek among them) do NOT,
         and the recall then silently does nothing. Use <b>Embed with</b> to run
         embeddings on local Ollama (<code>ollama pull nomic-embed-text</code>)
         while the story runs on your hosted model. Press <b>Check</b> to see
@@ -268,14 +268,14 @@ export async function renderSettings() {
             <input id="mm-msize" type="number" min="1" max="100"
               value="${esc(st.memory.medium_fold_size)}"></div>
         </div>
-        <label>Memory budget — how many tokens of story + memory to send each
+        <label>Memory budget: how many tokens of story + memory to send each
           turn</label>
         <input id="mm-budget" value="${esc(st.memory.context_budget_tokens)}">
         <p class="muted">This is the main cost lever. A smaller number = cheaper,
           faster turns that lean more on summaries; larger = more raw detail in
-          context. <b>"auto" fills the model's whole window every turn</b> — on a
+          context. <b>"auto" fills the model's whole window every turn</b>. On a
           big-context model that gets very expensive, so a fixed number
-          (8000–16000) is usually better.</p>
+          (8000 to 16000) is usually better.</p>
         <div class="sub-head">What a turn costs</div>
         <p class="hint">Every turn records the provider's own token counts. Put
           your model's price in and the Context panel shows money instead of just
@@ -307,8 +307,8 @@ export async function renderSettings() {
       <label>Start every reply with (optional)</label>
       <input id="gc-prefix" placeholder='e.g. a quote " or an action *'
         value="${esc(st.generation.start_reply_with || "")}">
-      <p class="muted">Every narrator turn will begin with this literal text —
-      handy to force dialogue or an action tag. Works with any model.</p>
+      <p class="muted">Every narrator turn will begin with this literal text.
+      Handy to force dialogue or an action tag. Works with any model.</p>
       <label>Stop sequences (one per line)</label>
       <textarea id="gc-stop" rows="2"
         placeholder="text that ends generation, e.g.  User:">${
@@ -349,7 +349,7 @@ export async function renderSettings() {
 
     <div class="setting-panel">
       <h2>Quick actions (global)</h2>
-      <p class="muted">Canned action buttons shown in every story's play bar — one
+      <p class="muted">Canned action buttons shown in every story's play bar, one
       per line. Each story can add its own from the play view (Aids).</p>
       <textarea id="qa-global" rows="3"
         placeholder="Look around&#10;Check my inventory&#10;Wait and listen"
@@ -406,7 +406,7 @@ export async function renderSettings() {
     $("#gc-memtool").checked = COST[v].memtool;
     $("#mm-budget").value = COST[v].budget;
     markCost(v);
-    toast(`${v[0].toUpperCase() + v.slice(1)} preset set — press Save & apply.`,
+    toast(`${v[0].toUpperCase() + v.slice(1)} preset set. Press Save & apply.`,
           "info");
   });
   // Motion is a local preference, not server config — applied instantly so the
@@ -528,7 +528,7 @@ export async function renderSettings() {
       invalidateReady();          // the model may now (or no longer) be reachable
       setBrainline();
       if (statusEl) {
-        statusEl.textContent = "Saved — applied to new turns.";
+        statusEl.textContent = "Saved. Applied to new turns.";
         setTimeout(() => { statusEl.textContent = ""; }, 3000);
       }
       return true;

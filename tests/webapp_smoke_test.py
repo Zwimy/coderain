@@ -36,6 +36,7 @@ Asserts, once it can run:
 """
 import json
 import os
+import re
 import shutil
 import socket
 import sys
@@ -98,6 +99,25 @@ VIEWS = ["#library", "#characters", "#defaults", "#settings",
          f"#play/{slug}", f"#world/{scen}"]
 failures = []
 
+
+def wait_until_held(page, held, what, tries=80):
+    """The Stop button shows BEFORE the request reaches a stubbed route. Stopping first would find nothing to answer, and the
+    held request would then hang forever (a flaky failure in about one run in ten)."""
+    for _ in range(tries):
+        if held:
+            return
+        page.wait_for_timeout(100)
+    failures.append(f"the {what} request never reached the stub")
+
+
+def no_dashes(where, text):
+    """Owner rule (no-ai-sounding-text): no em or en dash in anything a reader sees. Checked on the RENDERED text, which is
+    what the reader reads and which also catches text that arrives as data."""
+    found = re.findall(".{0,30}[–—].{0,30}", text or "")
+    if found:
+        failures.append(f"{where}: an em or en dash in the text a reader sees: {found[:2]}")
+
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page()
@@ -122,10 +142,14 @@ with sync_playwright() as p:
     for view in VIEWS:
         page.evaluate(f"location.hash = {view!r}")
         page.wait_for_timeout(700)
+        if view == "#settings":          # the slowest view: do not read the page it is replacing
+            page.wait_for_function("((document.querySelector('#view h1, #view h2') || {}).textContent || '').startsWith('Settings')",
+                                   timeout=10000)
         body = page.inner_text("#view").strip()
         if len(body) < 20:
             failures.append(f"{view} rendered almost nothing: {body!r}")
-    print(f"1) {len(VIEWS)} views render")
+        no_dashes(view, body)
+    print(f"1) {len(VIEWS)} views render, with no em or en dash in what they say")
 
     # --- modals that cross module boundaries -----------------------------
     page.evaluate(f"location.hash = '#play/{slug}'")
@@ -150,7 +174,9 @@ with sync_playwright() as p:
         except Exception:  # noqa: BLE001 — report it, don't abort the run
             got = page.inner_text("#modal-card")[:90]
             failures.append(f"the {label} modal did not open ({got!r})")
-        return page.inner_text("#modal-card")
+        text = page.inner_text("#modal-card")
+        no_dashes(f"the {label} panel", text)
+        return text
 
     open_panel("plan-btn", "Chapter plan")
     close_modal()
@@ -284,6 +310,7 @@ with sync_playwright() as p:
     # SAY so, keep the sentence for a retry and leave no world behind.
     page.evaluate("location.hash = '#library'")
     page.wait_for_selector("#idea-world", timeout=8000)
+    no_dashes("#library (after the first-run gate)", page.inner_text("#view"))      # case 1's #library is the first-run screen here
     worlds_before = len(c.get("/api/saves").json()["scenarios"])
     page.click("#idea-world")
     page.wait_for_selector("#iw-idea", timeout=4000)
@@ -438,6 +465,7 @@ with sync_playwright() as p:
         page.evaluate("import('/js/welcome.js').then(m => m.renderWelcome({ok: false, reason: 'no_chat_models'}))")
         page.wait_for_selector(".welcome", timeout=6000)
         page.wait_for_timeout(300)
+        no_dashes("the first-run screen", page.inner_text("#view"))
         got = page.evaluate("""() => ({options: [...document.querySelectorAll('#w-local-model option')].map(o => o.value),
                                       status: (document.querySelector('.welcome .status') || {}).textContent || ''})""")
         page.unroute("**/api/models/local")
@@ -531,11 +559,20 @@ with sync_playwright() as p:
     page.fill("#action", "I wait by the gate.")
     page.keyboard.press("Enter")
     page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    wait_until_held(page, held_turn, "turn")
     page.click("#stop")
-    page.wait_for_selector(".turn-note", timeout=8000)
+    try:
+        page.wait_for_selector(".turn-note", timeout=8000)
+    except Exception:  # noqa: BLE001 - say what the page was doing, then carry on
+        failures.append("16) no Stopped note appeared: " + repr(page.evaluate("""() => ({
+          stopHidden: document.querySelector('#stop').classList.contains('hidden'),
+          stage: document.querySelector('#stageline').textContent,
+          errors: document.querySelectorAll('#transcript .turn-error').length,
+          toast: (document.querySelector('#toast') || {}).textContent, turns: document.querySelectorAll('#transcript .turn').length,
+          live: document.querySelectorAll('#transcript .pending').length})""")) + f" held={len(held_turn)}")
     alerts = page.locator("#transcript .turn-error").count()
     settings_btns = page.locator("#transcript button", has_text="Check settings").count()
-    note_role = page.evaluate("document.querySelector('.turn-note').getAttribute('role')")
+    note_role = page.evaluate("(document.querySelector('.turn-note') || document.body).getAttribute('role')")
     page.unroute("**/api/saves/*/turn")
     page.unroute("**/api/saves/*/cancel")
     if alerts or settings_btns:
@@ -655,6 +692,7 @@ with sync_playwright() as p:
     page.fill("#action", "I wait for the ferry.")
     page.keyboard.press("Enter")
     page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    wait_until_held(page, held_run, "turn")
     state_js = """() => ({stopVisible: !document.querySelector('#stop').classList.contains('hidden'),
       stopEnabled: !document.querySelector('#stop').disabled, sendOff: document.querySelector('#send').disabled,
       stage: document.querySelector('#stageline').textContent})"""

@@ -24,7 +24,7 @@ SLUG = "the-veil"
 TITLE = "The Veil"
 DESCRIPTION = ("The war with the machines is over. A stranger offers you a copper "
                "coin and the truth. A noir story about waking from a simulated "
-               "world — Coderain's showcase world.")
+               "world. Coderain's showcase world.")
 
 PREMISE = (
     "After the long war between humanity and the Choir — the networked machine "

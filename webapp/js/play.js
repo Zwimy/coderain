@@ -64,7 +64,7 @@ export async function outlineModal(slug) {
       ? "No plan yet. Generate one from your premise now, or it appears on its own after the first few turns."
       : "The chapter outline is turned off in Settings.";
     openModal(`<h2>Chapter plan</h2>
-      <p class="muted">The story's rolling outline — a few chapters planned ahead, a
+      <p class="muted">The story's rolling outline: a few chapters planned ahead, a
         fresh one written each time a chapter completes. Edit an upcoming chapter's
         goal to steer where things go; the turns aim toward the <b>now</b> chapter.</p>
       ${chs.length ? `<div id="ch-list">${rows}</div>`
@@ -311,11 +311,11 @@ export async function renderPlay(slug) {
         <div class="clock">${esc(s.clock || "")}</div>
         <button id="edit-btn" title="edit this story's characters, lore &amp; world"
           >Edit</button>
-        <button id="note-btn" title="author's note — steer tone &amp; pacing"
+        <button id="note-btn" title="author's note: steer tone &amp; pacing"
           >Note</button>
         <button id="mem-btn" title="inspect &amp; repair what the story remembers"
           >Memory</button>
-        <button id="plan-btn" title="the rolling chapter plan — steer the story ahead"
+        <button id="plan-btn" title="the rolling chapter plan: steer the story ahead"
           >Plan</button>
         <button id="ctx-btn" title="what the model actually receives this turn"
           >Context</button>
@@ -422,7 +422,7 @@ export async function renderPlay(slug) {
          aria-label="Previous version" ${swipe.idx ? "" : "disabled"}>◄</button>`
       + `<span>Version ${swipe.idx + 1} of ${swipe.count}</span>`
       + `<button class="mini swr" aria-label="Next or new version"
-           title="next version — at the end, writes a new one (right arrow)"
+           title="next version: at the end, writes a new one (right arrow)"
            >►</button>`
       + `<span class="hint muted">${swipe.idx + 1 === swipe.count
           ? "› writes a new one" : ""}</span>`;
@@ -628,7 +628,7 @@ export async function renderPlay(slug) {
     stage.textContent = label;
     const ticker = setInterval(() => {
       const s = Math.round((Date.now() - t0) / 1000);
-      const hint = s >= 10 ? " — the planning stage can take a while on local models" : "";
+      const hint = s >= 10 ? ". The planning stage can take a while on local models" : "";
       stage.textContent = `${label} ${s}s${hint}`;
     }, 1000);
     aborter = new AbortController();
@@ -854,7 +854,7 @@ export async function renderPlay(slug) {
     const fate = await api(`/api/saves/${slug}/fate`);          // D-045
     openModal(`
       <h1>Play aids</h1>
-      <label>Quick actions <span class="muted">(this story — one per line)</span></label>
+      <label>Quick actions <span class="muted">(this story, one per line)</span></label>
       <textarea id="qa-list" rows="4"
         placeholder="Look around&#10;Check my inventory&#10;Wait and listen"
         >${esc((aids.quick_actions || []).join("\n"))}</textarea>
@@ -930,7 +930,7 @@ export async function renderPlay(slug) {
       // leave a stale one.
       await resync();
       setSheet(out.sheet || []);
-      setEvents(["undone — try a different action"]);
+      setEvents(["undone. Try a different action"]);
     } else if (out) {
       toast("Nothing to undo yet.");
     }
@@ -959,7 +959,7 @@ export async function renderPlay(slug) {
     if (!info) return;
     const total = (info.turns || []).length;
     const n = await promptModal("Branch this story", {
-      placeholder: `1 – ${total}`, okLabel: "Branch",
+      placeholder: `1 to ${total}`, okLabel: "Branch",
       hint: `Copies the story and rewinds it to that turn. It has ${total} so far.`});
     if (!n) return;
     try {
@@ -1018,8 +1018,8 @@ export async function renderPlay(slug) {
       if (got.is_rule) {
         const own = got.layer === "save";
         layer.textContent = own
-          ? "This story has its own copy — edits affect only this story."
-          : `Shared (${got.layer}) — editing this changes EVERY story that uses it.`;
+          ? "This story has its own copy. Edits affect only this story."
+          : `Shared (${got.layer}): editing this changes EVERY story that uses it.`;
         ovr.classList.remove("hidden");
         ovr.textContent = own ? "Revert to shared" : "Make a copy for this story";
       } else {
@@ -1044,7 +1044,7 @@ export async function renderPlay(slug) {
       const ok = await guard(() => api(`/api/saves/${slug}/files/${sel.value}`,
         {method: "PUT", body: {text: area.value}}), "Couldn't save");
       if (ok === undefined) return;      // keep the editor open with their text
-      toast("Saved — the next turn will use it.", "ok");
+      toast("Saved. The next turn will use it.", "ok");
       closeModal();
       // Repaint from server truth. UNCONDITIONALLY, not just for transcript.md —
       // narrowing this is the cleverness that generates the next defect.
@@ -1073,7 +1073,7 @@ export async function renderPlay(slug) {
     const an = await api(`/api/saves/${slug}/authors-note`);
     openModal(`
       <h1>Author's note</h1>
-      <p class="muted">Standing guidance woven into the prompt — tone, pacing,
+      <p class="muted">Standing guidance woven into the prompt: tone, pacing,
       style. Never shown to the reader.</p>
       <textarea id="an-content" rows="5"
         placeholder="e.g. Keep the tone noir and terse; end scenes on a hook."
@@ -1128,7 +1128,7 @@ export function talkDrawer(slug, companions) {
         `<option>${esc(c)}</option>`).join("")}</select>
       <button id="talk-close" style="flex:0">✕</button>
     </div>
-    <div id="talk-log">(This chat stays between you two — it never enters
+    <div id="talk-log">(This chat stays between you two. It never enters
 the story transcript.)\n</div>
     <div id="talk-row">
       <input id="talk-input" placeholder="Say something…">

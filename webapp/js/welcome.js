@@ -13,7 +13,7 @@ export async function renderWelcome(state) {
   const server = local.server || "Ollama";
   view.innerHTML = `<div class="page welcome">
     <h1>Let's get you a storyteller</h1>
-    <p class="muted">Coderain runs on <b>your</b> model — nothing is sent to us,
+    <p class="muted">Coderain runs on <b>your</b> model. Nothing is sent to us,
       and there is no account. Pick one of these once and you're set.</p>
     <div class="cards two">
       <div class="card static">
@@ -60,8 +60,8 @@ export async function renderWelcome(state) {
       </div>
     </div>
     <p class="muted" style="margin-top:22px">
-      <a href="#library" id="w-skip">Look around first</a> —
-      you can set this up later in Settings.
+      <a href="#library" id="w-skip">Look around first</a>.
+      You can set this up later in Settings.
     </p>
   </div>`;
 

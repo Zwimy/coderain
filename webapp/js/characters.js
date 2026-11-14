@@ -68,7 +68,7 @@ export async function renderCharacters() {
       <h1>Piece library</h1>
       <button class="primary" id="new-piece">${newLabel}</button>
     </div>
-    <p class="muted">Your reusable pieces — drop any of them into a world from
+    <p class="muted">Your reusable pieces. Drop any of them into a world from
     its builder ("From library…"), or send a world's piece here with
     "Save to library". <b>Playable</b> characters can be the protagonist of a
     story.</p>
@@ -141,7 +141,7 @@ export function charModal(statNames, c) {
     <textarea id="ch-desc" rows="3">${esc(c?.description || "")}</textarea>
     <label>Traits (comma separated)</label>
     <input id="ch-traits" value="${esc(c?.traits || "")}">
-    <label>Skills — "name (stat), name (stat)"</label>
+    <label>Skills ("name (stat), name (stat)")</label>
     <input id="ch-skills" value="${esc(c?.skills || "")}"
       placeholder="lockpicking (agility), old tongues (knowledge)">
     <div class="row">

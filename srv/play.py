@@ -51,7 +51,7 @@ def edit_turn(slug: str, i: int, body: dict):
     # shift every later index), and the user was told the turn they were looking
     # at did not exist.
     if not text.strip():
-        raise HTTPException(400, "a turn can't be blank — edit the text, or "
+        raise HTTPException(400, "a turn can't be blank: edit the text, or "
                                  "use Undo to remove the exchange")
     with _exclusive():                       # don't rewrite the transcript mid-turn
         if not eng.store.update_turn(i, text):

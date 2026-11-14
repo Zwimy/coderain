@@ -108,7 +108,7 @@ _MODEL_ERROR_TEXT = {
                "context budget in Settings, or branch to a shorter history.",
     "rate_limit": "The provider is rate-limiting this key. Wait a moment, then "
                   "retry.",
-    "busy": "A turn is already generating — wait for it to finish.",
+    "busy": "A turn is already generating. Wait for it to finish.",
     "unknown": "The model call failed.",
 }
 
@@ -145,7 +145,7 @@ def _exclusive():
     failing fast with 409 rather than blocking if a turn is in flight — so an
     edit/undo/delete never races a generation nor hangs on a stuck stream."""
     if not _gen_lock.acquire(blocking=False):
-        raise HTTPException(409, "a turn is generating — try again in a moment")
+        raise HTTPException(409, "a turn is generating, try again in a moment")
     try:
         yield
     finally:
