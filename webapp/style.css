@@ -369,6 +369,13 @@ details.howto p { color: var(--text); line-height: 1.55; }
 .turn-error p { margin: 6px 0 10px; color: var(--text); font-size: 14px; }
 .turn-error .row { gap: 8px; }
 .turn-error .row > * { flex: 0 0 auto; }
+/* a question asked inside the open dialog (discard changes, replan) */
+.modal-ask {
+  margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--player);
+  background: var(--panel2); border-radius: 8px;
+}
+.modal-ask p { margin: 0 0 10px; }
+.modal-ask .row { gap: 8px; justify-content: flex-end; }
 /* a turn the reader stopped: quiet, not an alert */
 .turn-note {
   border-left: 3px solid var(--dim); color: var(--dim); font-size: 13px;

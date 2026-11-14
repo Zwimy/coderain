@@ -5,7 +5,7 @@ import {canonModal} from "./canon.js";
 import {castModal} from "./cast.js";
 import {
   closeModal,
-  confirmModal,
+  inlineConfirm,
   modalCard,
   openModal,
   promptModal
@@ -96,9 +96,10 @@ export async function outlineModal(slug) {
     if (gen) gen.addEventListener("click", async () => {
       // Copy corrected with the behaviour: this no longer wipes completed
       // chapters, and no longer plans from the premise alone.
-      if (chs.length && !(await confirmModal("Replan the upcoming chapters?",
-        "Completed and current chapters are kept. Every planned chapter is "
-        + "replaced, one at a time, using the story so far.", "Replan"))) return;
+      // Asked inside the panel: a second dialog replaced the Chapter plan, and its Cancel closed the plan with it.
+      if (chs.length && !(await inlineConfirm(
+        "Replan the upcoming chapters? Completed and current chapters are kept. Every planned chapter is "
+        + "replaced, one at a time, using the story so far.", "Replan", "Cancel"))) return;
       await refetch(() => call("/generate", {method: "POST"}), gen);
     });
     const add = $("#ch-add");

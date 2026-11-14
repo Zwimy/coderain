@@ -30,6 +30,8 @@ Asserts, once it can run:
 14) the first-run picker offers only chat models (never an embedding model) and names the server it found
 15) a double click in the plan panel sends one request and locks the panel meanwhile (it deleted two chapters)
 16) a deliberate Stop leaves a quiet note, not a red error card
+17) Escape or the backdrop on a dialog with unsaved edits asks inside the dialog; Cancel and clean dialogs close at once
+18) the Replan question is asked inside the Chapter plan panel and Cancel leaves the panel open
 """
 import json
 import os
@@ -130,6 +132,8 @@ with sync_playwright() as p:
     def close_modal():
         """Escape depends on where focus is; the backdrop click does not."""
         page.evaluate("document.querySelector('#modal-back').click()")
+        if page.locator("#modal-ask [data-act=ok]").count():           # a dialog with edits asks first (D-056, item 4)
+            page.evaluate("document.querySelector('#modal-ask [data-act=ok]').click()")
         page.wait_for_selector("#modal-root.hidden", state="attached")
 
     def open_panel(btn_id, needle):
@@ -375,14 +379,18 @@ with sync_playwright() as p:
     # 12) Names for assistive technology: every visible field has one, and a dialog is named by its heading.
     for view in (f"#world/{scen}", f"#play/{slug}"):
         page.evaluate(f"location.hash = {view!r}")
-        page.wait_for_timeout(900)
-        unnamed = page.evaluate("""() => [...document.querySelectorAll(
+        # The names are added shortly AFTER a view paints, so wait for the condition instead of for a fixed time (a fixed
+        # wait failed once under the load of the whole suite).
+        unnamed_js = """() => [...document.querySelectorAll(
             '#view input:not([type=hidden]):not([type=checkbox]):not([type=radio]), #view textarea, #view select')]
           .filter(el => el.offsetParent !== null && !(el.labels && el.labels.length)
                         && !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby'))
-          .map(el => el.id || el.type)""")
-        if unnamed:
-            failures.append(f"{view}: fields with no accessible name: {unnamed[:6]}")
+          .map(el => el.id || el.type)"""
+        page.wait_for_function("() => document.querySelectorAll('#view input, #view textarea').length > 0", timeout=8000)
+        try:
+            page.wait_for_function(f"({unnamed_js})().length === 0", timeout=5000)
+        except Exception:  # noqa: BLE001 - report what is still unnamed
+            failures.append(f"{view}: fields with no accessible name: {page.evaluate(unnamed_js)[:6]}")
     page.click("#mem-btn")
     page.wait_for_selector("#modal-card h2, #modal-card h1", timeout=8000)
     named = page.evaluate("""() => { const c = document.querySelector('#modal-card');
@@ -534,6 +542,94 @@ with sync_playwright() as p:
     if note_role != "status":
         failures.append(f"the Stopped note is not a polite status (role={note_role!r})")
     print("16) a deliberate Stop leaves a quiet note, not an error")
+
+    # 17) Escape or a click on the backdrop must not throw away unsaved edits in silence. A dialog with nothing changed closes
+    #     at once; one with edits asks INSIDE the dialog; Escape on the question means keep editing; the Cancel button is not asked.
+    page.evaluate(f"location.hash = '#world/{scen}'")
+    page.wait_for_selector("[data-newpiece='characters.md']", timeout=8000)
+
+    def open_new_piece():
+        page.click("[data-newpiece='characters.md']")
+        page.wait_for_selector("#p-title", timeout=4000)
+
+    def backdrop():
+        page.evaluate("document.querySelector('#modal-back').click()")
+
+    open_new_piece()
+    backdrop()
+    try:
+        page.wait_for_selector("#modal-root.hidden", state="attached", timeout=3000)
+    except Exception:  # noqa: BLE001 - report it, don't abort the run
+        failures.append("a dialog with nothing changed did not close on a backdrop click")
+    open_new_piece()
+    page.fill("#p-title", "Unsaved Knight")
+    backdrop()
+    try:
+        page.wait_for_selector("#modal-ask", timeout=3000)
+    except Exception:  # noqa: BLE001
+        failures.append("a backdrop click on a dialog with unsaved edits did not ask")
+    if page.evaluate("document.querySelector('#modal-root').classList.contains('hidden')") \
+            or page.input_value("#p-title") != "Unsaved Knight":
+        failures.append("the dialog closed, or lost its text, before the question was answered")
+    page.keyboard.press("Escape")                                     # Escape on the question: keep editing
+    page.wait_for_timeout(200)
+    if page.locator("#modal-ask").count() or page.input_value("#p-title") != "Unsaved Knight":
+        failures.append("Escape on the discard question did not mean 'keep editing'")
+    page.keyboard.press("Escape")                                     # Escape on the dialog asks again
+    page.wait_for_selector("#modal-ask", timeout=3000)
+    page.click("#modal-ask [data-act=ok]")
+    page.wait_for_selector("#modal-root.hidden", state="attached", timeout=3000)
+    open_new_piece()
+    page.fill("#p-title", "Cancelled")
+    page.click("#p-cancel")                                           # the Cancel button is the reader's own choice
+    try:
+        page.wait_for_selector("#modal-root.hidden", state="attached", timeout=3000)
+    except Exception:  # noqa: BLE001
+        failures.append("the Cancel button was asked 'discard your changes?'")
+    # a search box is a filter, not an edit
+    open_new_piece()
+    page.evaluate("""() => { const i = document.createElement('input'); i.type = 'search'; i.id = 'zz-filter';
+      document.querySelector('#modal-card').appendChild(i); i.value = 'abc'; i.dispatchEvent(new Event('input', {bubbles: true})); }""")
+    backdrop()
+    try:
+        page.wait_for_selector("#modal-root.hidden", state="attached", timeout=3000)
+    except Exception:  # noqa: BLE001
+        failures.append("typing in a search box counted as an unsaved edit")
+    # a small question (a prompt) is never asked 'discard?'
+    page.wait_for_selector("#b-addtype", timeout=4000)
+    page.click("#b-addtype")
+    page.wait_for_selector("#pm-v", timeout=4000)
+    page.fill("#pm-v", "half a name")
+    page.keyboard.press("Escape")
+    try:
+        page.wait_for_selector("#modal-root.hidden", state="attached", timeout=3000)
+    except Exception:  # noqa: BLE001
+        failures.append("Escape on a small prompt was asked 'discard your changes?'")
+    print("17) Escape or the backdrop on a dialog with unsaved edits asks inside the dialog; Cancel and clean dialogs close")
+
+    # 18) Replan asks INSIDE the Chapter plan panel: its question used to be a second dialog that replaced the panel, so
+    #     Cancel closed the whole plan.
+    page.evaluate(f"location.hash = '#library'")
+    page.wait_for_timeout(300)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#plan-btn", timeout=8000)
+    page.click("#plan-btn")
+    page.wait_for_selector("#ch-gen", timeout=8000)
+    asked = []
+    page.route("**/api/saves/*/outline/generate", lambda route: (asked.append(1), route.continue_()))
+    page.click("#ch-gen")
+    page.wait_for_selector("#modal-ask", timeout=3000)
+    page.click("#modal-ask [data-act=keep]")
+    page.wait_for_timeout(300)
+    still_plan = page.locator("#ch-list").count() > 0 and not page.evaluate(
+        "document.querySelector('#modal-root').classList.contains('hidden')")
+    page.unroute("**/api/saves/*/outline/generate")
+    if not still_plan:
+        failures.append("Cancel on the Replan question closed or replaced the Chapter plan panel")
+    if asked:
+        failures.append("cancelling Replan still asked the server to replan")
+    close_modal()
+    print("18) the Replan question is asked inside the plan panel and Cancel leaves it open")
 
     browser.close()
 
