@@ -107,10 +107,130 @@ def test_incomplete_profile_falls_back_instead_of_killing_the_server():
     print(f"incomplete profile -> fell back safely (reason {r['reason']})")
 
 
+class _Resp:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._body
+
+
+def _serve(bodies):
+    """Stub the probe: answer per URL from `bodies`, remember every URL asked, refuse anything else."""
+    asked = []
+
+    def fake_get(url, **k):
+        asked.append(url)
+        if url not in bodies:
+            raise server.httpx.ConnectError(f"nothing listens at {url}")
+        return _Resp(bodies[url])
+
+    real = server.httpx.get
+    server.httpx.get = fake_get
+    return asked, lambda: setattr(server.httpx, "get", real)
+
+
+def _local(base_url, model="qwen3:4b"):
+    _reload({"active_profile": "local",
+             "profiles": {"local": {"base_url": base_url, "model": model, "api_key_env": "OLLAMA_API_KEY"}}})
+
+
+OLLAMA_URL = "http://localhost:11434/api/tags"
+
+
+def test_embedding_models_are_never_the_storyteller():
+    """The first-run picker listed nomic-embed-text beside the chat models. (When nothing names a model the probe also used
+    the first name in the list, which could be an embedding model: it takes the first chat model now.)"""
+    from srv.settings import is_embedding
+    for n in ("nomic-embed-text:latest", "mxbai-embed-large", "bge-m3:567m", "all-minilm:l6", "text-embedding-3-small",
+              "snowflake-arctic-embed2", "hf.co/x/Some-Embedding-GGUF:Q8_0"):
+        assert is_embedding(n), n
+    for n in ("llama3.1:8b", "gemma3:4b", "qwen3:4b", "deepseek-r1:8b", "hf.co/mradermacher/Qwen3.5-9B-heretic-GGUF:Q4_K_M",
+              "", None):
+        assert not is_embedding(n), n
+    _local("http://localhost:11434/v1", model="llama3.1:8b")
+    asked, undo = _serve({OLLAMA_URL: {"models": [{"name": "nomic-embed-text:latest", "size": 3e8},
+                                                  {"name": "llama3.1:8b", "size": 4.9e9}]}})
+    try:
+        r = client.get("/api/ready").json()
+        listed = client.get("/api/models/local").json()
+    finally:
+        undo()
+    assert r["ok"] is True and r["model"] == "llama3.1:8b", r
+    assert {m["name"]: m["embedding"] for m in listed["installed"]} == {"nomic-embed-text:latest": True, "llama3.1:8b": False}
+    # nothing names a model (the config loader normally fills one in, so set it empty directly): the probe's own default
+    # must be the first CHAT model, not the first name in the list
+    server.core._cfg.raw["profiles"]["local"]["model"] = ""
+    asked, undo = _serve({OLLAMA_URL: {"models": [{"name": "nomic-embed-text:latest", "size": 3e8},
+                                                  {"name": "llama3.1:8b", "size": 4.9e9}]}})
+    try:
+        unnamed = client.get("/api/ready").json()
+    finally:
+        undo()
+    assert unnamed["ok"] is True and unnamed["model"] == "llama3.1:8b", ("an embedding model became the default", unnamed)
+    asked, undo = _serve({OLLAMA_URL: {"models": [{"name": "nomic-embed-text:latest", "size": 3e8}]}})
+    try:
+        only = client.get("/api/ready").json()
+    finally:
+        undo()
+    assert only["ok"] is False and only["reason"] == "no_chat_models" and "embedding" in only["detail"], only
+    print("an embedding model is flagged, never the default, and a server with only embeddings is not ready")
+
+
+def test_the_profiles_own_address_is_probed():
+    """The probe and the model list asked a fixed http://localhost:11434, so a user on LM Studio, llama.cpp or an Ollama
+    on another machine was told Ollama was not running, however well their server worked."""
+    lm = "http://127.0.0.1:1234/v1/models"
+    _local("http://127.0.0.1:1234/v1", model="qwen2.5-7b-instruct")
+    asked, undo = _serve({lm: {"data": [{"id": "qwen2.5-7b-instruct"}, {"id": "text-embedding-nomic-embed-text-v1.5"}]}})
+    try:
+        r = client.get("/api/ready").json()
+        listed = client.get("/api/models/local").json()
+    finally:
+        undo()
+    assert r["ok"] is True and r["model"] == "qwen2.5-7b-instruct" and r["server"] == "Your model server", r
+    assert asked and set(asked) == {lm}, ("an OpenAI-compatible server was asked something else", asked)
+    assert listed["server"] == "Your model server" and not listed["error"], listed
+    assert [m["name"] for m in listed["installed"] if not m["embedding"]] == ["qwen2.5-7b-instruct"]
+    # an Ollama on another machine: still Ollama's own API, at that host
+    _local("http://192.168.1.5:11434/v1", model="gemma3:4b")
+    remote = "http://192.168.1.5:11434/api/tags"
+    asked, undo = _serve({remote: {"models": [{"name": "gemma3:4b", "size": 3.3e9}]}})
+    try:
+        r = client.get("/api/ready").json()
+    finally:
+        undo()
+    assert r["ok"] is True and r["server"] == "Ollama" and asked == [remote], (r, asked)
+    # the default profile still asks the local Ollama
+    _local("http://localhost:11434/v1", model="gemma3:4b")
+    asked, undo = _serve({OLLAMA_URL: {"models": [{"name": "gemma3:4b", "size": 3.3e9}]}})
+    try:
+        client.get("/api/ready")
+    finally:
+        undo()
+    assert asked == [OLLAMA_URL], asked
+    # an unreachable server names itself in the message instead of blaming Ollama
+    _local("http://127.0.0.1:1234/v1")
+    asked, undo = _serve({})
+    try:
+        r = client.get("/api/ready").json()
+        listed = client.get("/api/models/local").json()
+    finally:
+        undo()
+    assert r["ok"] is False and "Your model server" in r["detail"] and "Ollama" not in r["detail"], r
+    assert "Your model server" in listed["error"], listed
+    print("the local profile's own address is asked; an unreachable server names itself, not Ollama")
+
+
 for fn in (test_local_without_ollama_is_not_ready,
            test_hosted_without_key_is_not_ready,
            test_hosted_with_key_and_model_is_ready,
-           test_incomplete_profile_falls_back_instead_of_killing_the_server):
+           test_incomplete_profile_falls_back_instead_of_killing_the_server,
+           test_embedding_models_are_never_the_storyteller,
+           test_the_profiles_own_address_is_probed):
     fn()
 shutil.rmtree(HOME, ignore_errors=True)
 print("\nREADY PROBE TESTS PASSED")

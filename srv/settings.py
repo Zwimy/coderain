@@ -3,6 +3,8 @@ semantic-recall checks."""
 from __future__ import annotations
 
 import copy
+from urllib.parse import urlparse
+
 import httpx
 from fastapi import APIRouter
 from fastapi import HTTPException
@@ -17,7 +19,6 @@ from coderain.llm import LLM
 
 from . import core
 from .core import HOSTED_KEY_ENV
-from .core import OLLAMA_TAGS
 from .core import _clean_quick_actions
 from .core import _reload_config
 
@@ -71,6 +72,47 @@ def retrieval_check():
                          if revived else "")}
 
 
+_EMBED_STEMS = {"all-minilm", "bge-m3", "bge-large", "paraphrase-multilingual", "minilm"}
+
+
+def is_embedding(name) -> bool:
+    """An embedding model cannot tell a story, so it is never offered as the storyteller (the first-run picker listed
+    nomic-embed-text beside the chat models, and the readiness probe could pick it as the default)."""
+    n = str(name or "").lower()
+    return "embed" in n or n.split(":")[0].split("/")[-1] in _EMBED_STEMS
+
+
+def _local_server() -> tuple[str, str, bool]:
+    """(the URL that lists models, what to call the server, whether it is Ollama's own API) for the LOCAL profile's own
+    address. It used to be the fixed http://localhost:11434, so a user on LM Studio, llama.cpp or an Ollama on another
+    machine was told "Ollama isn't running" however well their server worked. Ollama (port 11434, on any host) is asked its
+    native /api/tags, which also reports sizes; any other OpenAI-compatible server is asked GET <base_url>/models."""
+    prof = (core._cfg.raw.get("profiles") or {}).get("local") or {}
+    base = str(prof.get("base_url", "")).strip() or "http://localhost:11434/v1"
+    u = urlparse(base if "//" in base else "http://" + base)
+    host = u.hostname or "localhost"
+    if (u.port or 11434) == 11434:
+        shown = f"[{host}]" if ":" in host else host
+        return f"{u.scheme or 'http'}://{shown}:11434/api/tags", "Ollama", True
+    return base.rstrip("/") + "/models", "Your model server", False
+
+
+def _list_local_models() -> list[dict]:
+    """The local server's models as {name, size, embedding}; raises when it cannot be reached."""
+    url, _label, native = _local_server()
+    r = httpx.get(url, timeout=3)
+    r.raise_for_status()
+    body = r.json()
+    if native:
+        found = [{"name": m.get("name", ""),
+                  "size": f"{round((m.get('size', 0) or 0) / 1e9, 1)} GB"} for m in body.get("models", [])]
+    else:
+        found = [{"name": str(m.get("id", "")), "size": ""} for m in body.get("data", []) if isinstance(m, dict)]
+    for m in found:
+        m["embedding"] = is_embedding(m["name"])
+    return found
+
+
 @router.get("/api/ready")
 def ready():
     """Is there a model this install can actually talk to?
@@ -98,25 +140,29 @@ def ready():
                     "detail": "No hosted model chosen yet."}
         return {"ok": True, "mode": mode, "model": model}
 
+    _url, label, _native = _local_server()
     try:
-        r = httpx.get(OLLAMA_TAGS, timeout=3)
-        r.raise_for_status()
-        names = [m.get("name", "") for m in r.json().get("models", [])]
+        names = [m["name"] for m in _list_local_models()]
     except Exception:                                   # noqa: BLE001
-        return {"ok": False, "mode": mode, "reason": "no_ollama",
-                "detail": "Ollama isn't running (or isn't installed)."}
+        return {"ok": False, "mode": mode, "reason": "no_ollama", "server": label,
+                "detail": f"{label} isn't running (or isn't installed)."}
+    chat = [n for n in names if not is_embedding(n)]
     if not names:
-        return {"ok": False, "mode": mode, "reason": "no_models",
-                "detail": "Ollama is running but has no models pulled yet."}
+        return {"ok": False, "mode": mode, "reason": "no_models", "server": label,
+                "detail": f"{label} is running but has no models pulled yet."}
+    if not chat:
+        return {"ok": False, "mode": mode, "reason": "no_chat_models", "server": label,
+                "detail": f"{label} has only embedding models, which cannot tell a story. Pull a chat model "
+                          "(for example gemma3:4b)."}
     want = str((core._cfg.raw.get("profiles") or {}).get("local", {})
                .get("model", "")).strip()
     # Ollama reports "qwen3:4b"; a config may say "qwen3" — match on the stem.
     if want and not any(n == want or n.split(":")[0] == want.split(":")[0]
                         for n in names):
-        return {"ok": False, "mode": mode, "reason": "model_missing",
+        return {"ok": False, "mode": mode, "reason": "model_missing", "server": label,
                 "detail": f"The selected model ({want}) isn't installed.",
                 "installed": names}
-    return {"ok": True, "mode": mode, "model": want or names[0],
+    return {"ok": True, "mode": mode, "model": want or chat[0], "server": label,
             "installed": names}
 
 
@@ -126,16 +172,12 @@ def local_models():
     static suggestions as a fallback when it's not running)."""
     installed: list[dict] = []
     error = ""
+    _url, label, _native = _local_server()
     try:
-        r = httpx.get(OLLAMA_TAGS, timeout=3)
-        r.raise_for_status()
-        for m in r.json().get("models", []):
-            size_gb = round((m.get("size", 0) or 0) / 1e9, 1)
-            installed.append({"name": m.get("name", ""),
-                              "size": f"{size_gb} GB"})
+        installed = _list_local_models()
     except Exception as e:  # noqa: BLE001
-        error = f"Ollama not reachable ({e.__class__.__name__})"
-    return {"installed": installed, "error": error,
+        error = f"{label} not reachable ({e.__class__.__name__})"
+    return {"installed": installed, "error": error, "server": label,
             "howto": models_mod.LOCAL_HOWTO,
             "suggestions": [{"name": n, "kind": kind, "size": size,
                              "note": note}

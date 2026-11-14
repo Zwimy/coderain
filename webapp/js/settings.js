@@ -10,7 +10,8 @@ export async function renderSettings() {
     api("/api/settings"), api("/api/models/local"), api("/api/models/hosted"),
     api("/api/profiles").catch(() => ({profiles: [], active: ""})),
   ]);
-  const names = local.installed.map(m => m.name);
+  // The story-model dropdowns list models that can tell a story; embedding models are for semantic recall only.
+  const names = local.installed.filter(m => !m.embedding).map(m => m.name);
   const opt = (list, sel) => list.map(n =>
     `<option ${n === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
   const localOpts = sel => opt(

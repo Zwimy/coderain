@@ -8,6 +8,9 @@ export async function renderWelcome(state) {
   const local = await api("/api/models/local").catch(() => ({installed: [], howto: []}));
   const running = !local.error;
   const presets = hosted.presets || [];
+  // Only a model that can tell a story is offered: an embedding model (nomic-embed-text) used to sit in this list.
+  const chat = (local.installed || []).filter(m => !m.embedding);
+  const server = local.server || "Ollama";
   view.innerHTML = `<div class="page welcome">
     <h1>Let's get you a storyteller</h1>
     <p class="muted">Coderain runs on <b>your</b> model — nothing is sent to us,
@@ -18,16 +21,18 @@ export async function renderWelcome(state) {
         <p class="muted">Free, private, works offline. Best if you have a decent GPU.</p>
         <div class="status ${running ? "ok" : "bad"}">
           ${running
-            ? (local.installed || []).length
-              ? `Ollama is running — ${(local.installed || []).length} model(s) installed`
-              : "Ollama is running, but no models are pulled yet"
-            : "Ollama isn't running"}
+            ? chat.length
+              ? `${server} is running: ${chat.length} model(s) installed`
+              : (local.installed || []).length
+                ? `${server} is running, but it only has embedding models, which cannot tell a story`
+                : `${server} is running, but no models are pulled yet`
+            : `${server} isn't running`}
         </div>
-        ${running && (local.installed || []).length ? `
+        ${running && chat.length ? `
           <label>Use this model</label>
           <select id="w-local-model">
-            ${(local.installed || []).map(m =>
-              `<option value="${esc(m.name)}">${esc(m.name)} — ${esc(m.size)}</option>`).join("")}
+            ${chat.map(m =>
+              `<option value="${esc(m.name)}">${esc(m.name)}${m.size ? `: ${esc(m.size)}` : ""}</option>`).join("")}
           </select>
           <div class="row" style="margin-top:12px">
             <button class="primary" id="w-use-local">Use this and start</button>

@@ -27,7 +27,9 @@ Asserts, once it can run:
 11) the skip link moves focus and stays on the page (it used to render the Library)
 12) every visible field and every dialog has an accessible name
 13) at 375px a long unbroken word wraps, the story title is readable and the stand-alone buttons are at least 40px tall
+14) the first-run picker offers only chat models (never an embedding model) and names the server it found
 """
+import json
 import os
 import shutil
 import socket
@@ -416,6 +418,45 @@ with sync_playwright() as p:
         failures.append(f"controls under 40px tall at 375px: {m['small']}")
     page.set_viewport_size({"width": 1280, "height": 720})
     print("13) at 375px a long word wraps, the title is readable and the buttons are tappable")
+
+    # 14) First run: an embedding model cannot tell a story, so the picker must not offer it, and a server that is not
+    #     Ollama must be named as itself. Rendered through the module with the model list stubbed.
+    def render_welcome(models, server="Ollama"):
+        body = json.dumps({"installed": models, "error": "", "server": server, "howto": ["step"], "suggestions": []})
+        page.route("**/api/models/local", lambda route: route.fulfill(status=200, content_type="application/json", body=body))
+        page.evaluate("import('/js/welcome.js').then(m => m.renderWelcome({ok: false, reason: 'no_chat_models'}))")
+        page.wait_for_selector(".welcome", timeout=6000)
+        page.wait_for_timeout(300)
+        got = page.evaluate("""() => ({options: [...document.querySelectorAll('#w-local-model option')].map(o => o.value),
+                                      status: (document.querySelector('.welcome .status') || {}).textContent || ''})""")
+        page.unroute("**/api/models/local")
+        return got
+
+    embed = {"name": "nomic-embed-text:latest", "size": "0.3 GB", "embedding": True}
+    chat = {"name": "gemma3:4b", "size": "3.3 GB", "embedding": False}
+    got = render_welcome([embed, chat])
+    if got["options"] != ["gemma3:4b"]:
+        failures.append(f"the first-run picker offers {got['options']}, not only chat models")
+    if "1 model(s)" not in got["status"]:
+        failures.append(f"the first-run status counts embedding models: {got['status']!r}")
+    got = render_welcome([embed])
+    if got["options"] or "embedding" not in got["status"]:
+        failures.append(f"only an embedding model installed: picker {got['options']}, status {got['status']!r}")
+    got = render_welcome([{"name": "qwen2.5-7b-instruct", "size": "", "embedding": False}], server="Your model server")
+    if "Your model server" not in got["status"] or "Ollama" in got["status"]:
+        failures.append(f"a non-Ollama server is not named as itself: {got['status']!r}")
+    # Settings: the story-model dropdowns list chat models only (the embedding model is for semantic recall, a text field)
+    body = json.dumps({"installed": [embed, chat], "error": "", "server": "Ollama", "howto": [], "suggestions": []})
+    page.route("**/api/models/local", lambda route: route.fulfill(status=200, content_type="application/json", body=body))
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_function("(document.querySelector('#view h1, #view h2') || {}).textContent.startsWith('Settings')", timeout=8000)
+    in_dropdowns = page.evaluate("[...document.querySelectorAll('#view select option')].map(o => o.textContent.trim())")
+    page.unroute("**/api/models/local")
+    if any("embed" in o for o in in_dropdowns) or "gemma3:4b" not in in_dropdowns:
+        failures.append(f"the Settings story-model dropdowns list {sorted(set(o for o in in_dropdowns if 'gemma' in o or 'embed' in o))}")
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=6000)
+    print("14) the first-run picker offers only chat models and names the server it found")
 
     browser.close()
 
