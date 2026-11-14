@@ -32,6 +32,7 @@ Asserts, once it can run:
 16) a deliberate Stop leaves a quiet note, not a red error card
 17) Escape or the backdrop on a dialog with unsaved edits asks inside the dialog; Cancel and clean dialogs close at once
 18) the Replan question is asked inside the Chapter plan panel and Cancel leaves the panel open
+19) coming back to a story that is generating offers Stop and takes over when the turn ends; another story explains why Send is off
 """
 import json
 import os
@@ -630,6 +631,58 @@ with sync_playwright() as p:
         failures.append("cancelling Replan still asked the server to replan")
     close_modal()
     print("18) the Replan question is asked inside the plan panel and Cancel leaves it open")
+
+    # 19) Leave Play while a turn is generating and come back. The busy flag is app-wide but Stop, the aborter and the
+    #     transcript belong to one view, so the new view used to know nothing: Send did nothing, there was no Stop, and the
+    #     finished turn painted into a view that was gone. It says so, offers Stop, and repaints when the turn ends. In
+    #     ANOTHER story it explains why Send is off and offers no Stop (Stop would cancel the story it shows).
+    other = c.post("/api/saves", json={"title": "Other Story", "mode": "simple", "premise": "A second story."}).json()["slug"]
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_timeout(300)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    held_run = []
+    page.route("**/api/saves/*/turn", lambda route: held_run.append(route))
+
+    def end_run(route):
+        route.fulfill(status=200, content_type="application/json", body="{}")
+        for h in held_run:
+            h.fulfill(status=200, content_type="text/event-stream",
+                      body='data: {"t": "error", "code": "aborted", "text": "You stopped this turn."}\n\n')
+        held_run.clear()
+
+    page.route("**/api/saves/*/cancel", end_run)
+    page.fill("#action", "I wait for the ferry.")
+    page.keyboard.press("Enter")
+    page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    state_js = """() => ({stopVisible: !document.querySelector('#stop').classList.contains('hidden'),
+      stopEnabled: !document.querySelector('#stop').disabled, sendOff: document.querySelector('#send').disabled,
+      stage: document.querySelector('#stageline').textContent})"""
+    page.evaluate(f"location.hash = '#play/{other}'")                 # another story while the turn runs
+    page.wait_for_function("(document.querySelector('#play-head .title') || {}).textContent === 'Other Story'", timeout=8000)
+    st = page.evaluate(state_js)
+    if st["stopVisible"] or not st["sendOff"] or "another story" not in st["stage"]:
+        failures.append(f"another story, a turn running elsewhere: {st}")
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_timeout(300)
+    page.evaluate(f"location.hash = '#play/{slug}'")                  # back to the story that is generating
+    page.wait_for_function("(document.querySelector('#play-head .title') || {}).textContent === 'Smoke'", timeout=8000)
+    st = page.evaluate(state_js)
+    if not (st["stopVisible"] and st["stopEnabled"] and st["sendOff"] and "Still generating" in st["stage"]):
+        failures.append(f"coming back to a story that is generating: {st}")
+    page.click("#stop")
+    try:
+        page.wait_for_function(
+            "document.querySelector('#stop').classList.contains('hidden') && !document.querySelector('#send').disabled",
+            timeout=8000)
+    except Exception:  # noqa: BLE001 - report it, don't abort the run
+        failures.append("the re-entered view never took over when the turn ended: " + repr(page.evaluate(state_js)))
+    toast_text = page.evaluate("(document.querySelector('#toast') || {}).textContent || ''")
+    if "discarded" in toast_text:
+        failures.append(f"the finished turn was reported as discarded: {toast_text!r}")
+    page.unroute("**/api/saves/*/turn")
+    page.unroute("**/api/saves/*/cancel")
+    print("19) coming back to a story that is generating offers Stop, and the view takes over when it ends")
 
     browser.close()
 

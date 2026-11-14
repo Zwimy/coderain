@@ -13,6 +13,11 @@ import {
 
 /* ---------- play ---------- */
 export let busy = false;
+// Which story a run() is generating for, and the views opened while it runs (they repaint when it ends). The flag above is
+// app-wide but the Stop button, the aborter and the transcript belong to ONE view: leave Play mid-turn and come back, and
+// Send did nothing and there was no Stop, because the new view knew nothing of the run the old one had started.
+let runningSlug = null;
+const runEndHooks = new Set();
 
 export let _playKeys = null;          // the play view's keydown handler, so it can be swapped
 
@@ -612,6 +617,7 @@ export async function renderPlay(slug) {
   const run = async (path, body, playerText, ownsRepaint) => {
     if (busy) return;
     setBusy(true);
+    runningSlug = slug;
     evbar.innerHTML = "";
     transcript.querySelectorAll(".turn-error").forEach(b => b.remove());
     transcript.querySelectorAll(".swipebar").forEach(b => b.remove());
@@ -738,7 +744,9 @@ export async function renderPlay(slug) {
     }
     swipe = {count: 1, idx: 0};                // fresh turn resets alternates
     renderSwipeBar();
+    runningSlug = null;
     setBusy(false);
+    for (const hook of [...runEndHooks]) { runEndHooks.delete(hook); hook(); }   // views opened while this ran
     return !failed;                 // callers must not repaint over the error card
   };
 
@@ -755,6 +763,24 @@ export async function renderPlay(slug) {
   s.turns.forEach(t => addTurn(t.role, t.text));
   setSheet(s.sheet || []);
   renderSwipeBar();
+
+  // A turn started in an earlier visit is still generating. Say so, keep this view's controls off until it ends, offer Stop
+  // when it is THIS story's turn (Stop cancels the story this view shows), and repaint from the store when it is over: the
+  // run that finishes paints into a view that is gone.
+  if (busy) {
+    const mine = runningSlug === slug;
+    setBusy(true);
+    stage.textContent = mine ? "Still generating the turn you started…"
+      : "A turn in another story is still generating…";
+    if (mine) { $("#stop").classList.remove("hidden"); $("#stop").disabled = false; }
+    runEndHooks.add(async () => {
+      if (!document.body.contains(transcript)) return;
+      stage.textContent = "";
+      $("#stop")?.classList.add("hidden");
+      setBusy(false);
+      if (mine) await resync();
+    });
+  }
 
   $("#suggest").addEventListener("click", async () => {
     if (busy) return;
