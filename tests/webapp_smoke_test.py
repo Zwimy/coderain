@@ -28,6 +28,8 @@ Asserts, once it can run:
 12) every visible field and every dialog has an accessible name
 13) at 375px a long unbroken word wraps, the story title is readable and the stand-alone buttons are at least 40px tall
 14) the first-run picker offers only chat models (never an embedding model) and names the server it found
+15) a double click in the plan panel sends one request and locks the panel meanwhile (it deleted two chapters)
+16) a deliberate Stop leaves a quiet note, not a red error card
 """
 import json
 import os
@@ -457,6 +459,81 @@ with sync_playwright() as p:
     page.evaluate(f"location.hash = '#play/{slug}'")
     page.wait_for_selector("#action", timeout=6000)
     print("14) the first-run picker offers only chat models and names the server it found")
+
+    # 15) The Chapter plan panel takes one request at a time. Its rows are addressed by position, so a double click on the
+    #     bin acted on the list as it WAS and deleted two chapters (D-013).
+    for title in ("Chapter A", "Chapter B", "Chapter C"):
+        c.post(f"/api/saves/{slug}/outline", json={"title": title, "goal": "go"})
+    page.evaluate(f"location.hash = '#library'")
+    page.wait_for_timeout(300)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#plan-btn", timeout=8000)
+    deletes, held_deletes = [], []
+
+    def hold_delete(route):
+        if route.request.method == "DELETE":
+            deletes.append(route.request.url)
+            held_deletes.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/saves/*/outline/*", hold_delete)
+    page.click("#plan-btn")
+    page.wait_for_selector("[data-op='del']", timeout=8000)
+    rows_before = page.locator("#ch-list .ch-row").count()
+    page.locator("[data-op='del']").first.dblclick()
+    page.wait_for_timeout(500)
+    sent = len(deletes)
+    locked = page.evaluate("[...document.querySelectorAll('#ch-list button')].every(b => b.disabled)")
+    for r in held_deletes:
+        r.continue_()
+    page.wait_for_function(f"document.querySelectorAll('#ch-list .ch-row').length === {rows_before - 1}", timeout=8000)
+    page.unroute("**/api/saves/*/outline/*")
+    if sent != 1:
+        failures.append(f"a double click on the bin sent {sent} delete requests")
+    if not locked:
+        failures.append("the plan panel's buttons stayed enabled while a request was in flight")
+    # a request that FAILS must give the panel back: the buttons were locked for it
+    page.route("**/api/saves/*/outline/*", lambda route: route.fulfill(
+        status=409, content_type="application/json", body='{"detail": "refused by the test"}')
+        if route.request.method == "DELETE" else route.continue_())
+    page.locator("[data-op='del']").first.click()
+    page.wait_for_function("(document.querySelector('.toast, #toast') || {}).textContent", timeout=6000)
+    page.wait_for_timeout(300)
+    still_locked = page.evaluate("[...document.querySelectorAll('#ch-list button')].filter(b => b.disabled).length")
+    page.unroute("**/api/saves/*/outline/*")
+    if still_locked:
+        failures.append(f"{still_locked} plan buttons stayed disabled after a failed request")
+    close_modal()
+    print("15) a double click in the plan panel sends one request and locks the panel meanwhile")
+
+    # 16) A deliberate Stop is not an error: no red alert card, no "Check settings" button.
+    page.wait_for_selector("#action", timeout=8000)
+    held_turn = []
+    page.route("**/api/saves/*/turn", lambda route: held_turn.append(route))
+
+    def answer_cancel(route):
+        route.fulfill(status=200, content_type="application/json", body="{}")
+        for h in held_turn:
+            h.fulfill(status=200, content_type="text/event-stream",
+                      body='data: {"t": "error", "code": "aborted", "text": "You stopped this turn."}\n\n')
+
+    page.route("**/api/saves/*/cancel", answer_cancel)
+    page.fill("#action", "I wait by the gate.")
+    page.keyboard.press("Enter")
+    page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    page.click("#stop")
+    page.wait_for_selector(".turn-note", timeout=8000)
+    alerts = page.locator("#transcript .turn-error").count()
+    settings_btns = page.locator("#transcript button", has_text="Check settings").count()
+    note_role = page.evaluate("document.querySelector('.turn-note').getAttribute('role')")
+    page.unroute("**/api/saves/*/turn")
+    page.unroute("**/api/saves/*/cancel")
+    if alerts or settings_btns:
+        failures.append(f"a deliberate Stop shows an error card ({alerts} alert, {settings_btns} 'Check settings')")
+    if note_role != "status":
+        failures.append(f"the Stopped note is not a polite status (role={note_role!r})")
+    print("16) a deliberate Stop leaves a quiet note, not an error")
 
     browser.close()
 

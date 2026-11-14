@@ -369,6 +369,11 @@ details.howto p { color: var(--text); line-height: 1.55; }
 .turn-error p { margin: 6px 0 10px; color: var(--text); font-size: 14px; }
 .turn-error .row { gap: 8px; }
 .turn-error .row > * { flex: 0 0 auto; }
+/* a turn the reader stopped: quiet, not an alert */
+.turn-note {
+  border-left: 3px solid var(--dim); color: var(--dim); font-size: 13px;
+  padding: 4px 12px; margin: 12px 0;
+}
 
 /* The edit pencil was opacity:0 until hover — invisible on touch, where there
    is no hover at all. Keep it faint but always present. */

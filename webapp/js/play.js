@@ -74,15 +74,21 @@ export async function outlineModal(slug) {
         <button id="ch-close">Close</button>
       </div>`);
 
+    // ONE request at a time. The rows are addressed by position, so a second click while the first is still in flight
+    // acted on the list as it WAS: a double click on the bin deleted two chapters (D-013), and a double click on an arrow
+    // moved a chapter twice. Every button in the list is disabled while the request works.
     const refetch = async (fn, busyBtn) => {
+      const locked = [...modalCard.querySelectorAll("#ch-list button, #ch-add, #ch-gen")].filter(b => !b.disabled);
+      locked.forEach(b => { b.disabled = true; });
       // Generating chapters calls the model (seconds), so show the triggering
       // button as working rather than leaving the panel frozen and silent.
-      if (busyBtn) { busyBtn.disabled = true; busyBtn.dataset.busy = busyBtn.textContent;
-                     busyBtn.textContent = "Planning…"; }
+      if (busyBtn) { busyBtn.dataset.busy = busyBtn.textContent; busyBtn.textContent = "Planning…"; }
       const d = await guard(fn, "Couldn't update the plan");
       if (d) render(d);                 // re-render from the server's truth
-      else if (busyBtn) { busyBtn.disabled = false;
-                          busyBtn.textContent = busyBtn.dataset.busy; }
+      else {
+        locked.forEach(b => { b.disabled = false; });
+        if (busyBtn) busyBtn.textContent = busyBtn.dataset.busy;
+      }
     };
     $("#ch-close").addEventListener("click", closeModal);
     $("#ch-cast").addEventListener("click", () => castModal(slug, () => outlineModal(slug)));
@@ -559,6 +565,17 @@ export async function renderPlay(slug) {
   /* An error the user can actually see and act on, in the transcript where the
      turn failed — the old 11.5px stageline was below the fold and had no retry. */
   const showTurnError = (msg, retryFn) => {
+    if (msg.code === "aborted") {
+      // The reader pressed Stop: that is what they asked for, not a failure. It used to be the red alert card with a
+      // "Check settings" button.
+      const note = document.createElement("div");
+      note.className = "turn-note";
+      note.setAttribute("role", "status");
+      note.textContent = "Stopped.";
+      transcript.appendChild(note);
+      transcript.scrollTop = transcript.scrollHeight;
+      return;
+    }
     const box = document.createElement("div");
     box.className = "turn-error";
     box.setAttribute("role", "alert");
