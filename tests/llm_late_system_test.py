@@ -11,8 +11,8 @@ from the first turn. The fix folds a trailing run of system messages into the la
     after an assistant turn they become a user turn of their own; everything else (system messages before the player's turn or in
     the middle, a request that is only system messages, a user turn that is not text) is left alone; the input is not modified
  2) is_local: loopback hosts with or without a port are local, hosted providers and garbage are not
- 3) needs_fold: a llama-family model on a server on this machine, and nothing else (gemma3:4b was clean AND looped more in a fate-on
-    soak when its note rode in the user turn: 103 recurring 8-word runs against 9, 11 turns sharing an opening against 0)
+ 3) needs_fold: a llama-family model on a server on this machine, and nothing else (gemma3:4b was clean in every shape and gains
+    nothing from the fold; every other model keeps the request as it always was)
  4) the client folds by that rule, and generation.fold_late_system true or false overrides it either way
  5) the folding applies to the streaming path and to the tool-calling path
 """

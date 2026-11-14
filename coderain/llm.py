@@ -36,11 +36,11 @@ def needs_fold(base_url, model) -> bool:
     """Does this model need fold_late_system by default? A llama-family model on a server on this machine, and nothing else.
 
     Measured, not assumed (D-054): llama3.1:8b through Ollama begins every reply with the word "assistant" when a system
-    message follows the user's turn (6 of 6), gemma3:4b does not (0 of 6). A first version folded for EVERY local model, and
-    a fate-on soak on gemma3:4b then looped in its last third (103 eight-word runs recurring in three or more turns, against
-    9 without the fold and 10 with fate off; 11 turns shared an opening with another, against 0): a note carried in the user
-    turn was copied back. So the fold is for the model that needs it. qwen3, deepseek-r1 and others were not tested for the
-    fault and keep the request as it was; `generation.fold_late_system: true` turns it on for one that shows it."""
+    message follows the user's turn (6 of 6), gemma3:4b does not (0 of 6). A first version folded for EVERY local model. A fate-on
+    soak on gemma3:4b then collapsed into a loop once with the fold, which looked like a cost of the fold; a later run without
+    it collapsed too (D-055), so that was not shown. The fold is for the model that was measured to need it, and gemma3:4b
+    gains nothing from it. qwen3, deepseek-r1 and others were not tested for the fault and keep the request as it was;
+    `generation.fold_late_system: true` turns it on for one that shows it."""
     return is_local(base_url) and "llama" in str(model or "").lower()
 
 

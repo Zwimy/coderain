@@ -2249,12 +2249,12 @@ the default chapter outline puts one there from the first turn, so every llama3.
 run of system messages into the last user turn (after an assistant turn they become a user turn of their own), so the words stay at
 the end of the prompt and the template reads an ordinary exchange. **It is narrow on purpose: a llama-family model on a server on this
 machine, and nothing else** (`needs_fold`; `generation: {fold_late_system: true|false}` overrides either way). The first version folded
-for every local model, and the fate-on soak that followed showed why that was wrong: on gemma3:4b, which never had the fault, the
-story looped in its last third when fate's note rode in the user turn (103 eight-word runs recurring in three or more turns against
-9 with the note left as a system message and 10 with fate off; 11 turns sharing their opening with another turn against 0 and 0).
-Same dice, same moves, one run each, so treat the size as indicative; the direction was unmistakable. qwen3:4b, deepseek-r1:8b and
-the Qwen3.5 build were not tested for the llama fault and keep the request as it was. Whether a directive in the user turn binds as well
-as one in a system turn was not measured on llama, only that the reply stops starting with the role word.
+for every local model. The fate-on soak that followed made that look wrong: on gemma3:4b, which never had the fault, the one run with the
+note in the user turn looped in its last third. **That causal reading was too strong and is withdrawn (D-055):** a later run with the
+fold off also collapsed, and each condition has a single run. What remains true is smaller and enough: gemma3:4b gains nothing from the
+fold, so it is not applied to it; every other model keeps the request as it was. qwen3:4b, deepseek-r1:8b and the Qwen3.5 build were not
+tested for the llama fault. Whether a directive in the user turn binds as well as one in a system turn was not measured on llama, only that
+the reply stops starting with the role word.
 
 **Tests.** `generator_slugs_test.py` (4), `chapter_distinctness_test.py` case 7 (the player rule is in both instructions),
 `llm_late_system_test.py` (5: the fold, the locality check, the llama-only rule, the client with the override, the tool-calling path). 10 and 19 guard
@@ -2313,3 +2313,46 @@ fate, and no account.
 by the three agents; a ranked backlog (P1 confuses or harms a first-time user, P2 friction, P3 nice); then build it in that order with
 a browser case per item. Evidence that would change this: a real session with either product (needs the owner's yes to an account),
 or a first-time user's recording.
+
+## D-055 — Fate on a real Writer: what steering does over 80 turns, a retracted claim, and why natural is silent
+
+**The soak.** gemma3:4b as the Writer, the scripted player (same moves, same dice, seed 5), squeezed memory (4 verbatim turns), 80 turns
+per condition, one run each. The measures are computed from the stored narration: words a turn by third of the run, how many 8-word runs
+recur in three or more turns, and how many turns share their first 25 words with another turn.
+
+| condition | words a turn, by third | 8-word runs in 3+ turns | turns sharing an opening | seconds a turn |
+|---|---|---|---|---|
+| fate off | 262 / 272 / 290 | 10 | 0 | 15 |
+| on, every roll steered, note in the user turn (the fold, D-054's first version) | 462 / 499 / 669 | 103 | 11 | 23 |
+| on, every roll steered, note as a system message | 473 / 521 / 449 | 9 | 0 | 22 |
+| on, natural silent, note in the user turn | 391 / 357 / 458 | 16 | 0 | 21 |
+| on, natural silent, note as a system message (the code as shipped), stopped at turn 72 of 80 | 410 / 533 / 1,502 | 866 | 28 | 26 |
+
+**What it shows.**
+1. **The Writer does enact the steering line.** Of a line's new words, 57 to 72% appear in that turn's narration against 13 to 15% for
+   another turn's line; 41 to 49% of the steered turns copy six or more words of the line verbatim (1 of 63 for unsteered prose).
+   The line's first words are almost never the narration's first words (0 to 2 of 63).
+2. **Steering lengthens narration in every run**, by about 1.4 to 1.9 times, and costs 6 to 11 seconds a turn here (the call is 3 s).
+3. **Two of the four fate-on runs collapsed into a loop in the last third; the fate-off run never did.** In the shipped-code run the
+   narration opens, from turn 47 to the end, with the same weather sentence and grows to 1,000 to 2,900 words a turn: the Writer copies
+   its own previous paragraph and adds to it. The other collapse was the first run (the note in the user turn). The two runs that stayed
+   sound were one with the note as a system message and one with natural silent plus the fold. So the loop is a risk of steering on a
+   4B Writer with a short verbatim window, roughly one run in two here, and **neither the fold nor silencing natural was shown to prevent
+   it**.
+
+**A claim withdrawn.** The commit messages of 5de6d92 and 42b8a89 and an earlier version of D-054 say the loop needed the note in the user
+turn and was cured by the fold's removal and by silencing natural. The fifth run (natural silent, no fold) is the counterexample, and each
+condition has one run, so no effect of either change is established. What the evidence does support is smaller: gemma3:4b does not need
+the fold, so it is not applied to it; and natural lines are the least informative of the four tiers (about half a person reacting, half
+weather or a retelling), cost a model call and add narration length for little, so a natural roll steers nothing.
+
+**Decisions.**
+- A natural roll still steers nothing and asks nothing (`SILENT_TIERS`): fewer calls and shorter narration, on the grounds above, not on a
+  claim about loops.
+- **Fate stays off by default, and should not be recommended with a small Writer for a long story.** The Fate controls say what they do (D-045);
+  this entry is the evidence for being careful.
+- Not tried, in the order I would try them: a guard in the engine that notices a narration opening with the previous narration's first 25
+  words and asks again or trims; a length line in the note ("one beat, not the whole turn"); steering only when the last turns are not
+  already long; the same soak on a larger local or a hosted model, where the loop may not appear at all; several seeds per condition.
+
+**Not known.** Why only some steered runs loop; whether the same happens on llama3.1:8b (not run); whether a larger Writer is immune.
