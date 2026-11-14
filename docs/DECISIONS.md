@@ -2356,3 +2356,54 @@ weather or a retelling), cost a model call and add narration length for little, 
   already long; the same soak on a larger local or a hosted model, where the loop may not appear at all; several seeds per condition.
 
 **Not known.** Why only some steered runs loop; whether the same happens on llama3.1:8b (not run); whether a larger Writer is immune.
+
+**The ranked backlog (consensus after two rounds of critique by the three agents).** P1 confuses or harms a first-time user, P2 is friction,
+P3 is nice. Cost is S, M or L against our code. Each item is a small commit with a browser case that fails without it.
+- Corrections the critique made to my draft: AI Dungeon does have a zip backup and a read-only Read view (our gap is a readable view, not
+  an export); "branch from here" is FictionLab's idea; its memories' edit path is undocumented, not absent; the red-and-orange publish
+  checklist is hosted-community machinery (dropped); the lore description and content split has no consumer without semantic activation
+  (held); Compact Buttons is dropped (fix tap size instead); the inline discard bar does not cure "Replan Cancel closes the Plan panel",
+  because that is the Cancel button, so Replan needs its own inline confirm.
+
+P1, in build order
+1. **First run.** Hide embedding models from the picker (S). Let a keyless local server (LM Studio, llama.cpp) pass the gate: only for a
+   loopback or LAN address, never for hosted (`ready_test` keeps `no_key`), after checking that `LLM()` accepts an empty key (M). The probe
+   and the model list ask the local profile's own address, not a hard-coded `localhost:11434` (M). A connection-test route for a hosted key,
+   separate from `/api/ready`, which must never spend tokens, shared with item 7 (M).
+2. **Chapter delete:** disable the row on click, as D-013 says (a double click deletes two). S
+3. **A deliberate Stop is not an error:** no red card, no "Check settings". S
+4. **Dirty dialogs:** Escape or a backdrop click shows an inline "discard your changes?" bar inside the card (not Cancel, not a programmatic
+   close); Replan Cancel gets its own inline confirm. Smoke case 8 closes a dirty dialog by backdrop and must be adapted. M + S
+5. **Leave Play mid-turn and come back:** Send does nothing and there is no Stop (a module-level busy flag, a per-view aborter). A shared
+   in-flight handle, a usable Stop in the new view, a resync when the old run ends with no false "discarded" toast. Same cause as D-012. M
+6. **Retry keeps what it replaces.** Today the exchange is deleted first and stays deleted if generation fails. Keep it as a variant, and on
+   failure restore it from a snapshot taken BEFORE the rollback (the rollback consumes the single RPG snapshot, D-002, and trims folds,
+   invariant 6, so restoring the text alone would desynchronise state from the story), or do it in simple mode only. The variants live in
+   memory and a settings save clears them, so the UI says "this session" until persistence (item 18). Then Stop for swipe-generate, which
+   today would destroy the exchange. M + M, the second depends on the first
+7. **Settings:** paint at once and fill the model list afterwards; a sticky Save; a leave prompt that intercepts navigation clicks and
+   popstate (the hash has already changed when `hashchange` fires, and a re-render would wipe the edits); the connection test. M
+8. **Copy pass:** about 57 em and en dashes in strings, "quad brain stages", superlatives. S
+
+P2
+9. Accessibility remainder: one `aria-pressed` helper for the six segmented controls, focus to the new view on a route change, toast kind not
+   by colour alone, labelled icon buttons, the Talk drawer watched by `a11y.js`, `#p-improve` and `applyAI` guarded against a closed modal. S/M
+10. Readable transcript export (Markdown from the stored turns, not the raw file with its markers) and find-in-story with `<mark>` inside
+    `.turn-body` only (edit indices are DOM positions, so nothing may be added to `#transcript`). A Read view can use the same renderer. S + S
+11. Per-turn menu: edit, copy, branch from here (narrator bubbles only: D-006), regenerate; long-press on touch; the branch warnings need a
+    null check (`out.warnings.length`). Depends on item 6. M
+12. Display settings: font size, and the existing rain switch reachable from Play. S/M
+13. One-level undo for the builder's AI assist. S
+14. Context panel: each section's percent of the total (the cheapest fix for the most-cited AI Dungeon complaint, moved up from P3). S
+
+P3
+15. In-play per-story panel for response length and streaming. M, needs per-story engine config.
+16. RPG sheet below 900px (tabs) and the Talk drawer width. S/M
+17. Test growth with each item, a blockable model stub so items 5 and 6 can be tested, a phone-width pass over every route. M
+18. Persist swipe versions across a reload. L: seven places invalidate swipe state.
+19. Structure: modals out of `play.js` (S), dismantle its 785-line closure (L), merge the two character editors (L).
+20. Continuous (debounced) autosave while typing in the builder (FictionLab does; ours saves on leaving). S
+
+Held or dropped: the lore description and content split; the red-and-orange checklist; Compact Buttons. Not taking: accounts, a community
+feed, tiers, voice, images, Do/Say/Story/See modes, a slash menu, automatic background lore (an explicit "generate this entry" button is not
+excluded).
