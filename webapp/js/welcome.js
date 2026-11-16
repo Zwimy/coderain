@@ -4,8 +4,11 @@ import {checkReady, invalidateReady, skipReadyCheck} from "./nav.js";
 import {render} from "./app.js";
 
 export async function renderWelcome(state) {
-  const hosted = await api("/api/models/hosted").catch(() => ({presets: []}));
-  const local = await api("/api/models/local").catch(() => ({installed: [], howto: []}));
+  // Side by side: the local list asks the model server, which can take seconds to say it is not there.
+  const [hosted, local] = await Promise.all([
+    api("/api/models/hosted").catch(() => ({presets: []})),
+    api("/api/models/local").catch(() => ({installed: [], howto: []})),
+  ]);
   const running = !local.error;
   const presets = hosted.presets || [];
   // Only a model that can tell a story is offered: an embedding model (nomic-embed-text) used to sit in this list.
@@ -83,12 +86,27 @@ export async function renderWelcome(state) {
   if (recheck) recheck.addEventListener("click", async () => {
     invalidateReady(); await checkReady(true); render();
   });
+  let warned = false;            // after a failed check the same button saves anyway
   $("#w-use-hosted").addEventListener("click", async () => {
     const key = $("#w-key").value.trim();
     if (!key) { toast("Paste your API key first."); return; }
     const p = presets[Number($("#w-preset").value) || 0];
     const btn = $("#w-use-hosted");
     btn.disabled = true; btn.textContent = "Checking…";
+    // The button said "Checking…" and checked nothing: a wrong key got through and failed on the first turn with an
+    // unreadable message. The key is tried against the provider's model list (no tokens) BEFORE it is saved. A key the
+    // provider refused is not saved; an unreachable or redirecting server is reported too. Pressing the button again saves
+    // it anyway (the provider may simply be down), and a provider with no model list is not held up.
+    if (!warned) {
+      const t = await api("/api/connection/test", {method: "POST", body: {
+        base_url: p.base_url, api_key: key, model: p.model}}).catch(() => null);
+      if (t && ["rejected", "unreachable", "redirect"].includes(t.reason)) {
+        warned = true;
+        $("#w-hosted-note").textContent = `${t.detail} Press the button again to save it anyway.`;
+        btn.disabled = false; btn.textContent = "Save anyway";
+        return;
+      }
+    }
     const ok = await guard(() => api("/api/settings", {method: "PUT", body: {
       mode: "hosted",
       hosted: {model: p.model, base_url: p.base_url,
@@ -104,6 +122,8 @@ export async function renderWelcome(state) {
   $("#w-skip").addEventListener("click", skipReadyCheck);
   const note = $("#w-hosted-note");
   const showNote = () => {
+    warned = false;
+    $("#w-use-hosted").textContent = "Save and start";
     const p = presets[Number($("#w-preset").value) || 0];
     note.textContent = p ? p.note : "";
   };

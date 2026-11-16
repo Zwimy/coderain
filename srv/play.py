@@ -91,7 +91,7 @@ def swipe_browse(slug: str, body: dict):
 def swipe_gen(slug: str):
     """Generate a NEW narrator alternate and select it (ST-02)."""
     return _stream_generation(
-        slug, lambda eng, notes: eng.swipe_generate(on_stage=notes.append))
+        slug, lambda eng, notes: eng.swipe_exchange(on_stage=notes.append))
 
 
 @router.post("/api/saves/{slug}/cancel")
@@ -121,15 +121,10 @@ def retry(slug: str):
     if not (turns and turns[-1]["role"] in ("narrator", "player")):
         raise HTTPException(400, "nothing to retry yet")
 
-    def run(e, notes):
-        # The destructive rollback runs UNDER the generation lock (inside the
-        # stream) so it can't truncate the transcript of an in-flight turn.
-        ok, last_player = e.rollback_for_retry()
-        if not ok:
-            return iter(())               # nothing to retry (raced away)
-        return e.regenerate(last_player, on_stage=notes.append)
-
-    return _stream_generation(slug, run)
+    # The rollback runs UNDER the generation lock (inside the stream) so it can't truncate the transcript of an in-flight
+    # turn, and the exchange it replaces is kept: as a variant when the story has no mechanics, and in every case put back
+    # whole if the regeneration fails, is stopped or comes back empty (D-057).
+    return _stream_generation(slug, lambda e, notes: e.retry_exchange(on_stage=notes.append))
 
 
 @router.post("/api/saves/{slug}/continue")

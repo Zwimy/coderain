@@ -16,6 +16,8 @@ from coderain.config import read_env
 from coderain.config import save_yaml
 from coderain.config import write_env
 from coderain.llm import LLM
+from coderain.llm import is_lan
+from coderain.llm import is_local
 
 from . import core
 from .core import HOSTED_KEY_ENV
@@ -100,7 +102,11 @@ def _local_server() -> tuple[str, str, bool]:
 def _list_local_models() -> list[dict]:
     """The local server's models as {name, size, embedding}; raises when it cannot be reached."""
     url, _label, native = _local_server()
-    r = httpx.get(url, timeout=3)
+    # A refused connection to a port nobody listens on takes about 2.25 s on Windows, and the synchronous client tries `::1`
+    # and then `127.0.0.1` for "localhost" one after the other: 4.4 s to learn that Ollama is not running, and the first-run
+    # screen asks three times. A server on this machine answers in milliseconds, so the connection gets one second. A server
+    # elsewhere on the network keeps three.
+    r = httpx.get(url, timeout=httpx.Timeout(3.0, connect=1.0 if is_local(url) else 3.0))
     r.raise_for_status()
     body = r.json()
     if native:
@@ -132,13 +138,18 @@ def ready():
         has_key = bool(read_env().get(HOSTED_KEY_ENV, "").strip())
         model = str(prof.get("model", "")).strip()
         base = str(prof.get("base_url", "")).strip()
-        if not has_key:
+        # LM Studio and llama.cpp take no key, and are set up as an OpenAI-compatible ("hosted") profile with a loopback or
+        # LAN address. Demanding a key there held them at the first-run screen until they typed a made-up one. A key stays
+        # required for any address that is not on this machine or network (ready_test pins both sides). The client already
+        # sends a placeholder when no key is configured (config.build_profile).
+        keyless = not has_key and is_lan(base)
+        if not has_key and not keyless:
             return {"ok": False, "mode": mode, "reason": "no_key",
                     "detail": "No API key saved yet."}
         if not model or not base:
             return {"ok": False, "mode": mode, "reason": "no_model",
                     "detail": "No hosted model chosen yet."}
-        return {"ok": True, "mode": mode, "model": model}
+        return {"ok": True, "mode": mode, "model": model, **({"keyless": True} if keyless else {})}
 
     _url, label, _native = _local_server()
     try:
@@ -164,6 +175,52 @@ def ready():
                 "installed": names}
     return {"ok": True, "mode": mode, "model": want or chat[0], "server": label,
             "installed": names}
+
+
+@router.post("/api/connection/test")
+def connection_test(body: dict | None = None):
+    """Does the hosted connection answer, and does it take the key? Asked on demand from Settings, never by /api/ready (which
+    is polled and must not leave this machine).
+
+    It reads the provider's model LIST (GET <base>/models), which OpenAI-compatible servers answer without spending a token.
+    Fields left out of the body fall back to what is saved. A typed key is used for this one request and is neither stored
+    nor sent back, and a redirect is reported, not followed (a redirect would carry the key somewhere the author did not
+    choose). `ok` is true only when the server answered the list."""
+    body = body if isinstance(body, dict) else {}
+    prof = (core._cfg.raw.get("profiles") or {}).get("hosted") or {}
+    # strip BEFORE falling back: a field holding only spaces is blank, and must not hide the saved value
+    base = (str(body.get("base_url") or "").strip() or str(prof.get("base_url") or "").strip()).rstrip("/")
+    key = str(body.get("api_key") or "").strip() or read_env().get(HOSTED_KEY_ENV, "").strip()
+    model = str(body.get("model") or "").strip() or str(prof.get("model") or "").strip()
+    if not base:
+        return {"ok": False, "reason": "no_base", "detail": "There is no base URL to test."}
+    if not key and not is_lan(base):
+        return {"ok": False, "reason": "no_key", "detail": "There is no API key to test with."}
+    host = urlparse(base if "//" in base else "//" + base).hostname or base
+    try:
+        r = httpx.get(base + "/models", headers={"Authorization": f"Bearer {key}"} if key else {}, timeout=8)
+    except httpx.HTTPError as e:
+        return {"ok": False, "reason": "unreachable", "detail": f"Could not reach {host} ({e.__class__.__name__})."}
+    if r.status_code in (401, 403):
+        return {"ok": False, "reason": "rejected", "detail": f"{host} answered, but it did not accept this key."}
+    if 300 <= r.status_code < 400:
+        return {"ok": False, "reason": "redirect", "detail": f"{host} sent the request somewhere else, so the key was not "
+                "sent on. Check the base URL."}
+    if r.status_code == 404:
+        return {"ok": False, "reason": "no_model_list", "detail": f"{host} answered but has no model list, so the key cannot "
+                "be checked here. The first turn will show whether it works."}
+    if r.status_code >= 400:
+        return {"ok": False, "reason": "error", "detail": f"{host} answered with an error ({r.status_code})."}
+    try:
+        rows = r.json().get("data")
+        listed = [str(m.get("id", "")) for m in rows if isinstance(m, dict)] if isinstance(rows, list) else []
+    except (ValueError, AttributeError):
+        listed = []
+    if model and listed and model not in listed:
+        return {"ok": True, "reason": "model_not_listed", "model_listed": False,
+                "detail": f"Connected to {host}. It does not list the model {model}, so check the spelling."}
+    return {"ok": True, "reason": "connected", "model_listed": bool(model and listed) or None,
+            "detail": f"Connected to {host}" + (" and it lists that model." if model and listed else ".")}
 
 
 @router.get("/api/models/local")

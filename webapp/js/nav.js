@@ -1,6 +1,7 @@
 /* Hash routing bookkeeping: nav highlight, unsaved-work flush, and the
    cached readiness probe. */
 import {$, api, guard, toast} from "./util.js";
+import {confirmModal} from "./modal.js";
 import {render} from "./app.js";
 
 /* ---------- router ---------- */
@@ -10,7 +11,27 @@ $("#brand").addEventListener("keydown", ev => {
     ev.preventDefault(); location.hash = "#library";
   }
 });
-window.addEventListener("hashchange", render);
+/* A page with unsaved edits (Settings) can register a guard. The hash has ALREADY changed when `hashchange` fires, and a
+   render would repaint from the server and wipe the edits, so a "stay" puts the old hash back WITHOUT a hashchange
+   (replaceState) and renders nothing. A second navigation made while the question is open replaces the question (one modal
+   host, and the replaced one is never answered), so only the last navigation is ever decided. A page that autosaves on
+   leaving (the builder) does not use this. */
+let leaveGuard = null;
+let lastHash = location.hash || "#library";
+export function registerLeaveGuard(isDirty) { leaveGuard = isDirty; }
+export function clearLeaveGuard() { leaveGuard = null; }
+window.addEventListener("hashchange", async () => {
+  const next = location.hash || "#library";
+  if (leaveGuard && leaveGuard()) {
+    const leave = await confirmModal("Leave without saving?", "Your changes to this page have not been saved.", "Leave");
+    if (!leave) {
+      history.replaceState(null, "", lastHash);
+      return;
+    }
+  }
+  lastHash = next;
+  render();
+});
 export function navMark() {
   const h = location.hash || "#library";
   document.querySelectorAll("#topbar nav a").forEach(a =>
@@ -38,7 +59,7 @@ export async function flushDirty() {
   catch (e) { toast("Couldn't save your changes: " + e.message); }
 }
 window.addEventListener("beforeunload", ev => {
-  if (_dirtyCheck && _dirtyCheck()) { ev.preventDefault(); ev.returnValue = ""; }
+  if ((_dirtyCheck && _dirtyCheck()) || (leaveGuard && leaveGuard())) { ev.preventDefault(); ev.returnValue = ""; }
 });
 
 /* ---------- first run: is a model reachable at all? ----------

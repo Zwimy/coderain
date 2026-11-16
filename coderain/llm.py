@@ -7,6 +7,7 @@ differ, and those come from the active profile in config.yaml.
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import json
 import re
 from typing import Iterator
@@ -30,6 +31,27 @@ def is_local(base_url) -> bool:
         return (urlparse(str(base_url)).hostname or "").lower() in _LOOPBACK
     except ValueError:
         return False
+
+
+def is_lan(base_url) -> bool:
+    """True when the endpoint is on this machine or this network: a loopback name or address, a private or link-local
+    address, or an mDNS (.local) name. Never true for a public host name, and the match is on the WHOLE host name, so
+    `localhost.example.com` and `192.168.1.5.example.com` are public. It exists so that a missing API key does not hold
+    back a server that takes none (LM Studio, llama.cpp), and so it must not be fooled into excusing a key at a provider."""
+    base = str(base_url or "").strip()
+    try:
+        host = (urlparse(base if "//" in base else "//" + base).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host in _LOOPBACK or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False                                    # a name that is not .local: a provider until shown otherwise
+    return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
 def needs_fold(base_url, model) -> bool:

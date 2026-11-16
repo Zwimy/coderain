@@ -1,21 +1,39 @@
 /* Settings: connection, model, memory, storytelling, play aids. */
 import {$, api, esc, guard, toast, view} from "./util.js";
 import {confirmModal} from "./modal.js";
-import {invalidateReady} from "./nav.js";
+import {invalidateReady, registerLeaveGuard} from "./nav.js";
 import {render} from "./app.js";
 
 /* ---------- settings ---------- */
 export async function renderSettings() {
-  const [st, local, hosted, profs] = await Promise.all([
-    api("/api/settings"), api("/api/models/local"), api("/api/models/hosted"),
+  // The model list asks the model server, which can take seconds when it is slow or half dead (2.4 s on a sandbox, and up to
+  // the probe's own timeout), and the whole page used to wait for it. The page paints as soon as the settings are in; the
+  // list is filled into the dropdowns when it arrives, without touching anything typed in the meantime.
+  const slowLocal = api("/api/models/local").catch(e => (
+    {installed: [], error: `could not read the model list (${e.message})`, suggestions: [], howto: [], server: "Ollama"}));
+  const [st, hosted, profs] = await Promise.all([
+    api("/api/settings"), api("/api/models/hosted"),
     api("/api/profiles").catch(() => ({profiles: [], active: ""})),
   ]);
+  let local = await Promise.race([slowLocal, new Promise(r => setTimeout(() => r(null), 250))]);
+  const late = local === null;
+  if (late) local = {installed: [], error: "", suggestions: [], howto: [], server: "Ollama", loading: true};
   // The story-model dropdowns list models that can tell a story; embedding models are for semantic recall only.
   const names = local.installed.filter(m => !m.embedding).map(m => m.name);
   const opt = (list, sel) => list.map(n =>
     `<option ${n === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
   const localOpts = sel => opt(
     names.includes(sel) || !sel ? names : [sel, ...names], sel);
+  const installedNote = l => l.loading ? "Looking for installed models…"
+    : `Installed via ${esc(l.server || "Ollama")}: ${l.installed.map(m =>
+        `${esc(m.name)}${m.size ? ` (${esc(m.size)})` : ""}`).join(", ") || "none detected"}.
+      Suggested pulls: ${(l.suggestions || []).map(s =>
+        `<b>${esc(s.name)}</b>: ${esc(s.note)}`).join("; ")}.`;
+  const howtoHtml = l => (l.howto || []).map(p => `<p>${esc(p)}</p>`).join("");
+  const errorText = l => l.error ? `${esc(l.error)}. Showing suggestions only.` : "";
+  const namesWarn = (list, l) => (list.length || l.loading) ? "" : `<span style="color:var(--player)">${esc(l.server || "Ollama")} is not
+        running or has no models pulled, so only the hosted option is
+        available.</span>`;
   const presetOpts = hosted.presets.map((p, i) =>
     `<option value="${i}" ${p.model === st.hosted.model ? "selected" : ""}>
      ${esc(p.label)}</option>`).join("");
@@ -59,19 +77,18 @@ export async function renderSettings() {
       <h2>Local models, one per stage</h2>
       <details class="howto">
         <summary>New to this? Install Ollama &amp; set up local models</summary>
-        ${(local.howto || []).map(p => `<p>${esc(p)}</p>`).join("")}
+        <div id="local-howto">${howtoHtml(local)}</div>
       </details>
-      ${local.error ? `<p class="muted">${esc(local.error)}. Showing
-        suggestions only.</p>` : ""}
+      <p class="muted" id="local-error" ${local.error ? "" : "hidden"}>${errorText(local)}</p>
       <div class="row">
         <div><label>Director (plans the turn; a thinking model)</label>
-          <select id="lm-director">${localOpts(st.local.director)}</select></div>
+          <select id="lm-director" data-local>${localOpts(st.local.director)}</select></div>
         <div><label>Writer (prose; non-thinking is fine)</label>
-          <select id="lm-writer">${localOpts(st.local.writer)}</select></div>
+          <select id="lm-writer" data-local>${localOpts(st.local.writer)}</select></div>
       </div>
       <div class="row">
         <div><label>Lore-keeper (optional continuity pass)</label>
-          <select id="lm-keeper">
+          <select id="lm-keeper" data-local>
             <option value="" ${!st.local.lorekeeper ? "selected" : ""}>(none: skip it)</option>
             ${localOpts(st.local.lorekeeper)}</select></div>
         <div><label title="How much the model can READ at once (its window)."
@@ -82,10 +99,7 @@ export async function renderSettings() {
       <p class="muted">Context window = how much the model can read at once (set
         it to the model's real window). Reply length is set under Storytelling,
         not here.</p>
-      <p class="muted">Installed via Ollama: ${local.installed.map(m =>
-        `${esc(m.name)} (${esc(m.size)})`).join(", ") || "none detected"}.
-      Suggested pulls: ${local.suggestions.map(s =>
-        `<b>${esc(s.name)}</b>: ${esc(s.note)}`).join("; ")}.</p>
+      <p class="muted" id="installed-note">${installedNote(local)}</p>
     </div>
 
     <div class="setting-panel" id="panel-hosted">
@@ -112,6 +126,10 @@ export async function renderSettings() {
         : '<span style="color:var(--player)">(not saved yet)</span>'}</label>
       <input id="hm-key" type="password" placeholder="${st.hosted.key_set
         ? "••••••••" : "paste your key"}">
+      <div style="display:flex; gap:10px; align-items:center; margin-top:8px">
+        <button type="button" id="hm-test">Test connection</button>
+        <span id="hm-test-status" class="muted" role="status"></span>
+      </div>
       <p class="muted">Keys and stories live in this app's data folder:
         <code>${esc(st.home || "")}</code>. The desktop app and a source run use
         DIFFERENT folders, so a key saved in one will read as "not saved" in the
@@ -122,17 +140,15 @@ export async function renderSettings() {
         both run every turn, so pointing them at Ollama keeps the hosted model for
         the prose you are paying for. Leave either on
         <b>(use the hosted model)</b> to send it to the hosted endpoint instead.
-        ${names.length ? "" : `<span style="color:var(--player)">Ollama is not
-        running or has no models pulled, so only the hosted option is
-        available.</span>`}</p>
+        <span id="names-warn">${namesWarn(names, local)}</span></p>
       <div class="row">
         <div><label>Director</label>
-          <select id="hm-director">
+          <select id="hm-director" data-local>
             <option value="">(use the hosted model)</option>
             ${localOpts(st.hosted.director_local || "")}
           </select></div>
         <div><label>Lore-keeper</label>
-          <select id="hm-lorekeeper">
+          <select id="hm-lorekeeper" data-local>
             <option value="">(use the hosted model)</option>
             ${localOpts(st.hosted.lorekeeper_local || "")}
           </select></div>
@@ -362,6 +378,34 @@ export async function renderSettings() {
     </div>
   </div>`;
 
+  // Unsaved edits: anything typed or changed on this page is lost when it is left, so leaving asks (nav.js). A save clears it.
+  let dirty = false;
+  const pageEl = view.firstElementChild;
+  // "input" also fires for selects and checkboxes. The profile name and list are bookkeeping, and the rain switch is a local
+  // preference applied at once, so none of those is a change that Save would write.
+  pageEl.addEventListener("input", ev => { if (!ev.target.closest("#pf-name, #pf-list, #ap-rain")) dirty = true; });
+  pageEl.addEventListener("click", ev => { if (ev.target.closest(".seg button")) dirty = true; });
+  registerLeaveGuard(() => dirty);
+
+  if (late) {
+    slowLocal.then(real => {
+      if (!document.body.contains(pageEl)) return;           // the reader has moved on
+      const list = real.installed.filter(m => !m.embedding).map(m => m.name);
+      pageEl.querySelectorAll("select[data-local]").forEach(sel => {
+        const cur = sel.value;
+        const blank = sel.querySelector("option[value='']");   // "(none)" and "(use the hosted model)" stay first
+        sel.innerHTML = (blank ? blank.outerHTML : "") + opt(list.includes(cur) || !cur ? list : [cur, ...list], cur);
+        if (cur || blank) sel.value = cur;     // with no value and no blank row the browser's own first pick stands
+      });
+      $("#local-howto").innerHTML = howtoHtml(real);
+      const lerr = $("#local-error");
+      lerr.innerHTML = errorText(real);
+      lerr.hidden = !real.error;
+      $("#installed-note").innerHTML = installedNote(real);
+      $("#names-warn").innerHTML = namesWarn(list, real);
+    });
+  }
+
   let mode = st.mode;
   let length = st.generation.response_length || "medium";
   const syncPanels = () => {
@@ -418,6 +462,25 @@ export async function renderSettings() {
       if (window.setRain) window.setRain(rainBox.checked);
     });
   }
+  // Asks the provider's model list with what is typed here (the saved values fill any blank): no tokens are spent, and the
+  // key goes to the base URL on this page and nowhere else. It is not an edit, so it does not mark the page unsaved.
+  const hmTest = $("#hm-test"), hmTestStatus = $("#hm-test-status");
+  hmTest.addEventListener("click", async () => {
+    hmTest.disabled = true;
+    hmTestStatus.textContent = "Testing…";
+    hmTestStatus.style.color = "";
+    try {
+      const r = await api("/api/connection/test", {method: "POST", body: {
+        base_url: $("#hm-base").value.trim(), api_key: $("#hm-key").value.trim(), model: $("#hm-model").value.trim()}});
+      hmTestStatus.textContent = r.detail;
+      hmTestStatus.style.color = r.ok ? "var(--ok)" : "var(--player)";
+    } catch (e) {
+      hmTestStatus.textContent = "Could not run the test: " + e.message;
+      hmTestStatus.style.color = "var(--player)";
+    } finally {
+      hmTest.disabled = false;
+    }
+  });
   $("#hm-preset").addEventListener("change", () => {
     const p = hosted.presets[Number($("#hm-preset").value)];
     if (!p) return;
@@ -525,6 +588,7 @@ export async function renderSettings() {
   const applySettings = async (statusEl) => {
     try {
       await api("/api/settings", {method: "PUT", body: settingsBody()});
+      dirty = false;              // what is on screen is on disk now
       invalidateReady();          // the model may now (or no longer) be reachable
       setBrainline();
       if (statusEl) {

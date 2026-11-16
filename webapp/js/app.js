@@ -8,6 +8,7 @@ import {modalCard} from "./modal.js";
 import {
   checkReady,
   clearDirty,
+  clearLeaveGuard,
   flushDirty,
   navMark,
   validSlug
@@ -22,6 +23,7 @@ import {renderSettings, setBrainline} from "./settings.js";
 export async function render() {
   await flushDirty();          // persist the view we're leaving
   clearDirty();
+  clearLeaveGuard();
   navMark();
   // The Talk drawer lives on <body> (not #view), so drop it on any navigation —
   // otherwise it orphans, floating over the next page with a stale slug handler.

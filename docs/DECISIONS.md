@@ -2407,3 +2407,70 @@ P3
 Held or dropped: the lore description and content split; the red-and-orange checklist; Compact Buttons. Not taking: accounts, a community
 feed, tiers, voice, images, Do/Say/Story/See modes, a slash menu, automatic background lore (an explicit "generate this entry" button is not
 excluded).
+
+**Progress on the D-056 backlog above (2026-11-14).** Built, each with browser or unit cases that fail without it: items 1 to 5, 7 and 8.
+Left: 6 (Retry keeps what it replaces, then Stop for swipe-generate) and everything from P2 on.
+- 1b, a keyless server on this machine or network. `/api/ready` demanded a key for any hosted-style profile, so LM Studio and llama.cpp users
+  (no key, a loopback or LAN address) sat at the first-run screen until they typed a made-up one. `is_lan` in `coderain/llm.py` accepts
+  loopback, private and link-local addresses and `.local` names and matches the WHOLE host name, so `localhost.example.com` and
+  `192.168.1.5.example.com` still need a key. `config.build_profile` already sent a placeholder key, so the client needed no change.
+- 1d, a connection test. `POST /api/connection/test` reads the provider's model list (`GET <base>/models`, no tokens) with the typed key or
+  the saved one, and answers in words: refused, unreachable, redirected (not followed, so the key is never sent on), no model list, other
+  error, or connected (and whether it lists the model). The key is never stored by it or sent back; `/api/ready` stays off the network
+  (pinned by a test). Settings has a "Test connection" button. The first-run key is tried BEFORE it is saved: a refused, unreachable or
+  redirecting server is reported and not saved, and the same button then reads "Save anyway"; a provider with no model list is not held up.
+  The button used to say "Checking..." and check nothing. A whitespace-only field no longer hides the saved value (found by the test).
+- 7, Settings. It paints as soon as the settings are in and fills the model dropdowns when the list arrives (a 250 ms race; a failed list
+  is a line on the page and used to break the whole page; a page already left ignores the late answer). The Save bar is sticky. Unsaved
+  edits are tracked: typing, selects and checkboxes through `input`, the segmented buttons through a click; the profile name and list and
+  the rain switch are not edits. Leaving asks "Leave without saving?" for a topbar click, the browser Back button and closing the tab. The
+  hash has already changed when `hashchange` fires and a render would wipe the edits, so Stay puts the old hash back with `replaceState`
+  and renders nothing. A second navigation made while the question is open replaces it (one modal host), so only the last is decided. The
+  page registers its guard with `nav.js` and `render()` clears it, so a failed repaint cannot leave one behind. The builder keeps its own
+  autosave on leaving and does not use this.
+- Evidence that would change this: a user who edits Settings often and finds the question tiresome (then autosave, as the builder does);
+  a provider whose model list needs a different path or header than `<base>/models` (then the test reports "no model list" and the first
+  turn remains the real check).
+
+## D-057 — Retry keeps what it replaces, and a failed or stopped retry puts the exchange back
+
+**What was wrong.** A retry deleted the last exchange first and regenerated second. A model error, the Stop button or an empty reply ended
+the regeneration early and left the story one exchange shorter, with the player's own action gone too. Swipe-generate did the same, so
+Stop there destroyed the exchange. The player could not get back what they had just read.
+
+**Why the text alone cannot be put back.** Rolling an exchange back is not one change. It trims the transcript, resets the world state,
+drops ledger records, un-reveals things and trims folds (invariants 3 and 6), and the engine holds ONE undo snapshot that the rollback
+consumes (D-002). Restoring the two turns would leave all of that out of step with the story.
+
+**What was built.** `coderain/retry.py`. The whole save is copied before the rollback (`Checkpoint.take`) and copied back when the
+regeneration does not put a narrator turn in the exchange's place (`took_hold`: the same transcript length for a narrator tail, one more
+for an orphan player action). The engine's in-memory undo record (`_pre_turn_*`, `_rpg_events`, `_swipes`) is put back with it, so an
+Undo afterwards still rolls the exchange's mechanics back. Two files are never rolled back: the health log (a failed attempt must stay
+visible, invariant 2) and the usage log (the tokens were spent). `.snapshots` is neither copied nor touched. Restoring copies the
+checkpoint over the save first (the save is whole again after that step) and removes what the failed attempt added last. It cost 17 ms
+to take and 15 ms to restore on an invented 3,000-turn, 5.3 MB save.
+- `Engine.retry_exchange` and `Engine.swipe_exchange` wrap the regeneration in a generator, so the checkpoint is taken when the stream
+  starts and every way out is covered: an exception, Stop (the pump closes the stream, which raises `GeneratorExit` after the inner
+  generator's own cleanup), and an empty reply, which raises `RetryRestored` so the stream says so instead of reporting a shorter story as
+  success. The route and the pump carry that error's own wording and code to the browser.
+- In a story with no mechanics a retry runs as a swipe: the replaced text stays as a variant to go back to (`◄`). In a story with
+  mechanics it does not, because a variant carries prose only and the dice and state of the first try would no longer match it; it is
+  still put back on failure. The save payload now says which version is showing (`swipes`), so a retry and a page reload both
+  read "Version 2 of 2". The label says earlier versions are kept until the next move. They live in memory and a new turn, an edit or a
+  server restart clears them (D-056 item 18 would persist them).
+- The client tells the reader: a Stopped note or an error card adds "Your earlier version is back." when the story on screen is the
+  length it was, and an empty reply is its own card ("Nothing new came back"). Swipe-generate got its Stop button.
+- Found on the way: `Engine.regenerate` took an empty transcript for "retry the opening" even when there was a player action to replay,
+  so retrying the first exchange of a story with no opening turn dropped the action. It asks for the opening only when there is none.
+
+**Verified.** `tests/retry_keeps_test.py` (11 cases: byte-for-byte restore through a model error, an empty reply and Stop; the two
+logs kept; a stray file removed; mechanics; an orphan action; swipe-generate; the opening; `.snapshots`; the decision function),
+`tests/retry_api_test.py` (the frames and the saved story through the real routes and pump), and browser case 29 in
+`webapp_smoke_test.py` (a retry keeps and shows the old text; a failed, empty or stopped retry and a stopped swipe leave the story as it
+was and say so). Guard mutations are listed in the commit.
+
+**Limits.** Variants are prose only and session only. A restore also reverts anything else the failed attempt wrote to the save (a fate
+line, a canon note), which is the point; the canon reader runs after a SUCCESSFUL turn, so it never sees a failed one. The first retry in
+a story with mechanics still has one undo level. Evidence that would change this: a save so large that the copy is felt (then copy only
+the files a rollback touches), or a player who wants every retry kept in a story with mechanics (then variants would have to carry the
+state and the ledger records with them).

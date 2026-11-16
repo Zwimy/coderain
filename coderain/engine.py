@@ -8,11 +8,13 @@ Generation has two modes:
 """
 from __future__ import annotations
 
+import copy
 import re
 from typing import Iterator
 
 from . import fate as fate_mod
 from . import features
+from . import retry as retry_mod
 from . import sidecar as sidecar_mod
 from . import streaming
 from . import templates
@@ -855,11 +857,66 @@ class Engine:
         # opening_override(), so retrying the first turn of a save with an
         # authored `## Opening` replaced that greeting with model prose.
         # swipe_generate already routes n==1 to opening(); retry now agrees.
-        if not self.store.turns():
+        # ...but only when there is NO action to replay: rolling back the first exchange of a story that has no opening turn
+        # also leaves an empty transcript, and that retry used to answer with a fresh opening and drop the player's action.
+        if player_input is None and not self.store.turns():
             return self.opening(on_stage=on_stage)
         if player_input is None:
             return self.continue_story(on_stage=on_stage)
         return self.turn(player_input, on_stage=on_stage)
+
+    # ---- retry and swipe that keep what they replace (D-057) ------------------------------------------------------
+    # The in-memory half of the undo record: the rollback consumes these, so a restore has to put them back too.
+    _UNDO_SLOTS = ("_pre_turn_rpg", "_pre_turn_reveals", "_pre_turn_canon", "_pre_turn_events", "_pre_turn_log",
+                   "_rpg_events", "_swipes")
+
+    def retry_exchange(self, on_stage=None) -> Iterator[str]:
+        """Regenerate the last exchange without being able to lose it. In a story with no mechanics the replaced text stays
+        as a variant to go back to (swipe state); with mechanics the retry is the old one, because a variant carries only
+        prose and the dice and state of the first try would no longer match it. Either way, if no narration comes back
+        (a model error, Stop, an empty reply) the save is put back exactly as it was."""
+        return self._keeping(self._retry_inner, on_stage)
+
+    def swipe_exchange(self, on_stage=None) -> Iterator[str]:
+        """swipe_generate, with the same promise: a failed or stopped one puts the exchange back."""
+        return self._keeping(lambda s: self.swipe_generate(on_stage=s), on_stage)
+
+    def _retry_inner(self, on_stage) -> Iterator[str]:
+        turns = self.store.turns()
+        if turns and turns[-1]["role"] == "narrator" and not self.store.rpg_enabled():
+            return self.swipe_generate(on_stage=on_stage)
+        ok, last_player = self.rollback_for_retry()
+        if not ok:
+            return iter(())
+        return self.regenerate(last_player, on_stage=on_stage)
+
+    def _keeping(self, produce, on_stage) -> Iterator[str]:
+        """A generator, so the checkpoint is taken when the stream starts (not when it is built and maybe never run). Any
+        way out other than narration coming back puts the checkpoint back: an exception, Stop (the stream is closed, which
+        raises GeneratorExit here after the inner generator's own cleanup has run), or a regeneration that stored nothing."""
+        turns = self.store.turns()
+        if not turns:
+            return
+        ck = retry_mod.Checkpoint.take(
+            self.store.dir, len(turns), turns[-1]["role"],
+            {a: copy.deepcopy(getattr(self, a, None)) for a in self._UNDO_SLOTS})
+        try:
+            yield from produce(on_stage)
+        except BaseException:
+            self._put_back(ck)
+            raise
+        if not ck.took_hold(self.store.turns()):
+            self._put_back(ck)
+            raise retry_mod.RetryRestored()
+        ck.discard()
+
+    def _put_back(self, ck: "retry_mod.Checkpoint") -> None:
+        try:
+            ck.restore_files()
+            for name, value in ck.slots.items():
+                setattr(self, name, value)
+        finally:
+            ck.discard()
 
     def maybe_fold(self, on_stage=None) -> list[str]:
         """Run due memory folds after a turn. Returns event strings for the UI —

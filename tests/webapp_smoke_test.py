@@ -33,6 +33,16 @@ Asserts, once it can run:
 17) Escape or the backdrop on a dialog with unsaved edits asks inside the dialog; Cancel and clean dialogs close at once
 18) the Replan question is asked inside the Chapter plan panel and Cancel leaves the panel open
 19) coming back to a story that is generating offers Stop and takes over when the turn ends; another story explains why Send is off
+20) Settings paints before the model list arrives, fills it in later and keeps what was typed; Save stays in view
+21) leaving Settings with unsaved edits asks (topbar link and browser Back); Stay keeps the page and the edits, Leave goes
+22) a clean or a saved Settings page leaves without a question (profile name and rain switch are not edits; a segmented button is)
+23) a failed model list is reported on the Settings page instead of breaking it
+24) a model list that fails after the page painted is reported on it
+25) a model list that arrives after Settings was left does nothing
+26) a Settings page that failed to repaint leaves no leave-guard behind
+27) Test connection sends what is typed, says what happened and is not an unsaved edit
+28) the first-run key is tried before it is saved; a refused key is not saved, and "Save anyway" is explicit
+29) retry keeps the old text as a version; a failed, empty or stopped retry or swipe puts the exchange back and says so
 """
 import json
 import os
@@ -186,6 +196,15 @@ with sync_playwright() as p:
     ctx = open_panel("ctx-btn", "What the model sees")
     if "what it has cost" not in ctx.lower():
         failures.append("the Context panel is missing the token ledger")
+    # item 14: every part of the prompt, the rules and the verbatim turns included, shows its share of the whole
+    rows = page.evaluate("""() => [...document.querySelectorAll('#ctx-list .ctx-row')].map(r => ({
+      name: r.querySelector('.ctx-name').textContent.trim(), pct: r.querySelector('.ctx-pct').textContent.trim()}))""")
+    names = [r["name"] for r in rows]
+    if not any(n.startswith("Rules and directives") for n in names) or not any(n.startswith("Recent turns") for n in names):
+        failures.append(f"the Context panel does not list the rules and the verbatim turns as parts of the prompt: {names}")
+    shares = [0.5 if r["pct"] == "<1%" else float(r["pct"].rstrip("%")) for r in rows if r["pct"].endswith("%")]
+    if len(shares) != len(rows) or not 90 <= sum(shares) <= 110:
+        failures.append(f"the Context panel's shares do not add up to the whole prompt: {rows}")
     close_modal()
     print("2) Context, Plan and Memory modals open with real content")
 
@@ -721,6 +740,517 @@ with sync_playwright() as p:
     page.unroute("**/api/saves/*/turn")
     page.unroute("**/api/saves/*/cancel")
     print("19) coming back to a story that is generating offers Stop, and the view takes over when it ends")
+
+    # 20) Settings painted only after the slowest of its requests, and that one asks the model server (seconds when the server
+    #     is slow or half dead). It now paints at once, says the list is loading, fills the dropdowns when the list arrives
+    #     and leaves anything typed meanwhile alone. The Save button stays in view on this long page.
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_timeout(300)
+    held_models = []
+    page.route("**/api/models/local", lambda route: held_models.append(route))
+    page.evaluate("location.hash = '#settings'")
+    try:
+        page.wait_for_selector("#save-settings", timeout=4000)
+    except Exception:  # noqa: BLE001 - report it, don't abort the run
+        failures.append("Settings waited for the model list before it painted")
+    wait_until_held(page, held_models, "model list")
+    if "Looking for" not in (page.inner_text("#installed-note") if page.locator("#installed-note").count() else ""):
+        failures.append("Settings did not say the model list is still loading")
+    warned = page.evaluate("(document.querySelector('#names-warn') || {}).textContent || ''").strip()     # textContent: the hosted panel is hidden in local mode
+    if warned:
+        failures.append("Settings warned that the model server is not running while it was still loading the list: " + warned)
+    sticky = page.evaluate("""() => { const r = document.querySelector('#save-settings').getBoundingClientRect(), v = document.querySelector('#view');
+      return {top: r.top, bottom: r.bottom, inner: window.innerHeight, long: v.scrollHeight > v.clientHeight + 200}; }""")
+    if not sticky["long"]:
+        failures.append(f"the Settings page is not longer than the window, so the sticky Save check proves nothing: {sticky}")
+    elif not (0 <= sticky["top"] and sticky["bottom"] <= sticky["inner"]):
+        failures.append(f"the Save button is not in view without scrolling: {sticky}")
+    page.evaluate("document.querySelector('#qa-global').dataset.keep = '1'")
+    page.fill("#qa-global", "typed while loading")
+    director_before = page.evaluate("document.querySelector('#lm-director').value")
+    listing = json.dumps({"installed": [{"name": "tale-7b", "size": "4 GB", "embedding": False},
+                                        {"name": "embed-x", "size": "1 GB", "embedding": True}],
+                          "suggestions": [], "howto": ["Step one of the late how-to."], "server": "Ollama"})
+    for route in held_models:
+        route.fulfill(status=200, content_type="application/json", body=listing)
+    held_models.clear()
+    try:
+        page.wait_for_function("document.querySelector('#installed-note').textContent.includes('tale-7b')", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append("the late model list never reached the Settings page: " + page.inner_text("#installed-note"))
+    late = page.evaluate("""() => ({
+      writer: [...document.querySelectorAll('#lm-writer option')].map(o => o.textContent),
+      hosted: [...document.querySelectorAll('#hm-director option')].map(o => o.textContent),
+      director: document.querySelector('#lm-director').value,
+      kept: (document.querySelector('#qa-global') || {dataset: {}}).dataset.keep, typed: (document.querySelector('#qa-global') || {}).value,
+      howto: (document.querySelector('#local-howto') || {}).textContent || '',
+      errHidden: !!(document.querySelector('#local-error') || {}).hidden })""")
+    if not late["errHidden"]:
+        failures.append("the late fill left an empty 'could not read the model list' line showing")
+    if "tale-7b" not in late["writer"] or "embed-x" in late["writer"]:
+        failures.append(f"the late list should offer chat models only: {late['writer']}")
+    if late["hosted"][:1] != ["(use the hosted model)"] or "tale-7b" not in late["hosted"]:
+        failures.append(f"the late fill lost the '(use the hosted model)' row or the model: {late['hosted']}")
+    if director_before and late["director"] != director_before:
+        failures.append(f"the late fill changed the configured Director: {director_before!r} -> {late['director']!r}")
+    if late["kept"] != "1" or late["typed"] != "typed while loading":
+        failures.append(f"the late fill repainted the page or wiped what was typed: {late}")
+    if "Step one" not in late["howto"]:
+        failures.append("the late fill did not bring the how-to steps")
+    no_dashes("Settings after the late list", page.inner_text("#view"))
+    page.unroute("**/api/models/local")
+    print("20) Settings paints before the model list, fills it in later and keeps what was typed; Save stays in view")
+
+    # 21) A Settings page with unsaved edits asks before it is left (a topbar click, the browser Back button), keeps the
+    #     page and the edits on Stay, and leaves on Leave. Navigation made the router repaint from the server, which
+    #     threw the edits away without a word.
+    asked_hash = []
+    page.evaluate("history.back()")                                  # the browser Back button: the Library entry
+    try:
+        page.wait_for_selector("#cm-yes", timeout=3000)
+        page.click("#cm-no")
+        page.wait_for_function("document.querySelector('#modal-root').classList.contains('hidden')", timeout=3000)
+    except Exception:  # noqa: BLE001
+        failures.append("Back from Settings with unsaved edits did not ask")
+    back = page.evaluate("({hash: location.hash, kept: (document.querySelector('#qa-global') || {dataset: {}}).dataset.keep})")
+    if back["hash"] != "#settings" or back["kept"] != "1":
+        failures.append(f"Stay after Back did not keep the page and the hash: {back}")
+    unload_js = "(() => { const e = new Event('beforeunload', {cancelable: true}); window.dispatchEvent(e); return e.defaultPrevented; })()"
+    if not page.evaluate(unload_js):
+        failures.append("closing the tab with unsaved Settings edits did not ask the browser to confirm")
+    page.click('#topbar nav a[href="#characters"]')
+    try:
+        page.wait_for_selector("#cm-yes", timeout=3000)
+        title_text = page.evaluate("document.querySelector('#modal-card h2').textContent")
+        if "Leave without saving" not in title_text:
+            failures.append("the leave question has the wrong title: " + title_text)
+        page.click("#cm-no")                                         # Stay
+        page.wait_for_function("document.querySelector('#modal-root').classList.contains('hidden')", timeout=3000)
+    except Exception:  # noqa: BLE001
+        failures.append("a topbar click away from Settings with unsaved edits did not ask")
+    stayed = page.evaluate("""({hash: location.hash, kept: (document.querySelector('#qa-global') || {dataset: {}}).dataset.keep,
+      typed: (document.querySelector('#qa-global') || {}).value, active: (document.querySelector('#topbar nav a.active') || {}).textContent})""")
+    if stayed["hash"] != "#settings" or stayed["kept"] != "1" or stayed["typed"] != "typed while loading":
+        failures.append(f"Stay did not keep the page, the hash and the edits: {stayed}")
+    if (stayed["active"] or "").strip() != "Settings":
+        failures.append(f"Stay left the wrong topbar link highlighted: {stayed['active']!r}")
+    # two navigations before the first question is answered: the second replaces the first question and is the one decided
+    page.evaluate("location.hash = '#characters'")
+    page.wait_for_selector("#cm-yes", state="visible", timeout=3000)
+    page.evaluate("location.hash = '#defaults'")
+    page.wait_for_timeout(300)
+    page.click("#cm-yes")                                            # Leave
+    try:
+        page.wait_for_function("location.hash === '#defaults' && !document.querySelector('#save-settings')", timeout=6000)
+    except Exception:  # noqa: BLE001
+        failures.append("Leave did not leave Settings for the last page asked for: " + page.evaluate("location.hash"))
+    print("21) leaving Settings with unsaved edits asks; Stay keeps the page and the edits, Leave goes")
+
+    # 22) A clean Settings page, and one that was just saved, leave without a question. The profile name box and the rain
+    #     switch are not settings edits. A segmented button (reply length) is one: it raises no input event.
+    def leave_via_topbar():
+        page.click('#topbar nav a[href="#characters"]')
+        try:
+            page.wait_for_function("location.hash === '#characters' && !document.querySelector('#save-settings')", timeout=6000)
+        except Exception:  # noqa: BLE001
+            return False
+        return True
+
+    def modal_open():
+        return page.evaluate("!document.querySelector('#modal-root').classList.contains('hidden')")
+
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_selector("#save-settings", timeout=8000)
+    page.fill("#pf-name", "just a profile name")
+    if page.evaluate(unload_js):
+        failures.append("closing the tab asked for confirmation on a Settings page with no edits")
+    page.evaluate("document.querySelector('#pf-list').dispatchEvent(new Event('input', {bubbles: true}))")
+    if page.locator("#ap-rain").count():
+        page.evaluate("document.querySelector('#ap-rain').click(); document.querySelector('#ap-rain').click()")
+    if not leave_via_topbar() or modal_open():
+        failures.append("typing a profile name or flipping the rain switch counted as an unsaved settings edit")
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_selector("#save-settings", timeout=8000)
+    page.click("#len-seg button:not(.on)")
+    page.click('#topbar nav a[href="#characters"]')
+    try:
+        page.wait_for_selector("#cm-yes", state="visible", timeout=3000)
+        page.click("#cm-yes")
+        page.wait_for_function("location.hash === '#characters' && !document.querySelector('#save-settings')", timeout=6000)
+    except Exception:  # noqa: BLE001
+        failures.append("changing the reply length (a segmented button) was not counted as an unsaved edit")
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_selector("#save-settings", timeout=8000)
+    page.fill("#qa-global", "Look around\nWait and listen")
+    page.click("#save-settings")
+    try:
+        page.wait_for_function("/Saved|error/.test((document.querySelector('#save-status') || {}).textContent || '')", timeout=6000)
+    except Exception:  # noqa: BLE001
+        failures.append("Save & apply gave no answer")
+    saved_text = page.inner_text("#save-status")
+    if "Saved" not in saved_text:
+        failures.append(f"Save & apply did not save in the sandbox, so 'a saved page leaves freely' is untested: {saved_text!r}")
+    if not leave_via_topbar() or modal_open():
+        failures.append("a Settings page that was just saved still asked 'leave without saving'")
+    print("22) a clean or a saved Settings page leaves without a question; a segmented button counts as an edit")
+
+    # 23) The model list failing used to break the whole Settings page ("Something broke"). It now says so on the page.
+    page.route("**/api/models/local", lambda route: route.fulfill(
+        status=400, content_type="application/json", body=json.dumps({"detail": "the model server said no"})))
+    page.evaluate("location.hash = '#settings'")
+    try:
+        page.wait_for_selector("#save-settings", timeout=8000)
+        err = page.evaluate("""() => { const e = document.querySelector('#local-error');
+          return {hidden: !e || e.hidden, text: e ? e.textContent : ''}; }""")
+        if err["hidden"] or "could not read the model list" not in err["text"] or "the model server said no" not in err["text"]:
+            failures.append(f"a failed model list was not reported on the Settings page: {err}")
+    except Exception:  # noqa: BLE001
+        failures.append("a failed model list broke the Settings page: " + page.inner_text("#view")[:120])
+    no_dashes("Settings with a failed model list", page.inner_text("#view"))
+    page.unroute("**/api/models/local")
+    print("23) a failed model list is reported on the Settings page, which still works")
+
+    # 24) The list can also FAIL after the page has painted: the line appears then, not only at first paint.
+    #     (The page before this one is Settings: wait for it to be GONE, or "Save is on screen" is satisfied by the old page
+    #     and the answer arrives before the new page has painted, which is not the case under test.)
+    page.evaluate("import('/js/nav.js').then(n => { n.invalidateReady(); n.skipReadyCheck(); })")   # the Library, not the first-run probe
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_function("!document.querySelector('#save-settings')", timeout=6000)
+    held_late = []
+    page.route("**/api/models/local", lambda route: held_late.append(route))
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_selector("#save-settings", timeout=6000)
+    wait_until_held(page, held_late, "model list")
+    if "Looking for" not in page.inner_text("#installed-note"):
+        failures.append("case 24 did not start from a page that had painted before the model list arrived")
+    for route in held_late:
+        route.fulfill(status=400, content_type="application/json", body=json.dumps({"detail": "gone after the paint"}))
+    held_late.clear()
+    try:
+        page.wait_for_function("(() => { const e = document.querySelector('#local-error'); return e && !e.hidden && e.textContent.includes('gone after the paint'); })()",
+                               timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append("a model list that failed after the paint was not reported on the page")
+    if not re.search(r"not\s+running", page.evaluate("(document.querySelector('#names-warn') || {}).textContent || ''")):
+        failures.append("a model list that failed after the paint did not bring the 'server is not running' warning")
+    page.unroute("**/api/models/local")
+    print("24) a model list that fails after the page painted is reported on it")
+
+    # 25) Leave Settings before the list arrives: the late answer must find the page gone and do nothing (it used to be
+    #     free to throw on the missing note, which is a console error and a lost promise).
+    page.evaluate("import('/js/nav.js').then(n => { n.invalidateReady(); n.skipReadyCheck(); })")   # the Library, not the first-run probe
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_function("!document.querySelector('#save-settings')", timeout=6000)
+    held_gone = []
+    page.route("**/api/models/local", lambda route: held_gone.append(route))
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_selector("#save-settings", timeout=6000)
+    wait_until_held(page, held_gone, "model list")
+    if "Looking for" not in page.inner_text("#installed-note"):
+        failures.append("case 25 did not start from a page that had painted before the model list arrived")
+    page.evaluate("location.hash = '#characters'")
+    page.wait_for_function("!document.querySelector('#save-settings')", timeout=6000)
+    before = len(errors)
+    for route in held_gone:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(
+            {"installed": [], "suggestions": [], "howto": [], "server": "Ollama"}))
+    held_gone.clear()
+    page.wait_for_timeout(500)
+    if len(errors) != before:
+        failures.append(f"a model list that arrived after Settings was left threw: {errors[before:]}")
+        del errors[before:]                       # reported here, once
+    page.unroute("**/api/models/local")
+    print("25) a model list that arrives after Settings was left does nothing")
+
+    # 26) A Settings page that fails to repaint must not leave its guard behind (it would ask 'leave without saving' on the
+    #     error page, about edits that are no longer there).
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_selector("#save-settings", timeout=8000)
+    page.fill("#qa-global", "an edit that the failed repaint discards")
+    page.route("**/api/settings", lambda route: route.fulfill(
+        status=400, content_type="application/json", body=json.dumps({"detail": "settings unreadable"})))
+    page.evaluate("import('/js/app.js').then(m => m.render())")
+    try:
+        page.wait_for_function("((document.querySelector('#view h1') || {}).textContent || '').includes('Something broke')", timeout=6000)
+    except Exception:  # noqa: BLE001
+        failures.append("the failed Settings repaint did not show the error page: " + page.inner_text("#view")[:100])
+    page.unroute("**/api/settings")
+    page.click('#topbar nav a[href="#library"]')
+    page.wait_for_timeout(600)
+    if modal_open() or page.evaluate("location.hash") != "#library":
+        failures.append("the error page asked 'leave without saving' about a Settings page that was already gone")
+    print("26) a Settings page that failed to repaint leaves no leave-guard behind")
+
+    # 27) "Test connection" in Settings (the hosted panel): it sends what is typed (blank fields fall back to the saved values
+    #     on the server), shows the answer in words, shows a failed request as such, and is not an unsaved edit.
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_selector("#save-settings", timeout=8000)
+    page.evaluate("document.querySelector('#panel-hosted').classList.remove('hidden')")     # the panel shows in hosted mode
+    sent = []
+    answers = {"body": {"ok": False, "reason": "rejected", "detail": "api.example.test answered, but it did not accept this key."}, "status": 200}
+
+    def answer_test(route):
+        sent.append(route.request.post_data)
+        route.fulfill(status=answers["status"], content_type="application/json", body=json.dumps(answers["body"]))
+
+    page.route("**/api/connection/test", answer_test)
+    page.click("#hm-test")
+    page.wait_for_function("document.querySelector('#hm-test-status').textContent.includes('did not accept')", timeout=4000)
+    first = json.loads(sent[0])
+    on_page = page.evaluate("({base: document.querySelector('#hm-base').value, model: document.querySelector('#hm-model').value})")
+    if first != {"base_url": on_page["base"], "api_key": "", "model": on_page["model"]}:
+        failures.append(f"Test connection did not send what is on the page: {first} vs {on_page}")
+    if page.evaluate("document.querySelector('#hm-test').disabled"):
+        failures.append("Test connection stayed disabled after the answer")
+    if page.evaluate(unload_js):
+        failures.append("pressing Test connection counted as an unsaved settings edit")
+    answers["body"] = {"ok": True, "reason": "connected", "detail": "Connected to api.example.test."}
+    page.click("#hm-test")
+    page.wait_for_function("document.querySelector('#hm-test-status').textContent.startsWith('Connected')", timeout=4000)
+    if page.evaluate("document.querySelector('#hm-test-status').style.color") != "var(--ok)":
+        failures.append("a good connection is not shown as good")
+    answers["status"], answers["body"] = 400, {"detail": "the test route refused"}
+    page.click("#hm-test")
+    page.wait_for_function("document.querySelector('#hm-test-status').textContent.startsWith('Could not run the test')", timeout=4000)
+    if "the test route refused" not in page.inner_text("#hm-test-status"):
+        failures.append("a failed test request did not say why: " + page.inner_text("#hm-test-status"))
+    answers["status"], answers["body"] = 200, {"ok": True, "reason": "connected", "detail": "Connected to api.example.test."}
+    page.fill("#hm-key", "sk-typed-key-for-the-test")
+    page.click("#hm-test")
+    page.wait_for_function("document.querySelector('#hm-test-status').textContent.startsWith('Connected')", timeout=4000)
+    if json.loads(sent[-1]).get("api_key") != "sk-typed-key-for-the-test":
+        failures.append(f"the typed key was not sent to the test: {sent[-1]}")
+    page.unroute("**/api/connection/test")
+    page.click('#topbar nav a[href="#characters"]')               # the typed key is an edit: leave through the question
+    page.wait_for_selector("#cm-yes", state="visible", timeout=3000)
+    page.click("#cm-yes")
+    page.wait_for_function("location.hash === '#characters' && !document.querySelector('#save-settings')", timeout=6000)
+    print("27) Test connection sends what is typed, says what happened and is not an unsaved edit")
+
+    # 28) First run, "Use an API key": the button said "Checking..." and checked nothing. The key is tried against the
+    #     provider's model list BEFORE it is saved. A refused or unreachable key is not saved; the same button then reads
+    #     "Save anyway". A good answer, or a provider with no model list, saves at once.
+    saves, tests = [], []
+    outcome = {"reason": "rejected", "ok": False}
+
+    def fake_test(route):
+        tests.append(route.request.post_data)
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"ok": outcome["ok"], "reason": outcome["reason"], "detail": "the provider said so."}))
+
+    def fake_save(route):
+        if route.request.method == "PUT":
+            saves.append(route.request.post_data)
+            route.fulfill(status=200, content_type="application/json", body="{}")
+        else:
+            route.continue_()
+
+    def first_run():
+        saves.clear()
+        tests.clear()
+        page.evaluate("import('/js/welcome.js').then(m => m.renderWelcome({ok: false, reason: 'no_key'}))")
+        page.wait_for_selector("#w-key", timeout=6000)
+        for _ in range(8):             # a repaint left over from the previous save can empty the box: type until it holds
+            page.fill("#w-key", "sk-first-run-key")
+            page.wait_for_timeout(200)
+            if page.input_value("#w-key") == "sk-first-run-key":
+                break
+
+    page.route("**/api/connection/test", fake_test)
+    page.route("**/api/settings", fake_save)
+    # Every saved key ends in a render() that asks /api/ready. On a box with no model server that probe takes seconds, and a
+    # render that finishes late repaints whatever view is open by then: answer it at once, so none is left pending.
+    page.route("**/api/ready", lambda route: route.fulfill(status=200, content_type="application/json", body='{"ok": true}'))
+    first_run()
+    page.click("#w-use-hosted")
+    page.wait_for_function("document.querySelector('#w-use-hosted').textContent === 'Save anyway'", timeout=4000)
+    note = page.inner_text("#w-hosted-note")
+    sent_test = json.loads(tests[0])
+    if "the provider said so." not in note or "save it anyway" not in note:
+        failures.append(f"a refused key was not explained on the first-run screen: {note!r}")
+    if saves:
+        failures.append("a key the provider refused was saved on the first press")
+    if sent_test.get("api_key") != "sk-first-run-key" or not sent_test.get("base_url"):
+        failures.append(f"the first-run check did not test the typed key against the preset: {sent_test}")
+    page.click("#w-use-hosted")                                       # Save anyway
+    page.wait_for_timeout(600)
+    if len(saves) != 1 or json.loads(saves[0]).get("hosted", {}).get("api_key") != "sk-first-run-key" or len(tests) != 1:
+        failures.append(f"'Save anyway' did not save once without testing again: saves={len(saves)} tests={len(tests)}")
+    for ok, reason in ((True, "connected"), (False, "no_model_list")):
+        outcome.update(ok=ok, reason=reason)
+        first_run()
+        page.click("#w-use-hosted")
+        page.wait_for_timeout(600)
+        if len(saves) != 1:
+            failures.append(f"a {reason} answer should save at once: saves={len(saves)}")
+    outcome.update(ok=False, reason="unreachable")
+    first_run()
+    page.click("#w-use-hosted")
+    page.wait_for_function("document.querySelector('#w-use-hosted').textContent === 'Save anyway'", timeout=4000)
+    if page.locator("#w-preset option").count() < 2:
+        failures.append("the first-run screen offers one provider, so 'a new provider re-arms the check' cannot be tested")
+    else:
+        page.select_option("#w-preset", index=1)
+        if page.inner_text("#w-use-hosted") != "Save and start":
+            failures.append("changing the provider kept the 'Save anyway' label of the previous one")
+        tests_before = len(tests)
+        page.click("#w-use-hosted")
+        page.wait_for_function("document.querySelector('#w-use-hosted').textContent === 'Save anyway'", timeout=4000)
+        if len(tests) != tests_before + 1 or saves:
+            failures.append(f"a different provider was saved without being tried: tests {len(tests)} (was {tests_before}), saves {len(saves)}")
+    page.unroute("**/api/connection/test")
+    page.unroute("**/api/settings")
+    page.evaluate("location.hash = '#library'")                      # (often already there, so this alone repaints nothing)
+    page.evaluate("import('/js/app.js').then(m => m.render())")      # the Library, now that readiness is answered
+    page.wait_for_function("!document.querySelector('#w-key')", timeout=8000)
+    page.wait_for_timeout(500)
+    page.unroute("**/api/ready")
+    print("28) the first-run key is tried before it is saved; a refused key is not saved, and 'Save anyway' is explicit")
+
+    # 29) Retry keeps what it replaces, and a failed or stopped retry or swipe puts the exchange back (D-057). Driven through the
+    #     real routes and engine with a stub Writer (the server runs in this process).
+    from srv import core as srv_core
+
+    class Writer:
+        model = "stub-writer"
+
+        def __init__(self, *replies):
+            self.replies = list(replies)
+
+        def complete(self, messages, **k):
+            return ""
+
+        def stream(self, messages, **k):
+            r = self.replies.pop(0) if self.replies else "A default version."
+            if callable(r):
+                r = r()
+            if isinstance(r, BaseException):
+                raise r
+            yield from ([r] if isinstance(r, str) else r)
+
+    def slow_until_stopped():
+        def go():
+            yield "A first half that never lands. "
+            for _ in range(60):                               # six seconds at most, and only until Stop is pressed
+                if srv_core._cancel.is_set():
+                    break
+                time.sleep(0.1)
+            yield "A second half."
+        return go()
+
+    srv_core._cfg.generation["chapter_outline"] = False
+    srv_core._cfg.generation["trinity_brain"] = False
+    engine29 = server._engine(slug)
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_function("!document.querySelector('#save-settings')", timeout=6000)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#retry", timeout=8000)
+    tail_js = "(() => { const t = [...document.querySelectorAll('#transcript .turn .turn-body')]; return t.map(x => x.textContent.trim()); })()"
+    bar_js = "(() => { const b = document.querySelector('.swipebar span'); return b ? b.textContent.trim() : ''; })()"
+    before_turns = page.evaluate(tail_js)
+    if len(before_turns) < 2:
+        failures.append(f"case 29 needs a story with an exchange to retry: {before_turns}")
+    old_tail = before_turns[-1]
+    engine29.llm = Writer("A freshly written version of the last reply.")
+    page.click("#retry")
+    page.wait_for_function("document.querySelector('.swipebar span') && document.querySelector('.swipebar span').textContent.includes('of 2')", timeout=8000)
+    now = page.evaluate(tail_js)
+    if now[-1] != "A freshly written version of the last reply." or len(now) != len(before_turns):
+        failures.append(f"a good retry did not replace the last reply in place: {now}")
+    if "Version 2 of 2" not in page.evaluate(bar_js):
+        failures.append(f"a good retry did not say it kept the old text as a version: {page.evaluate(bar_js)!r}")
+    if "kept until your next move" not in (page.evaluate("document.querySelector('.swipebar span').title") or ""):
+        failures.append("the version label does not say how long earlier versions are kept")
+    page.evaluate("location.hash = '#library'")                      # leave and come back: the version showing is the server's
+    page.wait_for_function("!document.querySelector('#retry')", timeout=6000)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#retry", timeout=8000)
+    if "Version 2 of 2" not in page.evaluate(bar_js):
+        failures.append(f"coming back to the story lost which version was showing: {page.evaluate(bar_js)!r}")
+    page.click(".swipebar .swl")
+    page.wait_for_function("document.querySelector('.swipebar span').textContent.includes('Version 1 of 2')", timeout=6000)
+    if page.evaluate(tail_js)[-1] != old_tail:
+        failures.append("going back to Version 1 did not show the text the retry replaced")
+    # a model error: the exchange is back, the reader is told, nothing is lost
+    shown = page.evaluate(tail_js)
+    engine29.llm = Writer(ConnectionError("connection refused"))
+    page.click("#retry")
+    page.wait_for_selector(".turn-error", timeout=8000)
+    card = page.inner_text(".turn-error")
+    if "Your earlier version is back" not in card:
+        failures.append(f"a failed retry did not tell the reader their earlier version is back: {card!r}")
+    if page.evaluate(tail_js) != shown:
+        failures.append(f"a failed retry changed the story on screen: {page.evaluate(tail_js)}")
+    if page.evaluate("fetch('/api/saves/%s').then(r => r.json()).then(j => j.turns.map(t => t.text))" % slug) != shown:
+        failures.append("a failed retry changed the SAVED story")
+    # an empty reply
+    engine29.llm = Writer("")
+    page.click("#retry")
+    page.wait_for_function("[...document.querySelectorAll('.turn-error')].some(e => e.textContent.includes('Nothing new came back'))", timeout=8000)
+    if page.evaluate(tail_js) != shown:
+        failures.append("an empty retry made the story shorter")
+    # Stop during a retry
+    engine29.llm = Writer(slow_until_stopped)
+    page.click("#retry")
+    page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    page.wait_for_timeout(400)
+    page.click("#stop")
+    page.wait_for_function("[...document.querySelectorAll('.turn-note')].some(e => e.textContent.includes('Your earlier version is back'))", timeout=10000)
+    if page.evaluate(tail_js) != shown:
+        failures.append(f"Stop during a retry lost the exchange: {page.evaluate(tail_js)}")
+    page.wait_for_function("!document.querySelector('#send').disabled", timeout=6000)
+    engine29.llm = Writer(slow_until_stopped)
+    page.click("#retry")                                              # the next run clears the note of this one
+    page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    if page.evaluate("document.querySelectorAll('.turn-note').length"):
+        failures.append("a retry started with the previous run's Stopped note still on screen")
+    page.wait_for_timeout(400)
+    page.click("#stop")
+    page.wait_for_function("[...document.querySelectorAll('.turn-note')].some(e => e.textContent.includes('Your earlier version is back'))", timeout=10000)
+    # swipe forward past the end writes a new version, with a Stop that is safe
+    page.wait_for_function("!document.querySelector('#send').disabled", timeout=6000)
+    engine29.llm = Writer(slow_until_stopped)
+    page.click(".swipebar .swr")                                    # Version 1 of 2: this only browses to Version 2 ...
+    page.wait_for_function("document.querySelector('.swipebar span').textContent.includes('Version 2 of 2')", timeout=6000)
+    page.click(".swipebar .swr")                                    # ... and this one, at the end, writes a new one
+    page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    if page.evaluate("document.querySelectorAll('.turn-note').length"):
+        failures.append("the Stopped note of the previous run was still on screen when the next run started")
+    page.wait_for_timeout(400)
+    page.click("#stop")
+    page.wait_for_function("[...document.querySelectorAll('.turn-note')].some(e => e.textContent.includes('Your earlier version is back'))", timeout=10000)
+    after_stop = page.evaluate(tail_js)
+    if len(after_stop) != len(shown) or after_stop[-1] != "A freshly written version of the last reply.":
+        failures.append(f"Stop during swipe-generate lost or changed the exchange: {after_stop}")
+    page.wait_for_function("!document.querySelector('#send').disabled", timeout=6000)
+    engine29.llm = Writer("A third version, written by the swipe.")
+    page.click(".swipebar .swr")
+    page.wait_for_function("document.querySelector('.swipebar span') && document.querySelector('.swipebar span').textContent.includes('of 3')", timeout=8000)
+    if page.evaluate(tail_js)[-1] != "A third version, written by the swipe.":
+        failures.append("swipe-generate did not write the third version")
+    # leave mid-swipe and come back: the same promise as for a turn (D-056 item 5), now that a swipe sets the run state too
+    page.wait_for_function("!document.querySelector('#send').disabled", timeout=6000)
+    engine29.llm = Writer(slow_until_stopped)
+    page.click(".swipebar .swr")                                    # at the last version: writes a fourth
+    page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    page.wait_for_timeout(300)
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_function("!document.querySelector('#retry')", timeout=6000)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#retry", timeout=8000)
+    back_in = page.evaluate("""() => ({stage: document.querySelector('#stageline').textContent,
+      stop: !document.querySelector('#stop').classList.contains('hidden'), sendOff: document.querySelector('#send').disabled})""")
+    if "Still generating" not in back_in["stage"] or not back_in["stop"] or not back_in["sendOff"]:
+        failures.append(f"coming back to a story whose swipe is generating: {back_in}")
+    page.click("#stop")
+    try:
+        page.wait_for_function("!document.querySelector('#send').disabled && document.querySelector('#stop').classList.contains('hidden')", timeout=10000)
+    except Exception:  # noqa: BLE001
+        failures.append("the re-entered view never took over when the swipe ended: " + repr(page.evaluate(
+            "({send: document.querySelector('#send').disabled, stage: document.querySelector('#stageline').textContent})")))
+    if page.evaluate(tail_js)[-1] != "A third version, written by the swipe.":
+        failures.append(f"a swipe stopped from another visit lost the exchange: {page.evaluate(tail_js)}")
+    print("29) retry keeps the old text as a version; a failed, empty or stopped retry or swipe puts the exchange back and says so")
 
     browser.close()
 

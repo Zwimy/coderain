@@ -144,7 +144,16 @@ export async function contextModal(slug) {
   if (!d) return;
   const bar = (n, max) => `<div class="ctx-bar"><i style="width:${
     Math.max(1, Math.round(n / max * 100))}%"></i></div>`;
-  const max = Math.max(...d.sections.map(s => s.chars), 1);
+  // Every part of the prompt as a share of the whole, so "what is eating the context" is one glance. The rules and the verbatim
+  // turns are parts of the prompt too: they used to be a sentence under the list, and the shares could not add up to anything.
+  const rows = [
+    ...d.sections.map(s => ({title: s.title, entries: s.entries, chars: s.chars})),
+    {title: "Rules and directives", chars: d.rules_chars},
+    {title: `Recent turns, word for word (${d.history_msgs})`, chars: d.history_chars},
+  ];
+  const total = Math.max(1, rows.reduce((a, r) => a + (r.chars || 0), 0));
+  const pct = n => (n > 0 && n / total < 0.005 ? "<1%" : Math.round(n / total * 100) + "%");
+  const max = Math.max(...rows.map(r => r.chars || 0), 1);
   const warn = d.budget_used_pct >= 95;
   openModal(`<h2>What the model sees</h2>
     <p class="hint">The next turn's prompt, assembled for real (no model call).
@@ -168,15 +177,14 @@ export async function contextModal(slug) {
       ${d.health.map(h => `<div>· <code>${esc(h.stage)}</code> (turn ${h.turn}):
         ${esc(h.reason)}</div>`).join("")}
     </div>` : ""}
-    <div id="ctx-list">${d.sections.map(s => `<div class="ctx-row">
-        <span class="ctx-name">${esc(s.title)}${s.entries
-          ? ` <span class="muted">· ${s.entries}</span>` : ""}</span>
-        ${bar(s.chars, max)}
-        <span class="ctx-n">${s.chars.toLocaleString()}</span>
+    <div id="ctx-list">${rows.map(r => `<div class="ctx-row">
+        <span class="ctx-name">${esc(r.title)}${r.entries
+          ? ` <span class="muted">· ${r.entries}</span>` : ""}</span>
+        ${bar(r.chars, max)}
+        <span class="ctx-pct" title="share of the whole prompt">${pct(r.chars)}</span>
+        <span class="ctx-n">${(r.chars || 0).toLocaleString()}</span>
       </div>`).join("")}</div>
-    <p class="hint">Rules &amp; directives add ${d.rules_chars.toLocaleString()}
-      chars; the ${d.history_msgs} verbatim turns add
-      ${d.history_chars.toLocaleString()}.</p>
+    <p class="hint">Shares are of the prompt's characters, not its tokens, so they are close but not exact.</p>
     ${usageBlock(d.usage)}
     <div class="modal-actions"><button id="ctx-close">Close</button></div>`);
   $("#ctx-close").addEventListener("click", closeModal);
@@ -213,7 +221,7 @@ function usageBlock(u) {
       <div><b>${fmtTok(u.last_turn.in + u.last_turn.out)}</b>
         <span>last turn${cost(u.last_turn.in, u.last_turn.out)}</span></div>
     </div>
-    <div id="ctx-list">${stages.map(([name, s]) => `<div class="ctx-row">
+    <div id="ctx-stages">${stages.map(([name, s]) => `<div class="ctx-row">
         <span class="ctx-name">${esc(name)}
           <span class="muted">· ${s.calls}</span></span>
         <div class="ctx-bar"><i style="width:${
@@ -356,7 +364,7 @@ export async function renderPlay(slug) {
   const transcript = $("#transcript");
   const stage = $("#stageline");
   const evbar = $("#eventbar");
-  let swipe = {count: 1, idx: 0};      // ST-02 state for the last narrator turn
+  let swipe = s.swipes || {count: 1, idx: 0};      // ST-02 state for the last narrator turn (the server knows which is showing)
 
   const bodyOf = d => d.querySelector(".turn-body");
   const paint = (d, text) => {         // set a turn's text (markdown for prose)
@@ -420,7 +428,8 @@ export async function renderPlay(slug) {
     bar.innerHTML =
       `<button class="mini swl" title="previous version (left arrow)"
          aria-label="Previous version" ${swipe.idx ? "" : "disabled"}>◄</button>`
-      + `<span>Version ${swipe.idx + 1} of ${swipe.count}</span>`
+      + `<span ${swipe.count > 1 ? 'title="Earlier versions are kept until your next move."' : ""}
+           >Version ${swipe.idx + 1} of ${swipe.count}</span>`
       + `<button class="mini swr" aria-label="Next or new version"
            title="next version: at the end, writes a new one (right arrow)"
            >►</button>`
@@ -455,8 +464,12 @@ export async function renderPlay(slug) {
     const d = lastNarrator();
     if (!d || busy) return;
     setBusy(true); stage.textContent = "Thinking…";
+    runningSlug = slug;
+    $("#stop").classList.remove("hidden");
+    $("#stop").disabled = false;          // Stop works here too: the exchange is put back, so it cannot lose anything (D-057)
     const body = bodyOf(d); body.textContent = ""; d.classList.add("pending");
-    transcript.querySelectorAll(".swipebar").forEach(b => b.remove());
+    transcript.querySelectorAll(".swipebar, .turn-error, .turn-note").forEach(b => b.remove());
+    let failedSwipe = null;
     // Only a COMPLETED generation becomes a variant. The `done` frame is the
     // signal, not the first chunk: Stop mid-stream leaves prose on screen that
     // the server never stored, and counting that enabled a ◄ pointing at a
@@ -472,10 +485,12 @@ export async function renderPlay(slug) {
                      setEvents(m.events); setSheet(m.sheet || []);
                      $(".clock").textContent = m.clock || "";
                      if (m.text != null) body._settle = m.text; stage.textContent = ""; },
-        error: m => { stage.textContent = "error: " + m.text; },
+        error: m => { failedSwipe = m; },
       });
-    } catch (e) { stage.textContent = "error: " + e.message; }
+    } catch (e) { failedSwipe = {code: "network", text: e.message}; }
     d.classList.remove("pending");
+    stage.textContent = "";
+    $("#stop")?.classList.add("hidden");
     // The store's turn COUNT decides, not the arrival of a `done` frame. `done`
     // also fires when the regeneration produced nothing: the server has already
     // deleted the exchange and dropped its swipe state, so counting a variant
@@ -490,14 +505,22 @@ export async function renderPlay(slug) {
     // just cleared OVER a real stored turn, under a bar advertising a variant
     // that does not exist.
     if (serverTurns !== before || !body.textContent.trim()) {
+      runningSlug = null;
       setBusy(false);
-      await resync();
+      await resync();                       // the server put the exchange back, so this shows it
+      if (failedSwipe) {
+        failedSwipe.restored = domTurns() === before;
+        showTurnError(failedSwipe, null);
+      }
+      for (const hook of [...runEndHooks]) { runEndHooks.delete(hook); hook(); }
       return;
     }
     if (body._settle && body.textContent) body.textContent = body._settle;
     paint(d, body.textContent);
     swipe = {count: swipe.count + 1, idx: swipe.count};
+    runningSlug = null;
     setBusy(false); renderSwipeBar();
+    for (const hook of [...runEndHooks]) { runEndHooks.delete(hook); hook(); }
   };
   const setSheet = lines => {
     const el = $("#sheet");
@@ -563,7 +586,7 @@ export async function renderPlay(slug) {
       const fresh = await api(`/api/saves/${slug}`);
       transcript.innerHTML = "";
       (fresh.turns || []).forEach(t => addTurn(t.role, t.text));
-      swipe = {count: 1, idx: 0};
+      swipe = fresh.swipes || {count: 1, idx: 0};
       renderSwipeBar();
     } catch (_e) { /* offline: leave what's on screen rather than blanking it */ }
   };
@@ -577,7 +600,7 @@ export async function renderPlay(slug) {
       const note = document.createElement("div");
       note.className = "turn-note";
       note.setAttribute("role", "status");
-      note.textContent = "Stopped.";
+      note.textContent = msg.restored ? "Stopped. Your earlier version is back." : "Stopped.";
       transcript.appendChild(note);
       transcript.scrollTop = transcript.scrollHeight;
       return;
@@ -589,8 +612,11 @@ export async function renderPlay(slug) {
       : msg.code === "auth" ? "The API key was rejected"
       : msg.code === "connection" ? "Can't reach the model"
       : msg.code === "context" ? "This story is too long for the model"
+      : msg.code === "restored" ? "Nothing new came back"
       : msg.code === "aborted" ? "Stopped" : "That turn didn't go through";
-    box.innerHTML = `<b>${esc(title)}</b><p>${esc(msg.text || "")}</p>`;
+    // "restored" already says it; any other failure of a retry or a swipe adds that the earlier version is back
+    const back = msg.restored && msg.code !== "restored" ? " Your earlier version is back." : "";
+    box.innerHTML = `<b>${esc(title)}</b><p>${esc((msg.text || "") + back)}</p>`;
     const row = document.createElement("div");
     row.className = "row";
     if (retryFn && msg.code !== "aborted") {
@@ -619,7 +645,7 @@ export async function renderPlay(slug) {
     setBusy(true);
     runningSlug = slug;
     evbar.innerHTML = "";
-    transcript.querySelectorAll(".turn-error").forEach(b => b.remove());
+    transcript.querySelectorAll(".turn-error, .turn-note").forEach(b => b.remove());
     transcript.querySelectorAll(".swipebar").forEach(b => b.remove());
     // Elapsed time + a hint once the wait passes Nielsen's 10s attention limit:
     // a 30s+ planner stage under a static "Thinking…" reads as a hang.
@@ -703,6 +729,9 @@ export async function renderPlay(slug) {
       // story with a fresh opening. The retry hotkey is still there when the
       // reader actually wants that.
       const destructive = /\/(retry|swipe-gen)$/.test(path);
+      // The server puts the exchange back when a retry fails, is stopped or comes back empty (D-057): say so when the
+      // story on screen is the length it was.
+      failed.restored = destructive && domTurns() === storeBefore;
       showTurnError(failed, destructive ? null
         : playerText !== undefined ? () => run(path, body, playerText)
         : () => run(path, body));
@@ -742,7 +771,9 @@ export async function renderPlay(slug) {
       // Invariant 2: degrading is fine, degrading invisibly is not.
       toast("That turn produced nothing and was discarded.", "info");
     }
-    swipe = {count: 1, idx: 0};                // fresh turn resets alternates
+    // A fresh turn resets alternates. A retry keeps the old text as one, and its handler reads the real state from the server
+    // (resync) once this returns. A FAILED run has just done that itself (a failed retry puts the old versions back): leave it.
+    if (!failed) swipe = {count: 1, idx: 0};
     renderSwipeBar();
     runningSlug = null;
     setBusy(false);

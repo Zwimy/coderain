@@ -203,7 +203,14 @@ def _save_payload(slug: str) -> dict:
         "companions": eng.companions(),
         "clock": store.clock_str(),
         "quick_actions": _quick_actions_for(store),
+        # which version of the last reply is showing (a retry keeps the text it replaced as a variant)
+        "swipes": _swipe_state(eng),
     }
+
+
+def _swipe_state(eng) -> dict | None:
+    sw = getattr(eng, "_swipes", None)
+    return {"count": len(sw["variants"]), "idx": sw["idx"]} if sw else None
 
 
 def _sheet_lines(eng: Engine) -> list[str]:
@@ -287,9 +294,11 @@ def _stream_generation(slug: str, run):
                         "text": final})
         except Exception as e:  # noqa: BLE001 — surface, never hang the stream
             # Classified + plain-language: the raw exception can leak absolute
-            # paths, and 'Connection error.' is meaningless to a new user.
-            yield _sse({"t": "error", "code": _model_error_kind(e),
-                        "text": _model_error_text(e)})
+            # paths, and 'Connection error.' is meaningless to a new user. An
+            # exception that brings its own reader-facing wording (RetryRestored)
+            # keeps it.
+            yield _sse({"t": "error", "code": getattr(e, "code", None) or _model_error_kind(e),
+                        "text": getattr(e, "user_text", None) or _model_error_text(e)})
         finally:
             # Deterministically run the inner generator's cleanup (drop an orphan
             # player turn) rather than waiting for GC, then always free the lock.
