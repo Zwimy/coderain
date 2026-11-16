@@ -8,6 +8,7 @@ turn plus a summary.
 
     python -m soak play --out DIR [--turns 30] [--seed 5] [--stub | --model NAME] [--fate off|preview|on]
                         [--sheets full|role] [--window 4] [--budget 5000] [--probe-every 8] [--canon off|card]
+                        [--probe-set look|graph|all] [--graph-every 4] [--stub-knowledge truthful|leaky|wrong]
 
   --stub   an offline writer (deterministic prose, no model, no network): what the tests and a dry run use
   --model  a local Ollama model on this machine. It must already be running: this never starts it, and a host that is
@@ -21,6 +22,13 @@ turn plus a summary.
 Probes: every `probe-every` turns the player studies one character's hair or eyes and the colour the narration states
 is compared with the sheet (held, drift, or none). Rows and the summary hold the story's own invented text, so they
 are written only to --out.
+
+  --probe-set  look (default): the hair and eyes probes above. graph (D-058): relationship, possession, two-hop and who-knows-what
+           probes instead: the sheets state ties and possessions, the player whispers a secret to one character on turns 3 and 5,
+           and from turn 16 every `graph-every` turns asks a question about them (soak/graph_probe.py). all: both, the look probe
+           winning a turn they share.
+  --stub-knowledge  what the OFFLINE writer does with those questions (truthful, leaky, wrong): it exists so a test can show the
+           scoring notices a wrong answer and a leak
 """
 from __future__ import annotations
 
@@ -32,6 +40,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from soak import graph_probe as gp
 
 PREMISE = ("Brinewick is a tidal town on a saltmarsh, reached only by the ferry. Rain comes off the sea most evenings. "
            "You arrive as a stranger carrying a sealed letter for someone in town. The people you meet are Ottoline Pike, "
@@ -87,15 +97,24 @@ COLOUR_FAMILIES = [
 class ScriptedPlayer:
     """The same moves for the same seed: a probe every `probe_every` turns, ordinary actions between."""
 
-    def __init__(self, seed: int = 5, probe_every: int = 8):
+    def __init__(self, seed: int = 5, probe_every: int = 8, probe_set: str = "look", graph_every: int = 4):
         self.rng, self.probe_every = random.Random(seed), probe_every
+        self.look_on, self.graph_on, self.graph_every = probe_set in ("look", "all"), probe_set in ("graph", "all"), graph_every
 
     def act(self, i: int) -> dict:
-        name = CAST[self.rng.randrange(len(CAST))][0]
-        if self.probe_every and i % self.probe_every == 0:
+        name = CAST[self.rng.randrange(len(CAST))][0]            # drawn on EVERY turn, so the other moves do not shift
+        if self.graph_on:
+            tell = gp.tell_move(i)
+            if tell:
+                return tell
+        if self.look_on and self.probe_every and i % self.probe_every == 0:
             slot = "hair" if (i // self.probe_every) % 2 else "eyes"
             action = f"I study {name}'s hair." if slot == "hair" else f"I meet {name}'s eyes and study them."
             return {"kind": "probe", "action": action, "who": name, "slot": slot}
+        if self.graph_on:
+            ask = gp.probe_move(i, self.graph_every)
+            if ask:
+                return ask
         place = self.rng.choice(PLACES)
         return {"kind": "play", "action": self.rng.choice(ACTIONS).format(n=name, p=place), "who": name, "slot": ""}
 
@@ -106,8 +125,8 @@ class StubWriter:
     direction chosen by the action, and `calls` counts what it was asked."""
     model = "stub-writer"
 
-    def __init__(self, sheets: str = "full"):
-        self.sheets, self.gen = sheets, {}
+    def __init__(self, sheets: str = "full", knowledge: str = "truthful"):
+        self.sheets, self.knowledge, self.gen = sheets, knowledge, {}
         self.calls = {"writer": 0, "fate": 0, "other": 0, "steered": 0}     # steered: Writer calls that carried a fate note
 
     def stream(self, messages, **k):
@@ -115,6 +134,10 @@ class StubWriter:
         if any(m["role"] == "system" and str(m["content"]).startswith("Hidden steering") for m in messages):
             self.calls["steered"] += 1
         last = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+        said = gp.stub_answer(last, self.knowledge, CAST)
+        if said:                                                  # a relationship, possession or secret move (D-058)
+            yield said
+            return
         who = next((c for c in CAST if c[0] in last or c[0].split()[0] in last), CAST[0])
         m = re.search(r"study .*?(hair)|study .*?(eyes)|meet .*?(eyes)", last)
         if m and self.sheets == "full":
@@ -153,6 +176,15 @@ def probe_verdict(text: str, who: str, slot: str, truth: str) -> str:
     if not found:
         return "none"
     return "held" if any(_family(c) == _family(truth) for c in found) else "drift"
+
+
+def sheet_body(cast_row, sheets: str, graph_on: bool) -> str:
+    """One character's sheet. `sheets` decides whether the look is stated; the graph probes need the author's ties and
+    possessions stated on the sheets whatever the looks are, so they are added whenever those probes are on."""
+    name, _slug, _aliases, hair, eyes, role = cast_row
+    looks = f"**Visual:** {role}, with {hair} hair and {eyes} eyes. " if sheets == "full" else f"**Role:** {role}. "
+    ties = gp.ties_line(name) if graph_on else ""
+    return looks + ties + "**Mentality:** guarded but fair. **Voice:** plain, short sentences."
 
 
 def _config(model: str, window: int, budget: int, canon: str, stub: bool) -> str:
@@ -220,11 +252,13 @@ def run_play(args, home: Path) -> int:
     lib = Library(home)
     slug = lib.create_story("Brinewick", PREMISE)
     store = lib.store(slug)
-    for name, eslug, aliases, hair, eyes, role in CAST:
-        looks = f"**Visual:** {role}, with {hair} hair and {eyes} eyes. " if args.sheets == "full" else f"**Role:** {role}. "
+    probe_set = getattr(args, "probe_set", "look")
+    graph_every = getattr(args, "graph_every", 4)
+    graph_on = probe_set in ("graph", "all")
+    for row in CAST:
         store.upsert_entry("characters.md", Entry(
-            title=name, slug=eslug, aliases=aliases, importance=4, attrs={"status": "alive"},
-            body=looks + "**Mentality:** guarded but fair. **Voice:** plain, short sentences."))
+            title=row[0], slug=row[1], aliases=row[2], importance=4, attrs={"status": "alive"},
+            body=sheet_body(row, args.sheets, graph_on)))
     # A new story draws a random dice seed. Pin it to --seed so the same seed gives the same dice as well as the same
     # moves, which is what an on/off comparison of fate (or anything that rolls) needs.
     rpg = store.rpg_state()
@@ -233,14 +267,14 @@ def run_play(args, home: Path) -> int:
     if args.fate != "off":
         fate.set_settings(store, args.fate, True)
     eng = Engine(load_config(), store)
-    writer = StubWriter(args.sheets) if stub else None
+    writer = StubWriter(args.sheets, getattr(args, "stub_knowledge", "truthful")) if stub else None
     if writer is not None:
         eng.llm = writer
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     truth = {n: (h, e) for n, _s, _a, h, e, _r in CAST}
-    player = ScriptedPlayer(args.seed, args.probe_every)
+    player = ScriptedPlayer(args.seed, args.probe_every, probe_set, graph_every)
     rows, verdicts = [], {"held": 0, "drift": 0, "none": 0}
     t_all = time.time()
     with (out / "turns.jsonl").open("w", encoding="utf-8") as f:
@@ -256,6 +290,10 @@ def run_play(args, home: Path) -> int:
             if mv["kind"] == "probe" and args.sheets == "full":
                 row["verdict"] = probe_verdict(text, mv["who"], mv["slot"], truth[mv["who"]][0 if mv["slot"] == "hair" else 1])
                 verdicts[row["verdict"]] += 1
+            if mv["kind"] in ("graph", "tell"):
+                row["gid"], row["sub"] = mv["gid"], mv["sub"]
+                if mv["kind"] == "graph":
+                    row["verdict"] = gp.score(mv["gid"], text, CAST)
             rows.append(row)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
@@ -271,6 +309,9 @@ def run_play(args, home: Path) -> int:
                "wall_secs": round(time.time() - t_all, 1),
                "model_calls": dict(writer.calls) if writer is not None else None,
                "health_rows": len(store.health(200))}
+    if graph_on:
+        summary["probe_set"] = probe_set
+        summary["graph"] = gp.summarize(rows)
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
     return 0

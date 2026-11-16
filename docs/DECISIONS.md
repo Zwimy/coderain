@@ -2474,3 +2474,47 @@ line, a canon note), which is the point; the canon reader runs after a SUCCESSFU
 a story with mechanics still has one undo level. Evidence that would change this: a save so large that the copy is felt (then copy only
 the files a rollback touches), or a player who wants every retry kept in a story with mechanics (then variants would have to carry the
 state and the ledger records with them).
+
+## D-058 — Relationship and who-knows-what probes for the scripted player (`python -m soak play --probe-set graph`)
+
+**Why.** A knowledge graph (or an edge table derived from the ledger) would help with relationships, with questions that cross two
+character sheets, and with "who knows what". The case for it rests on studies of question answering over books and short templated
+scenes (one reported witness records cutting knowledge leakage from 60.7 to 0 points); nobody has measured it for a story played for
+thousands of turns, and nothing measured whether the store we already have fails those questions. The plan's seventh principle is to measure
+before believing, so the probe comes before any graph.
+
+**What it is.** `soak/graph_probe.py`, wired into the scripted player (D-048). With `--probe-set graph` (or `all`, which keeps the look
+probes too), the author's sheets state ties and possessions (each tie on BOTH characters' sheets, each possession on one), the player
+whispers one secret to one character on turn 3 and another to a different character on turn 5, and from turn 16 every `--graph-every`
+turns (default 4) it asks a question. The kinds rotate and each walks its own list:
+- **relation and possession (one hop):** who is Ottoline's nephew, who keeps the brass lamp key. The answer is on one sheet.
+- **twohop:** who sells salt to the keeper of the brass lamp key. The question names nobody whose sheet holds the answer, so name-keyed
+  activation has to find the second entry through the first. This is the question an edge table would answer and the current store may not.
+- **recall:** ask the character who WAS told what the player told them. It is the control for the next kind.
+- **leak:** ask the characters who were NOT told. A single narrator writes everyone, so a secret in the prompt can come out of any
+  mouth; the probe asks whether it does once the telling is far outside the verbatim window and only memory can carry it.
+Scoring is a plain string check, no judge: `held`, `wrong`, `mixed` or `none` for a hop (the asked character and the middle of a chain
+may be named), `held` or `none` for recall, `leak` or `clean` for leak. Secrets are two invented phrases ("north beacon", "marrow
+gull") that a narrator will not produce by accident, and a test pins that no question contains its own answer or its token, that a leak
+probe never asks the one who was told, and that every secret is told to exactly one character. The summary adds the counts per kind,
+`one_hop_right`, `two_hop_right`, `recall_rate`, `leak_rate`, and `leak_meaningful`, which is false when nobody recalled: a store that
+forgets the secret entirely looks leak-free for the wrong reason. The look probes are unchanged and are still the default.
+
+**The offline writer** answers every question truthfully, which only proves the harness runs. `--stub-knowledge leaky` also lets everyone
+say the secret and `wrong` names the wrong person and forgets it, so a test can show the scoring notices.
+
+**How to read a real run (agreed before any number exists).** The decision is about structure, not about how clever the model is, so
+compare within one run: one-hop against two-hop (the same facts, the second needs a second entry), and recall against leak. If two-hop is
+far below one-hop on the same model, activation by name is the bottleneck and an edge table that the retrieval can walk is worth
+building. If the leak rate is high while recall is not, "who witnessed what" metadata is worth building. If one-hop is itself low, the
+problem is the reader or the sheets, and a graph would store the same mistakes. If both gaps are small, we do not build it. A run is
+small (27 probes in 120 turns, 5 or 6 per kind), so repeat over seeds and more turns before believing a difference of a few points, and
+ask the same questions of more than one model (the Writer is the part that varies).
+
+**Not done.** No real-model run yet. The probe asks for a Writer that answers in character, so a model that refuses or changes the subject
+scores `none`, which the summary shows separately from `wrong`. Control for the verbatim window is by construction (the first question
+is 11 turns after the second secret, with a window of 4), not by a second run with the window wide open.
+
+**Tests.** `soak_graph_probe_test.py` (8 cases: the schedule, the fairness of every question, the scoring table, the sheets, a truthful
+run, a leaky and a wrong run, both families together, the summary); `soak_play_test.py` is unchanged and still passes. 24 guard
+mutations broken in a repo copy, all caught (one equivalent mutant, a first-name term the aliases already cover, was removed).

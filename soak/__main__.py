@@ -178,6 +178,11 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--window", type=int, default=4, help="verbatim turns kept (memory pressure)")
     pl.add_argument("--budget", type=int, default=5000, help="context budget in tokens (memory pressure)")
     pl.add_argument("--probe-every", type=int, default=8)
+    pl.add_argument("--probe-set", choices=["look", "graph", "all"], default="look",
+                    help="look: hair and eyes. graph: relationships, possessions, two-hop questions and who-knows-what (D-058). all: both")
+    pl.add_argument("--graph-every", type=int, default=4, help="a graph probe every N turns from turn 16")
+    pl.add_argument("--stub-knowledge", choices=["truthful", "leaky", "wrong"], default="truthful",
+                    help="what the OFFLINE writer does with graph probes; for tests of the scoring")
     ca = sub.add_parser(
         "creation-audit", help="lint a world's files with no model (shared names, dangling links, thin sheets ...)",
         description="Reads Markdown only; never opens a store. Use --default for the shipped scenario.")
