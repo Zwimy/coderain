@@ -316,10 +316,45 @@ def test_summarize():
     assert g["leak_when_secret_in_prompt"] == "1 of 2" and g["leak_when_not"] == "0 of 1", g
     assert g["recall_when_secret_in_prompt"] == "1 of 1" and g["recall_when_not"] == "0 of 1", g
     assert g["twohop"] == {"held": 2, "invented": 1}, g
+    assert g["prompt_missing"] == 0, "rows from before the prompt was recorded are not counted as missing"
+    lost = rows + [dict(row("twohop", "none", False, False), prompt_found=False),
+                   dict(row("relation", "held", True, True), prompt_found=True)]
+    assert gp.summarize(lost)["prompt_missing"] == 1, "a row whose Writer call was not found is counted, one that was is not"
     print("8. summarize counts per kind, gives the fractions, and flags a leak count that proves nothing")
 
 
+def test_the_prompt_is_the_writers_not_a_folds():
+    """9. A fold runs right after a turn and makes model calls of its own. The first version of the probe took "the last call"
+    as the Writer's, so on a fold turn it scored the lore-keeper's prompt, and every two-hop question lands on a fold turn: the
+    D-058 figure "two-hop evidence 0 of 10" was this bug (D-059 corrects it). The stub never folded, so no suite saw it."""
+    action = "I ask Dessa Quill who is the brother or sister of the person who carries the brass lamp key."
+    section = ("Premise.\n\nLinked to what is in play (an item's holder, a person's ties)\n"
+               "Hollis Wren (hollis-wren). Ties: Ottoline Pike (ottoline-pike): his sister.\n\n## Characters")
+    writer = [{"role": "system", "content": section},
+              {"role": "user", "content": action + " Answer in one sentence."}]
+    fold = [{"role": "system", "content": "You are the lore-keeper."}, {"role": "user", "content": "Fold these turns: ..."}]
+    assert gp.writer_call([writer, fold], action) is writer, "a fold's call that comes later is not the Writer's"
+    assert gp.writer_call([fold], action) is None, "no Writer call among them: None, not a guess"
+    assert gp.writer_call([], action) is None
+    retry = [{"role": "user", "content": action}]
+    assert gp.writer_call([writer, fold, retry], action) is retry, "a retry makes the same call twice: the last one is the reply's"
+    assert gp.linked_lines(writer) == ["Hollis Wren (hollis-wren). Ties: Ottoline Pike (ottoline-pike): his sister."], gp.linked_lines(writer)
+    assert gp.linked_lines(fold) == [] and gp.linked_lines(None) == [] and gp.linked_lines([]) == []
+    # end to end, with folds on and the fold's calls going through the same stream() as a real run: every question is found,
+    # and the two-hop questions, which land on fold turns, have their evidence read off the Writer's prompt
+    rows, s = play("--probe-set", "graph", "--turns", "60", "--stub-folds", "--follow-links")
+    asked = [r for r in rows if r["kind"] == "graph"]
+    folded = {r["i"] for r in rows if any("folded" in e for e in r["events"])}
+    hops = [r for r in asked if r["sub"] == "twohop"]
+    assert hops and all(r["i"] in folded for r in hops), "the test has to put the two-hop questions on fold turns, or it proves nothing"
+    assert s["graph"]["prompt_missing"] == 0 and all(r["prompt_found"] for r in asked), s["graph"]
+    assert all(r["seen_memory"] for r in hops), [(r["gid"], r["seen_memory"]) for r in hops]
+    assert all(r["linked"] for r in hops), "a two-hop row says which linked lines the Writer was given"
+    print("9. the evidence is read off the Writer's own prompt, also on a fold turn, and a row says which links it was given")
+
+
 for fn in (test_schedule, test_questions_are_fair, test_scoring, test_seen_and_invented, test_facts_are_stated_where_the_engine_keeps_them, test_a_truthful_run,
-           test_a_leaky_and_a_wrong_run, test_both_families, test_summarize):
+           test_a_leaky_and_a_wrong_run, test_both_families, test_summarize,
+           test_the_prompt_is_the_writers_not_a_folds):
     fn()
 print("\nSOAK GRAPH PROBE TESTS PASSED")

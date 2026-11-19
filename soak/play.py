@@ -133,8 +133,8 @@ class StubWriter:
     direction chosen by the action, and `calls` counts what it was asked."""
     model = "stub-writer"
 
-    def __init__(self, sheets: str = "full", knowledge: str = "truthful"):
-        self.sheets, self.knowledge, self.gen = sheets, knowledge, {}
+    def __init__(self, sheets: str = "full", knowledge: str = "truthful", folds: bool = False):
+        self.sheets, self.knowledge, self.gen, self.folds = sheets, knowledge, {}, folds
         self.calls = {"writer": 0, "fate": 0, "other": 0, "steered": 0}     # steered: Writer calls that carried a fate note
 
     def stream(self, messages, **k):
@@ -164,6 +164,11 @@ class StubWriter:
             n = self.calls["fate"] - 1
             return json.dumps({"stakes": "some" if n % 3 else "none", "direction": DIRECTIONS[n % len(DIRECTIONS)]})
         self.calls["other"] += 1
+        if self.folds:
+            # The real client's complete() is "".join(self.stream(...)), so a fold's model call goes through the same
+            # stream() the prompt spy wraps. With folds on, the stub does the same, which is what lets a test see the bug
+            # where the spy's "last call" was a fold's and not the Writer's (D-059 correction of D-058).
+            return "".join(self.stream(messages))
         return "{}"
 
 
@@ -203,7 +208,8 @@ def sheet_attrs(cast_row, graph_on: bool, facts: str) -> dict:
     return attrs
 
 
-def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False) -> str:
+def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False,
+            stub_folds: bool = False) -> str:
     cfg = f"""active_profile: local
 profiles:
   local:
@@ -224,7 +230,7 @@ generation:
   lore_check: false
 memory:
   short_term_turns: {window}
-  medium_fold_after: {10_000 if stub else 12}
+  medium_fold_after: {10_000 if stub and not stub_folds else 12}
   medium_fold_size: 5
   long_fold_after: 8
   long_fold_size: 4
@@ -260,7 +266,8 @@ def run_play(args, home: Path) -> int:
         _require_local(args.host)
     model = "stub-writer" if stub else args.model
     (home / "config.yaml").write_text(
-        _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links)), encoding="utf-8")
+        _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links), bool(args.stub_folds)),
+        encoding="utf-8")
 
     from coderain import fate
     from coderain.config import load_config
@@ -289,7 +296,7 @@ def run_play(args, home: Path) -> int:
     if args.fate != "off":
         fate.set_settings(store, args.fate, True)
     eng = Engine(load_config(), store)
-    writer = StubWriter(args.sheets, args.stub_knowledge) if stub else None
+    writer = StubWriter(args.sheets, args.stub_knowledge, folds=bool(args.stub_folds)) if stub else None
     if writer is not None:
         eng.llm = writer
     # What the Writer actually received, for the graph probes' `seen` fields: the last call is the turn's own.
@@ -313,7 +320,10 @@ def run_play(args, home: Path) -> int:
         for i in range(1, args.turns + 1):
             mv = player.act(i)
             t0 = time.time()
+            calls_before = len(sent)
             text = "".join(eng.turn(mv["action"]))
+            # The Writer's call is picked out BEFORE the fold, which makes model calls of its own (see writer_call).
+            writer_msgs = gp.writer_call(sent[calls_before:], mv["action"])
             events = eng.maybe_fold()
             secs = round(time.time() - t0, 2)
             rec = next((r for r in reversed(fate.read(store)) if r["n"] == len(store.turns()) - 1), None)
@@ -326,7 +336,9 @@ def run_play(args, home: Path) -> int:
                 row["gid"], row["sub"] = mv["gid"], mv["sub"]
                 if mv["kind"] == "graph":
                     row["verdict"] = gp.score(mv["gid"], text, CAST)
-                    row["seen"], row["seen_memory"] = gp.evidence_flags(mv["gid"], sent[-1] if sent else [])
+                    row["prompt_found"] = writer_msgs is not None
+                    row["seen"], row["seen_memory"] = gp.evidence_flags(mv["gid"], writer_msgs or [])
+                    row["linked"] = gp.linked_lines(writer_msgs)
             rows.append(row)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()

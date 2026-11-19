@@ -197,6 +197,35 @@ def split_prompt(messages) -> tuple[str, str]:
             "\n".join(str(m["content"]) for m in rest if m["role"] == "system"))
 
 
+def writer_call(calls, action: str):
+    """The messages of the Writer's own call out of every model call a turn made, or None.
+
+    The Writer's call is the one whose final user message is the player's action. It is NOT "the last call": a fold runs
+    right after the turn and makes model calls of its own, and the first version of this probe took the last call, so on a
+    fold turn it scored the lore-keeper's prompt. Every two-hop question landed on a fold turn (the probe cycle and the fold
+    cadence are both 20 turns), so its evidence flags were wrong in every run until D-059 corrected D-058. A retry makes the
+    same call twice; the last of them is the one the reply came from."""
+    for messages in reversed(list(calls)):
+        users = [m for m in messages if m.get("role") == "user"]
+        if users and action in str(users[-1].get("content", "")):
+            return messages
+    return None
+
+
+def linked_lines(messages) -> list[str]:
+    """The lines of the "Linked to what is in play" section the follow pass added to the prompt (D-059), or []. Recorded in a
+    probe's row so a run explains its own evidence flags."""
+    for m in messages or []:
+        if m.get("role") != "system":
+            continue
+        body = str(m.get("content", ""))
+        at = body.find("Linked to what is in play")
+        if at >= 0:
+            section = body[at:].split("\n", 1)[1] if "\n" in body[at:] else ""
+            return [ln for ln in section.split("\n\n")[0].splitlines() if ln.strip()]
+    return []
+
+
 def evidence_flags(gid: str, messages) -> tuple[bool, bool]:
     """(seen anywhere in what the Writer received, seen in memory's part of it). The question itself is never evidence."""
     everything, memory = split_prompt(messages)
@@ -280,6 +309,9 @@ def summarize(rows) -> dict:
     out["leak_meaningful"] = out["recall"].get("held", 0) > 0
     # What was in front of the Writer, when the rows say (a run made before this was recorded has no such field).
     marked = [r for r in rows if r.get("kind") == "graph" and "seen" in r]
+    # A question whose Writer call could not be found has evidence flags that mean nothing (they read False); say how many,
+    # so a run with a broken prompt capture cannot pass for a run with no evidence.
+    out["prompt_missing"] = sum(1 for r in marked if r.get("prompt_found") is False)
     if marked:
         hop = [r for r in marked if r["sub"] in ("relation", "possession", "twohop")]
         mem = [r for r in hop if r["seen_memory"]]

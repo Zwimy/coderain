@@ -172,12 +172,16 @@ def merge_ties(old: str, new: str, own: str = "") -> str:
     the line out CLEARED it ("a dropped relationship is an intentional clear"), and a small model leaves it out:
     in a measured 120-turn story the tie reached the prompt in 2 of 12 questions about it, and the last save held
     no tie on any of six characters (D-058). So omission is not a clear any more. What the rewrite may do:
-      * restate a tie with a note: the note replaces the old one (the story may have changed it);
       * add a tie to someone not yet on the line, up to MAX_TIES and MAX_TIES_CHARS (a new tie that does not fit
         is left out; one already on the line is never dropped to make room);
+      * give a note to a tie that has none;
       * not tie a character to itself.
-    Ties are keyed by the other character's slug, so "Hollis Wren" and "hollis-wren" are one tie. Removing one is
-    an edit of the file, which stays the truth (invariant 7)."""
+    What it may NOT do is change a note already on file. The first version let a rewrite replace one, and the next real
+    run showed what a small model does with that: "her brother" became "his sister" (the same tie from the other
+    person's side), two cousins became "counselor", and a tie nobody planted appeared. First write wins, as for a
+    character's looks (plan principle 6); a tie the story really changed is an edit of the file, which stays the truth
+    (invariant 7), as is removing one. Ties are keyed by the other character's slug, so "Hollis Wren" and "hollis-wren"
+    are one tie."""
     merged: dict[str, tuple[str, str]] = {}
     for a, note in parse_ties(old):
         key = templates.slugify(a)
@@ -192,12 +196,12 @@ def merge_ties(old: str, new: str, own: str = "") -> str:
         if not key or key == own:
             continue
         if key in merged:
-            if note:
-                before, was = len(line()), merged[key]
+            if note and not merged[key][1]:
+                was = merged[key]
                 merged[key] = (was[0], note)
-                # A longer note may not grow the line past its bound (a line already past it, written by hand, may
-                # stay as long as it was).
-                if len(line()) > max(before, MAX_TIES_CHARS):
+                # A note only ever lengthens the line, so one that would pass the bound is not given (and a line
+                # already past it, written by hand, is left exactly as it was).
+                if len(line()) > MAX_TIES_CHARS:
                     merged[key] = was
         elif len(merged) < MAX_TIES:
             merged[key] = (a, note)

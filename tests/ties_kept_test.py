@@ -8,14 +8,16 @@ questions about them, and the final save held a tie on none of the six, while ev
 fold rewrites) was intact. The same mechanism drifted a hair colour in the long real story.
 
   1. a rewrite that leaves the ties out keeps them (the defect, through the real fold door)
-  2. a rewrite that restates a tie with a note replaces that note; the other ties stay
+  2. a rewrite that restates a tie with a DIFFERENT note does not change the note on file (first write wins). The
+     first version let it, and the next real run showed what a small model does with that: "her brother" came
+     back as "his sister" (the tie from the other side), two cousins as "counselor", plus a tie nobody planted
   3. a rewrite may add a tie to someone new; the old ties keep their place and wording
-  4. a restatement with no note does not wipe the note that was there
+  4. a restatement with no note does not wipe the note that was there; a note arrives where there was none
   5. "Hollis Wren" and "hollis-wren" are one tie (keyed by slug); the model's `with` goes through the slug rule
   6. a tie to oneself is refused; a hand-written one already on the line is left alone
   7. MAX_TIES: past it a NEW tie is left out and no old tie is dropped to make room
-  8. MAX_TIES_CHARS: a new tie that would not fit is left out; a longer restated note cannot push a line past
-     the bound; a hand-written line already past it is neither cut nor grown
+  8. MAX_TIES_CHARS: a new tie that would not fit is left out; a note given to a tie that had none cannot push a
+     line past the bound; a hand-written line already past it is neither cut nor grown
   9. the append door (rewrite=False) keeps ties the same way
  10. no ties anywhere: no empty `relationships:` attr is written
  11. only the ties changed: status and when are still cleared by a rewrite that omits them
@@ -77,13 +79,14 @@ def test_a_rewrite_that_leaves_the_ties_out_keeps_them():
     print("1. a rewrite that leaves the ties out (or sends none) keeps them")
 
 
-def test_a_restated_note_replaces_the_note():
+def test_a_restated_note_does_not_replace_the_note():
     """2."""
     store, s = fresh()
     hollis(store)
-    s._apply_promotions({"promotions": [promo(relationships=[{"with": "corwin-tide", "note": "forgave the debt"}])]})
-    assert ties_of(store) == "ottoline-pike: his sister; corwin-tide: forgave the debt", ties_of(store)
-    print("2. a restated tie takes the new note; the other tie is untouched")
+    s._apply_promotions({"promotions": [promo(relationships=[{"with": "corwin-tide", "note": "forgave the debt"},
+                                                             {"with": "ottoline-pike", "note": "counselor"}])]})
+    assert ties_of(store) == "ottoline-pike: his sister; corwin-tide: owes him a favour", ties_of(store)
+    print("2. a restated tie does not change the note on file; the story's change is an edit of the file")
 
 
 def test_a_new_tie_is_added_after_the_old_ones():
@@ -106,9 +109,8 @@ def test_an_empty_note_does_not_wipe_a_note():
 
 def test_ties_are_keyed_by_slug():
     """5."""
-    assert merge_ties("hollis-wren: his brother", "Hollis Wren: a brother, and a drunk") == \
-        "hollis-wren: a brother, and a drunk"
-    assert merge_ties("Hollis Wren: his brother", "hollis-wren: older") == "Hollis Wren: older"   # as written kept
+    assert merge_ties("hollis-wren: his brother", "Hollis Wren: a brother, and a drunk") == "hollis-wren: his brother"
+    assert merge_ties("Hollis Wren", "hollis-wren: older") == "Hollis Wren: older", "as written kept, the note given"
     assert merge_ties("", "???: nobody; !!!") == "", "a name that makes no slug is no tie"
     store, s = fresh()
     hollis(store, ties="")
@@ -148,15 +150,15 @@ def test_the_line_length_is_bounded():
     assert 0 < MAX_TIES_CHARS - len(old) < 60, len(old)
     out = merge_ties(old, f"newcomer: {pad}")
     assert out == old, "a new tie that would pass the character bound is left out"
-    out = merge_ties(old, "p3: " + "y" * 200)                                 # a longer note on an old tie
-    assert out == old, "a longer restated note may not grow the line past the bound"
-    short = merge_ties(old, "p3: shorter")
-    assert short.startswith("p0:") and "p3: shorter" in short and len(short) < len(old)
-    long_by_hand = "; ".join(f"p{i}: {pad}" for i in range(14))               # already past the bound, by hand
+    bare = old + "; p11"                                                      # one tie with no note, line still within bound
+    assert len(bare) <= MAX_TIES_CHARS, len(bare)
+    assert merge_ties(bare, "p11: " + "y" * 200) == bare, "a note given to a bare tie may not grow the line past the bound"
+    assert merge_ties(bare, "p11: ok") == bare.replace("p11", "p11: ok"), "a short one fits"
+    long_by_hand = "; ".join(f"p{i}: {pad}" for i in range(14)) + "; bare"       # already past the bound, by hand
     assert len(long_by_hand) > MAX_TIES_CHARS
     assert merge_ties(long_by_hand, "") == long_by_hand, "a hand-written line is not cut"
-    assert merge_ties(long_by_hand, "p2: a short note").count("p2: a short note") == 1
-    assert merge_ties(long_by_hand, "p2: " + "z" * 100) == long_by_hand, "nor grown"
+    assert merge_ties(long_by_hand, "bare: a short note") == long_by_hand, "nor grown, even by a short note"
+    assert merge_ties(long_by_hand, "bare: " + "z" * 100) == long_by_hand
     print(f"8. a line stays within {MAX_TIES_CHARS} characters unless it was already past it")
 
 
@@ -228,7 +230,7 @@ def test_a_hand_edit_sticks():
     print("14. a tie the author removed by hand does not come back")
 
 
-for fn in (test_a_rewrite_that_leaves_the_ties_out_keeps_them, test_a_restated_note_replaces_the_note,
+for fn in (test_a_rewrite_that_leaves_the_ties_out_keeps_them, test_a_restated_note_does_not_replace_the_note,
            test_a_new_tie_is_added_after_the_old_ones, test_an_empty_note_does_not_wipe_a_note,
            test_ties_are_keyed_by_slug, test_a_tie_to_oneself, test_the_tie_count_is_bounded,
            test_the_line_length_is_bounded, test_the_append_door_keeps_ties_too, test_no_ties_no_attr,

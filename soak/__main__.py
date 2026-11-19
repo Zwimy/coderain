@@ -183,6 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--graph-every", type=int, default=4, help="a graph probe every N turns from turn 16")
     pl.add_argument("--facts", choices=["stated", "none"], default="stated",
                     help="stated: the graph probes' ties and possessions are written into the story. none: nothing is (the guessing baseline)")
+    pl.add_argument("--stub-folds", action="store_true",
+                    help="with --stub: let the offline run fold, and send the fold's model calls through the same stream() a real "
+                         "run uses; for tests of the probe's prompt capture")
     pl.add_argument("--follow-links", action="store_true",
                     help="memory: follow_links on (D-059): an activated item leads to its holder, a person to their ties")
     pl.add_argument("--ask", choices=["plain", "open"], default="plain",

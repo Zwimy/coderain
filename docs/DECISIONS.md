@@ -2593,19 +2593,38 @@ the summary); `soak_play_test.py` is unchanged and still passes. About 55 guard 
 or untestable lines were removed along the way).
 
 
+**Correction (2026-11-19, found while measuring D-059).** The probe read "the last model call of the turn" as the Writer's prompt
+for its evidence flags (`seen`, `seen_memory`). A fold runs right after a turn and makes model calls of its own, so on a fold turn the
+flags described the lore-keeper's prompt. Every two-hop question falls on a fold turn (the probe's cycle of 20 turns and the fold's
+cadence coincide), and in all three runs `seen` was 0 on exactly those five turns. The offline stub never folded, so no suite saw it.
+What this withdraws: "two-hop evidence reached the prompt 0 of 10 times" and so the claim that retrieval is a separate failure (the
+second hop is never reached); that figure is unmeasured, not zero. The "right when the evidence was not in memory" side of the split
+is also contaminated, because it contains the two-hop rows. What stands, because those questions were never on a fold turn: every
+question's verdict (held, wrong, mixed, invented, none), the one-hop evidence counts (relation 2 of 12, possession 12 of 12), the final
+saves holding no tie, and the recall and leak results. The storage failure and the one-hop faithfulness gap are therefore still real;
+the retrieval failure is an open question. The fix is `writer_call` (the Writer's call is the one whose last user message is the
+player's action, picked before the fold runs) with a stub that folds (`--stub-folds`); see D-059.
+
+
 ## D-059: Ties a fold cannot clear, and a pass that follows holders and ties one hop
 
 **Why.** The graph probe (D-058) found three separate failures behind "who is her brother" and "who is the sister of the person who
 carries the key". Storage: a `relationships:` line reached the Writer's prompt in 2 of 12 questions about it, because the fold hands the
 lore-keeper model the current entry and keeps what it writes back, and `merge_entry(rewrite=True)` read a missing line as "these ties ended".
-Retrieval: two-hop evidence reached the prompt 0 of 10 times, because name-keyed activation finds an entry only when the story names it, and the
-answer sat one link away. Faithfulness: with the fact in the prompt a 4B Writer was right 8 of 14 times. This entry fixes the first two. It does
-not touch the third.
+Retrieval: D-058 reported two-hop evidence in the prompt 0 of 10 times, and that figure was a measurement error (the correction at the end
+of D-058), so the claim "name-keyed activation never reaches the second hop" is unproven. It is still plausible, since activation finds an entry only
+when the story names it and the answer sits one link away, which is why the pass below exists, but it is a hypothesis to be measured with the
+fixed probe, not a finding. Faithfulness: with the fact in the prompt a 4B Writer was right 8 of 14 times. This entry fixes storage, builds a pass
+for the retrieval hypothesis (off by default) and does not touch faithfulness.
 
 **What changed (two pieces).**
 1. **Ties are not cleared by omission.** `merge_ties` (coderain/memory.py) decides the `relationships:` line after a fold. A rewrite that leaves
-   the line out keeps every tie; a rewrite that restates a tie with a note replaces that note (the story may have changed it); a rewrite may add a
-   tie to someone not yet on the line; a tie to the character itself is refused. Ties are keyed by the other person's slug, so "Hollis Wren" and
+   the line out keeps every tie; a rewrite may add a tie to someone not yet on the line and give a note to a tie that has none; a tie to the
+   character itself is refused. A rewrite may NOT change a note already on file. The first version let it, and the first real run with it
+   showed why that is wrong: "her brother" came back as "his sister" (the same tie from the other person's side), two cousins as "counselor",
+   and a tie nobody planted appeared. First write wins, as for a character's looks. A tie the story really changed is an edit of the file. A
+   wrong tie a model ADDED stays until someone removes it by hand; that is the cost of not letting a fold clear ties, and a tie to a name that
+   matches no entry (the fold may name a person it promotes later in the same pass) is not refused because of that. Ties are keyed by the other person's slug, so "Hollis Wren" and
    "hollis-wren" are one tie. Bounds: at most 16 ties and 800 characters (the fold's own line bound); a new tie that does not fit is left out and
    an old one is never dropped to make room; a hand-written line already past the bound is neither cut nor grown. Removing a tie is an edit of the
    file, which stays the truth (invariant 7), and a tie removed by hand does not come back. This is always on: it fixes a loss, it does not add
@@ -2636,7 +2655,9 @@ shown as written), witness metadata (the probe found no leak, D-058), and the ca
 **Tests.** `ties_kept_test.py` (14 cases) and `link_follow_test.py` (16 cases: off is the baseline, an item to its holder, a person to their ties,
 one line for two sources, depth 1, already in the prompt, hidden, the three gates, the caps, name and alias resolution, the player, the
 budget arithmetic to the character, no second copy, determinism, the engine switch, the line's shape). `soak_graph_probe_test.py` pins the
-`holder:` attr and `--follow-links`. 46 guard mutations broken in a repo copy, all caught; the pass found one gap in my own test (a duplicate
-one-liner of a different shape, F16) and one wrong removal of mine (a branch I took for redundant that handled a self-tie). One older suite
+`holder:` attr, `--follow-links`, and (case 9) that a question's evidence is read off the Writer's own prompt on a fold turn, with a stub that folds
+and sends the fold's calls through the same `stream()` a real run uses (the test fails with the old "last call" capture). 50 guard mutations broken
+in a repo copy, all caught; the pass found one gap in my own test (a duplicate one-liner of a different shape), one wrong removal of mine (a branch I
+took for redundant that handled a self-tie), one redundant bound (a note only ever lengthens a line) and one equivalent mutant of the probe fix. One older suite
 encoded the rule this entry replaces, `phase3_sweep_test.py` A-H2 ("relationships dropped, not re-emitted"); it was changed with the
 reasoning written into it, not to make it pass.
