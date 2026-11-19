@@ -2644,6 +2644,47 @@ hash-chained record plus the card after the player's action, is the next lever f
 `holder:` attr, stated by the author; no fold writes it, so no fold loses it, and it can go stale when the story moves the item (the canon card's
 `state.held` is the live tracker, and the follow pass shows what is on file).
 
+**Measured (2026-11-19, the fixed probe).** gemma3:4b as the Writer and the fold model, window 4, budget 5000, plain wording, 120 turns, 27
+probes a run, `prompt_missing` 0 in every run. Two runs with the pass on (seeds 5 and 6) and one with it off (seed 5, the same code otherwise:
+the tie rule and the `holder:` attr are in both). D-058's figures for the same seeds come from the old code and the flawed capture.
+
+| | pass on, s5 | pass on, s6 | pass off, s5 | D-058 (old code), s5 and s6 |
+|---|---|---|---|---|
+| planted ties kept as planted in the final save | 6 of 6 | 6 of 6 | 6 of 6 | 0 of 6 (last save) |
+| tie evidence in the prompt (relation questions) | 6 of 6 | 6 of 6 | 6 of 6 | 2 of 12 |
+| possession evidence in the prompt | 6 of 6 | 6 of 6 | 6 of 6 | 12 of 12 |
+| two-hop evidence in the prompt | 5 of 5 | 5 of 5 | 3 of 5 | not measured (the flaw) |
+| one-hop answers right (12 asked a run) | 10 | 9 | 7 | 9 of 24 |
+| two-hop answers right (5 asked a run) | 1 | 4 | 0 | 3 of 10 |
+| a made-up name said in a hop answer | 0 of 17 | 0 of 17 | 6 of 17 | 9 of 34 |
+| right when the evidence was in the prompt | 11 of 17 | 13 of 17 | 7 of 15 | 8 of 14 |
+
+What it says. The tie rule works: every planted tie is still on its character, with its planted note, after 120 turns, and the question
+that names a person finds the tie every time. The pass, on this evidence, does what it was built for and more: it puts the second hop's
+evidence in the prompt every time (5 of 5 twice, against 3 of 5 without it, the three being turns where recent narration happened to name
+the holder), and the answers follow, with the made-up names gone (0 of 34 against 6 of 17). The faithfulness gap D-058 described is
+narrower with the Linked lines (24 of 34 right with the evidence there against 7 of 15), which may be the names beside the slugs
+("Ottoline Pike (ottoline-pike): his sister") as much as the extra evidence: this experiment cannot tell those apart.
+
+What it does not say. It is three runs of one 4B model, one control seed, 12 or 5 probes a cell: a difference of two or three answers is
+noise, and the seeds differ from each other by that much (two-hop right 1 of 5 against 4 of 5 with the pass on). The consistent direction
+across every row is the evidence, not any one cell. No second Writer was run.
+
+Two things the new runs show that were not visible before.
+- The model ADDS ties nobody planted. Counted in the final saves: 14 (s5, pass on), 3 and 3. Eight of the 14 were the same person's slug
+  written twice ("hollis-wren-hollis-wren: her brother"), a copy of a tie already on the line; those are now collapsed (`_undouble`, tested
+  offline against these shapes, not re-measured on a model). The rest are model inventions (cousins who are not), which first-write-wins cannot
+  stop and which the pass will repeat. They are the cost of not letting a fold clear a tie.
+- Who-knows-what has a first signal. A leak question was answered by someone who was never told in 2 of the 4 cases where the secret was in the
+  prompt, and in 0 of 11 where it was not (D-058 saw the secret in the prompt for 0 of 10 and concluded there was nothing to fix; with the
+  tie rule and the pass the secret reached the prompt more often). Four cases is nothing to build on, but it is the first time the
+  witness-metadata idea has any evidence behind it. The mechanism is visible in the final saves: where the secret was in the prompt it sits in the
+  shared summaries (`memory/scenes.md`, `arc.md`, `facts.md`, `timeline.md`, in one run also a character's own sheet and a thread), which are in
+  front of whoever is asked; in the seed-6 run it is in none of them, and there was neither recall nor leak.
+
+**Default.** The shipped default stays off, with a recommendation: turn it on (`memory: {follow_links: true}`). One more seed pair and a second
+Writer would justify flipping it for everyone; the cost to a story is at most six short lines a turn.
+
 **Defaults, and what would change them.** The merge rule is on. The follow pass is off until a measured run says it helps; the probe takes
 `--follow-links` and changes nothing else. A stale tie in a real story (a tie the story ended that no one removed) would call for an explicit
 "ended" marker in the fold's output schema. A crowded scene where the Linked lines push out something that mattered would call for a lower cap or

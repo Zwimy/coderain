@@ -165,6 +165,15 @@ def parse_ties(value: str) -> list[tuple[str, str]]:
     return out
 
 
+def _undouble(slug: str) -> str:
+    """"bram-halloran-bram-halloran" is "bram-halloran". A small model writes a person's slug twice (the fold's known slip,
+    D-029); in a measured 120-turn story 8 of the 14 ties it ADDED were such copies of a tie already on the line, under a
+    key no entry answers to. Only two equal halves collapse; an odd number of words can never split into two."""
+    parts = slug.split("-")
+    half = len(parts) // 2
+    return "-".join(parts[:half]) if half and parts[:half] == parts[half:] else slug
+
+
 def merge_ties(old: str, new: str, own: str = "") -> str:
     """The `relationships:` line after a fold, decided by code and not by what the model happened to restate.
 
@@ -192,9 +201,11 @@ def merge_ties(old: str, new: str, own: str = "") -> str:
         return "; ".join(f"{a}: {n}" if n else a for a, n in merged.values())
 
     for a, note in parse_ties(new):
-        key = templates.slugify(a)
+        key = _undouble(templates.slugify(a))
         if not key or key == own:
             continue
+        if key != templates.slugify(a):
+            a = key                      # written as the person's own slug, not the doubled one the model sent
         if key in merged:
             if note and not merged[key][1]:
                 was = merged[key]

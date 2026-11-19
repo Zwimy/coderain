@@ -220,6 +220,30 @@ def test_parse_is_unchanged():
     print("13. Entry.relationships() reads the line as before")
 
 
+def test_a_doubled_slug_is_the_same_person():
+    """15. A real 120-turn story: 8 of the 14 ties the model ADDED were a person's slug written twice
+    ("hollis-wren-hollis-wren: her brother"), a copy of the tie already there under a key no entry answers to."""
+    assert merge_ties("hollis-wren: her brother", "hollis-wren-hollis-wren: her brother") == "hollis-wren: her brother"
+    assert merge_ties("", "dessa-quill-dessa-quill: his cousin") == "dessa-quill: his cousin", "a new one is written as the slug"
+    assert merge_ties("", "Hollis Wren Hollis Wren: kin") == "hollis-wren: kin"
+    assert merge_ties("", "ada-ada: x") == "ada: x"
+    # only an exact doubling collapses
+    assert merge_ties("", "hollis-wren-ottoline-pike: x") == "hollis-wren-ottoline-pike: x"
+    assert merge_ties("", "mara-mara-fenn: x") == "mara-mara-fenn: x", "an odd number of words is a name"
+    assert merge_ties("", "hollis-wren-hollis-pike: x") == "hollis-wren-hollis-pike: x"
+    # what is already on the file is never rewritten, doubled or not
+    assert merge_ties("hollis-wren-hollis-wren: old copy", "") == "hollis-wren-hollis-wren: old copy"
+    both = "hollis-wren: her brother; hollis-wren-hollis-wren: old copy"      # both spellings already on file: both stay
+    assert merge_ties(both, "") == both
+    # and through the real door
+    store, s = fresh()
+    hollis(store, ties="ottoline-pike: his sister")
+    s._apply_promotions({"promotions": [promo(relationships=[{"with": "ottoline-pike-ottoline-pike", "note": "his sister"},
+                                                             {"with": "dessa-quill-dessa-quill", "note": "drinks there"}])]})
+    assert ties_of(store) == "ottoline-pike: his sister; dessa-quill: drinks there", ties_of(store)
+    print("15. a person's slug written twice is the same person, and what is on file is never rewritten")
+
+
 def test_a_hand_edit_sticks():
     """14. removing a tie is an edit of the file; the next fold must not bring it back."""
     store, s = fresh()
@@ -235,6 +259,6 @@ for fn in (test_a_rewrite_that_leaves_the_ties_out_keeps_them, test_a_restated_n
            test_ties_are_keyed_by_slug, test_a_tie_to_oneself, test_the_tie_count_is_bounded,
            test_the_line_length_is_bounded, test_the_append_door_keeps_ties_too, test_no_ties_no_attr,
            test_status_and_when_are_still_cleared, test_holder_survives, test_parse_is_unchanged,
-           test_a_hand_edit_sticks):
+           test_a_hand_edit_sticks, test_a_doubled_slug_is_the_same_person):
     fn()
 print("ALL OK")
