@@ -2543,7 +2543,46 @@ problem is the reader or the sheets, and a graph would store the same mistakes. 
 small (27 probes in 120 turns, 5 or 6 per kind), so repeat over seeds and more turns before believing a difference of a few points, and
 ask the same questions of more than one model (the Writer is the part that varies).
 
-**Not done.** The results of the redesigned probe are not in this entry yet. The probe asks for a Writer that answers in character, so a model that refuses or changes the subject
+**First results (2026-11-19).** gemma3:4b as the Writer AND the fold model, memory squeezed (window 4, budget 5000), plain wording, 120
+turns, 27 probes a run: seeds 5 and 6 with the facts stated, seed 5 with `--facts none`. Scored with the current scorer (rows keep the full
+text, so earlier runs can be re-scored).
+
+| | facts stated (54 probes) | no facts (27 probes) |
+|---|---|---|
+| one-hop answered right | 9 of 24 | 0 of 12 |
+| two-hop answered right | 3 of 10 | 1 of 5 |
+| a made-up name said, hop questions | 9 of 34 | 9 of 17 |
+
+What was in the Writer's prompt (memory's part), with the facts stated:
+- possession (an item entry that names its holder): the evidence was there **12 of 12** times, and the Writer was right **6 of 12**. In
+  the wrong cases it gave the role's obvious guess with the contradicting fact in front of it.
+- relation (a `relationships:` line): the evidence was there **2 of 12** times. In the final save of the last run **none** of the six
+  characters still had a `relationships:` line, while all three item entries were intact: the fold rewrites a character's attrs, and a
+  `relationships:` line the rewrite omits is read as an intentional clear (the code says so), but nothing rewrites items.md.
+- two-hop: the evidence was there **0 of 10** times. Naming an item activates the item; nothing follows it to its holder's entry. The
+  three right answers had no evidence in the prompt: they repeated an earlier, correct one-hop answer that had entered the story.
+- with the evidence present, all hops together: right 8 of 14. That is the ceiling a better store could lift this model to, and it is low.
+- recall: 0 of 10 (the secret was in the prompt for 3 of the 10, and the told character still did not say it). leak: 0 of 10, and the
+  secret was in the prompt for **0 of 10** leak questions: it stayed with the entry of the character who was told, so it was never
+  exposed to the others. Nothing to fix there yet, and `leak_meaningful` is false for the same reason.
+- The Writer invents a person and keeps using him (a different one in each run): a made-up name was said in 9 of the 17 hop answers of
+  the control, and in 9 of 34 with the facts stated. It spread into the recall and leak answers too, because the story's own memory
+  carried it forward.
+
+**What this says about a graph.** Not "a graph is better". There are three different failures and a graph database fixes none of them by
+itself. (1) Storage: a model-owned rewrite erased the ties, the same mechanism as the hair colour that drifted. (2) Retrieval: the second
+hop is never reached, which is a link-following problem. (3) Faithfulness: with the fact in the prompt a 4B Writer was right 57% of the
+time, and no store changes that. The two things worth building, if anything, are small and code-owned: ties and possessions recorded in the
+ledger (a relationship slot written by code, so a fold cannot clear it, as identity already is in the canon ledger, D-017 and D-018), and activation that follows a named
+item or character to the entries it links to. Putting the line in the Scene State Card after the player's action is the lever for (3) that
+identity already uses (D-027). Then run THIS probe again: relation evidence should reach 11 or 12 of 12 and two-hop evidence most of 10,
+and only the gap that remains after that says whether anything more graph-like is needed. There is no case for "who witnessed what"
+metadata yet, because the secret was never exposed.
+
+**Not done.** One model, two seeds with the facts and one control, 27 probes a run: a difference of a few points is noise, and the
+conclusions above rest on the evidence counts (12 of 12, 2 of 12, 0 of 10), which are large and agree across seeds. A second Writer was
+not measured (llama3.1:8b ran at 53 s a turn on this card and was stopped). Evidence is matched by slug and relation within 80 characters,
+so a paraphrase with neither would count as not seen. The probe asks for a Writer that answers in character, so a model that refuses or changes the subject
 scores `none`, which the summary shows separately from `wrong`. Control for the verbatim window is by construction (the first question
 is 11 turns after the second secret, with a window of 4), not by a second run with the window wide open.
 
