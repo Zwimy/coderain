@@ -135,8 +135,11 @@ def relationships_attr(name: str) -> str:
 
 
 def item_specs() -> list[dict]:
-    """The item entries to write into items.md: title, slug, aliases and a body that names the holder."""
-    return [{"title": t, "slug": s, "aliases": list(a), "body": f"Held by {holder}."} for t, s, a, holder in ITEMS]
+    """The item entries to write into items.md: title, slug, aliases, a body that names the holder, and the `holder:` attr
+    (the holder's slug) that the follow pass reads (D-059). The attr is written in every run, with the pass on or off, so the
+    two runs differ in the pass and nothing else."""
+    return [{"title": t, "slug": s, "aliases": list(a), "body": f"Held by {holder}.",
+             "holder": holder.lower().replace(" ", "-")} for t, s, a, holder in ITEMS]
 
 
 def schedule(i: int, every: int = 4, start: int = GRAPH_START) -> str | None:

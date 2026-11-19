@@ -143,6 +143,69 @@ def usable_alias(alias, taken: set[str]) -> bool:
     return len(content) == len(set(content))
 
 
+# A character's `relationships:` line ("slug: note; slug: note"). It is the tie record: who this
+# character is bound to and how. Bounds mirror the fold's own (summarizer.REL_LIMIT = 800).
+MAX_TIES = 16
+MAX_TIES_CHARS = 800
+
+
+def parse_ties(value: str) -> list[tuple[str, str]]:
+    """Read a `relationships:` value into (other, note) pairs. A part with no ":" or "=" is a tie with no note."""
+    out = []
+    for part in str(value or "").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        sep = ":" if ":" in part else ("=" if "=" in part else None)
+        if sep:
+            a, b = part.split(sep, 1)
+            out.append((a.strip(), b.strip()))
+        else:
+            out.append((part, ""))
+    return out
+
+
+def merge_ties(old: str, new: str, own: str = "") -> str:
+    """The `relationships:` line after a fold, decided by code and not by what the model happened to restate.
+
+    A fold hands the model the current entry and keeps whatever it writes back. Before this, a rewrite that left
+    the line out CLEARED it ("a dropped relationship is an intentional clear"), and a small model leaves it out:
+    in a measured 120-turn story the tie reached the prompt in 2 of 12 questions about it, and the last save held
+    no tie on any of six characters (D-058). So omission is not a clear any more. What the rewrite may do:
+      * restate a tie with a note: the note replaces the old one (the story may have changed it);
+      * add a tie to someone not yet on the line, up to MAX_TIES and MAX_TIES_CHARS (a new tie that does not fit
+        is left out; one already on the line is never dropped to make room);
+      * not tie a character to itself.
+    Ties are keyed by the other character's slug, so "Hollis Wren" and "hollis-wren" are one tie. Removing one is
+    an edit of the file, which stays the truth (invariant 7)."""
+    merged: dict[str, tuple[str, str]] = {}
+    for a, note in parse_ties(old):
+        key = templates.slugify(a)
+        if key and key not in merged:
+            merged[key] = (a, note)
+
+    def line() -> str:
+        return "; ".join(f"{a}: {n}" if n else a for a, n in merged.values())
+
+    for a, note in parse_ties(new):
+        key = templates.slugify(a)
+        if not key or key == own:
+            continue
+        if key in merged:
+            if note:
+                before, was = len(line()), merged[key]
+                merged[key] = (was[0], note)
+                # A longer note may not grow the line past its bound (a line already past it, written by hand, may
+                # stay as long as it was).
+                if len(line()) > max(before, MAX_TIES_CHARS):
+                    merged[key] = was
+        elif len(merged) < MAX_TIES:
+            merged[key] = (a, note)
+            if len(line()) > MAX_TIES_CHARS:
+                del merged[key]
+    return line()
+
+
 # Files a custom lore type may NEVER shadow: built-in registries, rules, and
 # the non-registry story files (declaring "events" as a lore type would turn
 # unfired event rules into Writer-visible lorebook entries).
@@ -454,18 +517,12 @@ class Entry:
 
     def relationships(self) -> list[tuple[str, str]]:
         """Parse the optional `relationships:` attr ("slug: note; slug: note")."""
-        out = []
-        for part in self.attrs.get("relationships", "").split(";"):
-            part = part.strip()
-            if not part:
-                continue
-            sep = ":" if ":" in part else ("=" if "=" in part else None)
-            if sep:
-                a, b = part.split(sep, 1)
-                out.append((a.strip(), b.strip()))
-            else:
-                out.append((part, ""))
-        return out
+        return parse_ties(self.attrs.get("relationships", ""))
+
+    def holder(self) -> str:
+        """Who holds this piece, from the optional `holder:` attr (a slug or a name), as a slug. Only an item has one in
+        practice. The author states it; a fold never writes it, so it is not lost to a rewrite."""
+        return templates.slugify(self.attrs.get("holder", ""))
 
     def stats(self) -> dict[str, int]:
         """Parse the optional `stats:` attr ("strength 3, agility 1" — `name value`
@@ -660,6 +717,8 @@ class _Assembly:
     matched_slugs: set = field(default_factory=set)
     linked_wanted: list = field(default_factory=list)
     ref_slugs: list = field(default_factory=list)
+    follow_links: bool = False      # follow holders and ties from what activated (settings: memory.follow_links)
+    followed: set = field(default_factory=set)   # slugs the follow pass rendered, so later stages do not repeat them
 
 
 class MemoryStore:
@@ -1307,7 +1366,10 @@ class MemoryStore:
             # Managed keys are authoritative from the rewrite: the model was shown
             # the current entry and restates what is still true, so a dropped
             # relationship / when / status is an intentional clear, not a loss.
-            managed = {"status", "when", "relationships"}
+            #
+            # NOT the ties. A model that leaves its `relationships:` line out is not retracting the ties, it is
+            # forgetting them (D-058 measured 2 of 12), so merge_ties below keeps them whatever the rewrite says.
+            managed = {"status", "when"}
             attrs = {k: v for k, v in existing.attrs.items() if k not in managed}
             attrs.update(new.attrs)
         else:
@@ -1316,6 +1378,13 @@ class MemoryStore:
             addition = new.body.strip()
             if addition and addition not in body:
                 body = (body + "\n\n" + addition).strip() if body else addition
+        ties = merge_ties(existing.attrs.get("relationships", ""), new.attrs.get("relationships", ""), existing.slug)
+        if ties:
+            attrs["relationships"] = ties
+        else:
+            # Nothing survived (the only new tie was to the character itself): the raw line the update above copied
+            # in must not stand in for it.
+            attrs.pop("relationships", None)
         merged = Entry(existing.title or new.title, new.slug, aliases, importance,
                        attrs, body)
         self.upsert_entry(rel, merged)
@@ -1774,9 +1843,86 @@ class MemoryStore:
                 picked_groups.add(g)
         return used_lore
 
+    # What one turn may follow. Enough for a two-hop question, small enough that a crowded scene cannot fill the prompt.
+    FOLLOW_PER_ENTRY = 4
+    FOLLOW_TOTAL = 6
+    FOLLOW_LINE = 320            # characters of one linked line
+
+    def _follow_links(self, a: "_Assembly", picked: dict, by_slug: dict, turn_index: int,
+                      used_lore: int, lore_budget: float) -> int:
+        """Follow ONE hop from what activated: an item to its holder, a character to the people they are tied to.
+
+        Name-keyed activation finds an entry only when the story names it, so "who is the sister of the person who
+        carries the brass lamp key" put the key in the prompt and never its holder, and the answer sat in the holder's
+        `relationships:` line, one link away (D-058: two-hop evidence reached the prompt 0 of 10 times). A followed
+        entry is shown as ONE short line (its name, its ties, a little of what it is), not its whole sheet, in its own
+        "Linked" section, and it is never followed again (depth 1, as the recursion pass). Everything is a property of
+        the files and the text so far, so a retry of the turn follows the same links (invariant 5).
+
+        What is not followed: a hidden entry (a secret stays in its own block), one already in the prompt, the
+        player, an entry the author's own gates hold back (`delay`, `chance: 0`, `triggers_not`), and anything past
+        FOLLOW_PER_ENTRY per source or FOLLOW_TOTAL per turn. The player's sheet is not in any registry this reads, so a
+        tie to the player resolves to nothing. Returns the updated used_lore."""
+        titles: dict[str, str] = {}
+        for slug, (_rel, e) in by_slug.items():
+            for name in [e.title] + e.aliases:
+                titles.setdefault(name_key(name), slug)
+
+        def resolve(raw: str) -> str | None:
+            slug = templates.slugify(raw)
+            return slug if slug in by_slug else titles.get(name_key(raw))
+
+        lines: list[str] = []
+        for group in list(picked.values()):
+            for src in group:
+                raw_targets = ([src.attrs["holder"]] if src.attrs.get("holder") else []) \
+                    + [other for other, _note in src.relationships()]
+                taken = 0
+                for raw in raw_targets:
+                    if taken >= self.FOLLOW_PER_ENTRY or len(a.followed) >= self.FOLLOW_TOTAL:
+                        break
+                    slug = resolve(raw)
+                    # `src` is itself in matched_slugs, so an entry tied or held to itself is skipped here too.
+                    if not slug or slug in a.matched_slugs or slug in a.followed:
+                        continue
+                    target = by_slug[slug][1]
+                    if target.hidden() or target.chance() == 0:
+                        continue
+                    dly = target.delay()
+                    if dly is not None and turn_index < dly:
+                        continue
+                    if any(trigger_hit(tok, a.haystack) for tok in target.triggers_not()):
+                        continue
+                    line = self._linked_line(target, by_slug, resolve)
+                    if used_lore + len(line) > lore_budget:
+                        continue
+                    lines.append(line)
+                    a.followed.add(slug)
+                    used_lore += len(line)
+                    taken += 1
+        if lines:
+            a.sections.append((2, "Linked to what is in play (an item's holder, a person's ties)", "\n".join(lines)))
+        return used_lore
+
+    def _linked_line(self, e: "Entry", by_slug: dict, resolve) -> str:
+        """One followed entry on one line: its name and slug, its ties with the other people's names beside their slugs,
+        then a little of what it is. The ties come first, because they are why it was followed."""
+        ties = []
+        for other, note in e.relationships()[:self.FOLLOW_PER_ENTRY]:
+            slug = resolve(other)
+            who = f"{by_slug[slug][1].title} ({slug})" if slug else other     # a name beside the slug when there is one
+            ties.append(f"{who}: {note}" if note else who)
+        head = f"{e.title} ({e.slug})"
+        if ties:
+            head += ". Ties: " + "; ".join(ties)
+        first = e.body.strip().splitlines()[0] if e.body.strip() else ""
+        about = e.attrs.get("status") or first
+        line = head + (". " + about if about else "")
+        return line if len(line) <= self.FOLLOW_LINE else line[:self.FOLLOW_LINE].rsplit(" ", 1)[0]
+
     def assemble(self, history: list[dict], player_input: str,
                  scenes_tail: int = 4, budget_tokens: int = 8000,
-                 retriever=None) -> list[dict]:
+                 retriever=None, follow_links: bool = False) -> list[dict]:
         """Build the per-turn message list for the narrator.
 
         Four stages, in order, each owning one phase and handing the rest along
@@ -1786,7 +1932,8 @@ class MemoryStore:
         """
         a = _Assembly(history=history, player_input=player_input,
                       scenes_tail=scenes_tail, budget_tokens=budget_tokens,
-                      retriever=retriever, idx=self.index())
+                      retriever=retriever, idx=self.index(),
+                      follow_links=bool(follow_links))
         self._gather_sections(a)
         self._activate_lore(a)
         self._resolve_references(a)
@@ -2041,6 +2188,8 @@ class MemoryStore:
         used_lore = self._recursion_pass(
             picked, matched_slugs, by_slug, seed, turn_index,
             recent_texts, player_now, used_lore, lore_budget, haystack)
+        if a.follow_links:
+            used_lore = self._follow_links(a, picked, by_slug, turn_index, used_lore, lore_budget)
         for rel in self.gated_registries():
             if rel in picked:
                 label = rel.replace(".md", "").replace("-", " ").title()
@@ -2121,7 +2270,7 @@ class MemoryStore:
             + " ".join(e.body for e in a.open_threads)
         ref_slugs = a.ref_slugs = [
             s for s in _LINK_RE.findall(corpus) + a.linked_wanted
-            if s in idx.entries and s not in matched_slugs
+            if s in idx.entries and s not in matched_slugs and s not in a.followed
             and not idx.entries[s][1].hidden()]
         if ref_slugs:
             lines = [idx.entries[s][1].oneline() for s in dict.fromkeys(ref_slugs)]
@@ -2144,7 +2293,7 @@ class MemoryStore:
             # already rendered verbatim in "Recent scenes" / "Related past
             # scenes". (The ST-17 pass was fixed for this in round 2; this one
             # was the other half of the same mistake.)
-            exclude = (set(matched_slugs) | set(ref_slugs)
+            exclude = (set(matched_slugs) | set(ref_slugs) | a.followed
                        | {e.slug for e in player}
                        | {s for s, (_r, e) in idx.entries.items() if e.hidden()}
                        | {e.slug for e in self.entries("memory/scenes.md")})

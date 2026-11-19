@@ -2591,3 +2591,52 @@ invented-name checks, the facts (each tie on both sides in the engine's own pars
 answer derived from the planted facts), a truthful run with the `--facts none` control, a leaky and a wrong run, both families together,
 the summary); `soak_play_test.py` is unchanged and still passes. About 55 guard mutations broken in a repo copy, all caught (three equivalent
 or untestable lines were removed along the way).
+
+
+## D-059: Ties a fold cannot clear, and a pass that follows holders and ties one hop
+
+**Why.** The graph probe (D-058) found three separate failures behind "who is her brother" and "who is the sister of the person who
+carries the key". Storage: a `relationships:` line reached the Writer's prompt in 2 of 12 questions about it, because the fold hands the
+lore-keeper model the current entry and keeps what it writes back, and `merge_entry(rewrite=True)` read a missing line as "these ties ended".
+Retrieval: two-hop evidence reached the prompt 0 of 10 times, because name-keyed activation finds an entry only when the story names it, and the
+answer sat one link away. Faithfulness: with the fact in the prompt a 4B Writer was right 8 of 14 times. This entry fixes the first two. It does
+not touch the third.
+
+**What changed (two pieces).**
+1. **Ties are not cleared by omission.** `merge_ties` (coderain/memory.py) decides the `relationships:` line after a fold. A rewrite that leaves
+   the line out keeps every tie; a rewrite that restates a tie with a note replaces that note (the story may have changed it); a rewrite may add a
+   tie to someone not yet on the line; a tie to the character itself is refused. Ties are keyed by the other person's slug, so "Hollis Wren" and
+   "hollis-wren" are one tie. Bounds: at most 16 ties and 800 characters (the fold's own line bound); a new tie that does not fit is left out and
+   an old one is never dropped to make room; a hand-written line already past the bound is neither cut nor grown. Removing a tie is an edit of the
+   file, which stays the truth (invariant 7), and a tie removed by hand does not come back. This is always on: it fixes a loss, it does not add
+   anything to a prompt. `status` and `when` are still cleared by a rewrite that omits them.
+2. **A pass that follows one hop from what activated** (`MemoryStore._follow_links`, `memory: {follow_links: true}`, OFF by default). An activated
+   item leads to its holder (an item's optional `holder:` attr, a slug or a name or an alias), an activated person to the people in their ties.
+   Each followed entry is ONE bounded line (name and slug, then its ties with the other person's name beside the slug, then a little of what it
+   is), in its own "Linked to what is in play" section at the priority of activated lore. Depth 1: what was followed is not followed again. Not
+   followed: a hidden entry, one already in the prompt in full, an entry its own gates hold back (`delay`, `chance: 0`, `triggers_not`), and
+   anything past 4 per source or 6 a turn. It charges the lore budget exactly for the line it shows. A followed entry is not also printed as a
+   `links:` one-liner or recalled again. Everything it reads is the files and the text so far, so a retry follows the same links (invariant 5).
+
+**A deviation from what I proposed.** I said "ties and possessions go into the ledger". They do not. The canon ledger exists only when
+`canon: shadow` is on (it is off by default), and the loss was in the merge that every story runs, so a ledger record would have left the default
+path unfixed. The merge rule gives the guarantee ("a fold cannot clear it") for every story. What the canon ledger would add, an undoable and
+hash-chained record plus the card after the player's action, is the next lever for faithfulness and is not built. A possession is the item's
+`holder:` attr, stated by the author; no fold writes it, so no fold loses it, and it can go stale when the story moves the item (the canon card's
+`state.held` is the live tracker, and the follow pass shows what is on file).
+
+**Defaults, and what would change them.** The merge rule is on. The follow pass is off until a measured run says it helps; the probe takes
+`--follow-links` and changes nothing else. A stale tie in a real story (a tie the story ended that no one removed) would call for an explicit
+"ended" marker in the fold's output schema. A crowded scene where the Linked lines push out something that mattered would call for a lower cap or
+a higher priority number.
+
+**Not built.** Reverse following (a person to the items whose `holder:` is them), a tie's direction (the notes are free text, so "his sister" is
+shown as written), witness metadata (the probe found no leak, D-058), and the card line.
+
+**Tests.** `ties_kept_test.py` (14 cases) and `link_follow_test.py` (16 cases: off is the baseline, an item to its holder, a person to their ties,
+one line for two sources, depth 1, already in the prompt, hidden, the three gates, the caps, name and alias resolution, the player, the
+budget arithmetic to the character, no second copy, determinism, the engine switch, the line's shape). `soak_graph_probe_test.py` pins the
+`holder:` attr and `--follow-links`. 46 guard mutations broken in a repo copy, all caught; the pass found one gap in my own test (a duplicate
+one-liner of a different shape, F16) and one wrong removal of mine (a branch I took for redundant that handled a self-tie). One older suite
+encoded the rule this entry replaces, `phase3_sweep_test.py` A-H2 ("relationships dropped, not re-emitted"); it was changed with the
+reasoning written into it, not to make it pass.

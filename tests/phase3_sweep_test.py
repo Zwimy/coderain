@@ -15,7 +15,12 @@ assert (snap / "state.json").exists(), "state.json not in snapshot"
 assert json.loads((snap / "state.json").read_text())["time"]["day"] == 5
 print("A-H1) snapshot includes state.json")
 
-# A-H2: rewrite makes managed keys authoritative; non-managed preserved
+# A-H2: rewrite makes managed keys (status, when) authoritative; every other attr is preserved.
+# This used to pin `relationships` as managed too, "a dropped relationship is an intentional clear". D-058
+# measured the opposite: a small model leaves the line out because it forgets it (the tie reached the prompt in
+# 2 of 12 questions and the final save held none), so D-059 took the ties out of the managed keys: a rewrite
+# that omits them keeps them (tests/ties_kept_test.py pins the whole rule). Evidence that would put the old
+# rule back: stale ties, ones the story ended that nobody removed, showing up in real play.
 store.write("characters.md",
     "# Characters\n\n## Kael {#kael}\nimportance: 3\nstatus: ally\n"
     "when: Day 1\nrelationships: mara: friend\nfaction: lantern-watch\n\nOld body.\n")
@@ -25,10 +30,10 @@ store.merge_entry("characters.md",
 k = {e.slug: e for e in store.entries("characters.md")}["kael"]
 assert k.body == "New body, betrayal revealed.", k.body
 assert k.attrs.get("status") == "enemy"                 # updated
-assert "relationships" not in k.attrs, k.attrs          # dropped (not re-emitted)
+assert k.attrs.get("relationships") == "mara: friend", k.attrs   # NOT dropped any more (D-059): omission is not a clear
 assert "when" not in k.attrs, k.attrs                   # dropped
 assert k.attrs.get("faction") == "lantern-watch"           # non-managed, preserved
-print("A-H2) rewrite: managed keys authoritative, custom attr preserved")
+print("A-H2) rewrite: status and when authoritative, ties and custom attrs preserved")
 
 # B-H1: valid-but-wrong-shape state.json degrades instead of crashing
 for bad in ['{"time":"evening"}', "[]", '"hi"', "not json at all", "42"]:

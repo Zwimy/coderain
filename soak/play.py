@@ -31,6 +31,8 @@ are written only to --out.
            winning a turn they share.
   --facts  stated (default): the ties and possessions above are written into the story. none: nothing is, and the same questions are
            asked, so what the Writer gets right is the guessing baseline
+  --follow-links  turn on `memory: follow_links` (D-059): an activated item leads to its holder, a person to their ties. Off by default,
+           which is the shipped default; it changes nothing else in the run
   --ask    plain (default): each graph question also asks for a straight answer in one sentence, because a model that narrates
            around the question can neither be scored right nor caught leaking; open: the bare question
   --stub-knowledge  what the OFFLINE writer does with those questions (truthful, leaky, wrong): it exists so a test can show the
@@ -201,7 +203,7 @@ def sheet_attrs(cast_row, graph_on: bool, facts: str) -> dict:
     return attrs
 
 
-def _config(model: str, window: int, budget: int, canon: str, stub: bool) -> str:
+def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False) -> str:
     cfg = f"""active_profile: local
 profiles:
   local:
@@ -227,6 +229,7 @@ memory:
   long_fold_after: 8
   long_fold_size: 4
   context_budget_tokens: {budget}
+  follow_links: {"true" if follow_links else "false"}
 rpg: {{}}
 retrieval:
   enabled: false
@@ -256,7 +259,8 @@ def run_play(args, home: Path) -> int:
     if not stub:
         _require_local(args.host)
     model = "stub-writer" if stub else args.model
-    (home / "config.yaml").write_text(_config(model, args.window, args.budget, args.canon, stub), encoding="utf-8")
+    (home / "config.yaml").write_text(
+        _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links)), encoding="utf-8")
 
     from coderain import fate
     from coderain.config import load_config
@@ -276,7 +280,7 @@ def run_play(args, home: Path) -> int:
     if graph_on and args.facts == "stated":
         for spec in gp.item_specs():
             store.upsert_entry("items.md", Entry(title=spec["title"], slug=spec["slug"], aliases=spec["aliases"], importance=3,
-                                                 attrs={}, body=spec["body"]))
+                                                 attrs={"holder": spec["holder"]}, body=spec["body"]))
     # A new story draws a random dice seed. Pin it to --seed so the same seed gives the same dice as well as the same
     # moves, which is what an on/off comparison of fate (or anything that rolls) needs.
     rpg = store.rpg_state()
@@ -340,6 +344,7 @@ def run_play(args, home: Path) -> int:
                "health_rows": len(store.health(200))}
     if graph_on:
         summary["probe_set"], summary["ask"], summary["facts"] = probe_set, ask, args.facts
+        summary["follow_links"] = bool(args.follow_links)
         summary["graph"] = gp.summarize(rows)
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

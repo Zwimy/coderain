@@ -245,6 +245,9 @@ class Engine:
         # Token ceiling under short_term_turns; see config.history_budget.
         self.history_tokens = history_budget(config)
         self.scenes_tail = 4
+        # Follow one hop from what activated (an item's holder, a person's ties): off until a measured run says it
+        # helps (D-059). `is True`, so a hand-written "false" string is not read as on.
+        self.follow_links = config.memory.get("follow_links") is True
         # Open-core seam: premium modules resolve through coderain.features —
         # None when a module is trimmed from the build, and every use below
         # degrades gracefully (core must run fully without them).
@@ -355,7 +358,8 @@ class Engine:
         messages = self.store.assemble(history, player_input,
                                        scenes_tail=self.scenes_tail,
                                        budget_tokens=self.budget,
-                                       retriever=self.retriever)
+                                       retriever=self.retriever,
+                                       follow_links=self.follow_links)
         return self._augment_style(self._augment_rpg(messages))
 
     def history_window(self, drop_last: bool = False) -> list[dict]:

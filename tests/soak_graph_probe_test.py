@@ -205,6 +205,7 @@ def test_facts_are_stated_where_the_engine_keeps_them():
         assert sp["title"] == title and sp["slug"] == slug and sp["body"] == f"Held by {holder}." and holder in NAMES
         assert f"the {title.lower()}" in sp["aliases"], "the item is found by its name in a question"
         assert holder != prior[title.lower()], (title, "the holder is the obvious guess from the roles")
+        assert sp["holder"] in by_slug and by_slug[sp["holder"]] == holder, (title, "the `holder:` attr names the holder by slug")
     # every expected answer follows from the planted facts (a fixture mistake would score a right answer wrong)
     holder_of = {t.lower(): h for t, _s, _a, h in gp.ITEMS}
     rel = lambda a, word: next(by_slug[s] for s, note in gp.RELATIONSHIPS[a] if word in note)   # noqa: E731
@@ -247,6 +248,12 @@ def test_a_truthful_run():
         "the guessing baseline still had the facts in its prompt"
     assert [r["action"] for r in rows_none if r["kind"] == "graph"] == [r["action"] for r in rows if r["kind"] == "graph"][:len(
         [r for r in rows_none if r["kind"] == "graph"])], "the control asks the same questions"
+    # `--follow-links` (D-059) turns the pass on and changes nothing else: every two-hop question finds its evidence in memory's part of
+    # the prompt, the run says so, and the default stays off
+    assert s["follow_links"] is False
+    rows_f, s_f = play("--probe-set", "graph", "--turns", "60", "--follow-links")
+    hops_f = [r for r in rows_f if r["kind"] == "graph" and r["sub"] == "twohop"]
+    assert s_f["follow_links"] is True and hops_f and all(r["seen_memory"] for r in hops_f), [(r["gid"], r["seen_memory"]) for r in hops_f]
     rows_open, s_open = play("--probe-set", "graph", "--turns", "20", "--ask", "open")
     assert s_open["ask"] == "open" and not any(r["action"].endswith(gp.PLAIN) for r in rows_open if r["kind"] == "graph")
     assert all(r["verdict"] in ("held", "clean") for r in rows_open if r["kind"] == "graph"), "the offline writer answers either wording"
