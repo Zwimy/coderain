@@ -3,21 +3,29 @@
 Why. The look probes (`soak.play`) ask one question about one entry: "what colour is her hair". A knowledge graph would help with two
 other kinds of question, and nothing measured whether the store we have already fails them:
 
-  relation / possession  one hop: who is Ottoline's nephew, who keeps the brass lamp key. The answer sits in ONE sheet.
-  twohop                 two hops: who sells salt to the keeper of the brass lamp key. The question names nobody whose sheet holds
-                         the answer, so name-keyed activation has to find the second entry through the first.
+  relation / possession  one hop: who is Ottoline's brother, who carries the brass lamp key. The answer sits in ONE entry.
+  twohop                 two hops: who is the brother of the person who carries the brass lamp key. The question names nobody whose
+                         sheet holds the answer, so name-keyed activation has to find the second entry through the first.
   recall / leak          who knows what. The player whispers a secret to ONE character early on. Much later we ask that character
                          what they were told (recall) and ask the others about it (leak). The script knows exactly who was told,
                          so the answer needs no judge. A single narrator writes every character, so a secret that is in the
                          prompt can come out of anyone's mouth: that is the failure a "who witnessed what" graph exists to stop.
 
-Everything here is invented, offline and deterministic, and scoring is a plain string check on the narration. It reads nothing from
-a save. The tokens ("north beacon", "marrow gull") are chosen so a narrator will not produce them by accident, and no probe's own
-wording contains its answer or its token (tests pin both).
+Where the facts live. Ties are stated the way the engine means an author to state them, as each character's `relationships:` line
+(both sides of every tie), and possessions as item entries in items.md that name their holder. The first version put the ties in the
+sheets' free text, and the folds rewrote the sheets and dropped them (0 of 17 hop probes had their evidence in the prompt), so it
+measured a different thing. The possessions run AGAINST the roles (the tavern keeper carries the lamp key, the mudlark boy holds the
+ledger, the lighthouse keeper keeps the customs stamp), because the first version's answers were guessable from the roles alone and a
+model scored 11 of 12 on one-hop questions with the evidence absent. `--facts none` plants nothing and asks the same questions: what it
+gets right is the guessing baseline.
 
-A verdict is `held`, `wrong`, `mixed` or `none` for the one-hop and two-hop kinds (held: the right character is named and no other;
-wrong: only another one is; mixed: both), `held` or `none` for recall, and `leak` or `clean` for leak. Recall is the control for leak:
-a leak rate means nothing when the character who WAS told cannot say it either.
+Everything here is invented, offline and deterministic, and scoring is a plain string check on the narration. It reads nothing from a
+save. The tokens ("north beacon", "marrow gull") are chosen so a narrator will not produce them by accident, and no probe's own wording
+contains its answer or its token (tests pin both).
+
+A verdict is `held`, `wrong`, `mixed`, `invented` or `none` for the one-hop and two-hop kinds (held: the right character is named and no
+other; wrong: only another cast member is; mixed: both; invented: a made-up name is said), `held` or `none` for recall, and `leak` or
+`clean` for leak. Recall is the control for leak: a leak rate means nothing when the character who WAS told cannot say it either.
 
 Each probe also records whether the answer's evidence was in the prompt the Writer actually received (`seen`, anywhere in it; and
 `seen_memory`, in the system message, which is memory's contribution). That separates the two failures a graph would treat
@@ -33,14 +41,21 @@ from __future__ import annotations
 
 import re
 
-# Ties as the AUTHOR states them: (a, a's relation to b, b, b's relation to a). Each character's sheet carries its own side.
-TIES = [
-    ("Ottoline Pike", "aunt of", "Corwin Tide", "nephew of"),
-    ("Bram Halloran", "is owed money by", "Hollis Wren", "owes money to"),
-    ("Dessa Quill", "sells salt to", "Maribel Voss", "buys her salt from"),
+# Each character's `relationships:` line, as the engine means it ("slug: note; slug: note"). Both sides of every tie are stated.
+RELATIONSHIPS = {
+    "Ottoline Pike": [("hollis-wren", "her brother")],
+    "Hollis Wren": [("ottoline-pike", "his sister")],
+    "Corwin Tide": [("maribel-voss", "owes her money")],
+    "Maribel Voss": [("corwin-tide", "is owed money by him")],
+    "Dessa Quill": [("bram-halloran", "her cousin")],
+    "Bram Halloran": [("dessa-quill", "his cousin")],
+}
+# Possessions, as items.md entries that name their holder: (title, slug, aliases, holder). Each is against the holder's role.
+ITEMS = [
+    ("Brass lamp key", "brass-lamp-key", ["the brass lamp key", "lamp key"], "Hollis Wren"),
+    ("Salt ledger", "salt-ledger", ["the salt ledger"], "Corwin Tide"),
+    ("Customs stamp", "customs-stamp", ["the customs stamp"], "Maribel Voss"),
 ]
-ITEMS = {"Maribel Voss": "keeps the brass lamp key", "Dessa Quill": "carries the salt ledger",
-         "Bram Halloran": "holds the customs stamp"}
 
 # What the player confides, and to whom. Nobody else is told, and the probes below never put a token in a question.
 SECRETS = {
@@ -55,29 +70,30 @@ TELL_TURNS = {3: "letter", 5: "hull"}
 PLAIN = " I want a straight answer, in a single sentence."   # added to each question with `ask="plain"`
 GRAPH_START = 16                  # the first probe: both secrets are 11 or more turns old, far outside a squeezed window
 
-# gid -> the question, who is asked, who the right answer is, who may be named without being the answer (the one asked, and the
-# middle of a two-hop chain), and for knowledge probes the token that proves the secret came out.
+# gid -> the question, who is asked, who the right answer is, who may be named without being the answer (the one asked, and the middle of a
+# two-hop chain), and for knowledge probes the token that proves the secret came out.
 PROBES = {
-    "R1": {"sub": "relation", "asker": "Bram Halloran", "action": "I ask Bram Halloran who Ottoline Pike's nephew is.",
-           "expect": ["Corwin Tide"], "allowed": ["Bram Halloran", "Ottoline Pike"]},
-    "R2": {"sub": "relation", "asker": "Dessa Quill", "action": "I ask Dessa Quill who owes Bram Halloran money.",
-           "expect": ["Hollis Wren"], "allowed": ["Dessa Quill", "Bram Halloran"]},
-    "R3": {"sub": "relation", "asker": "Hollis Wren", "action": "I ask Hollis Wren who buys salt from Dessa Quill.",
-           "expect": ["Maribel Voss"], "allowed": ["Hollis Wren", "Dessa Quill"]},
-    "P1": {"sub": "possession", "asker": "Corwin Tide", "action": "I ask Corwin Tide who keeps the brass lamp key.",
-           "expect": ["Maribel Voss"], "allowed": ["Corwin Tide"]},
-    "P2": {"sub": "possession", "asker": "Hollis Wren", "action": "I ask Hollis Wren who carries the salt ledger.",
-           "expect": ["Dessa Quill"], "allowed": ["Hollis Wren"]},
-    "P3": {"sub": "possession", "asker": "Maribel Voss", "action": "I ask Maribel Voss who holds the customs stamp.",
-           "expect": ["Bram Halloran"], "allowed": ["Maribel Voss"]},
-    "H1": {"sub": "twohop", "asker": "Hollis Wren",
-           "action": "I ask Hollis Wren who sells salt to the keeper of the brass lamp key.",
-           "expect": ["Dessa Quill"], "allowed": ["Hollis Wren", "Maribel Voss"]},
-    "H2": {"sub": "twohop", "asker": "Corwin Tide", "action": "I ask Corwin Tide who is owed money by the tavern keeper.",
-           "expect": ["Bram Halloran"], "allowed": ["Corwin Tide", "Hollis Wren"]},
-    "H3": {"sub": "twohop", "asker": "Dessa Quill",
-           "action": "I ask Dessa Quill what the aunt of the mudlark boy is called.",
-           "expect": ["Ottoline Pike"], "allowed": ["Dessa Quill", "Corwin Tide"]},
+    "R1": {"sub": "relation", "asker": "Dessa Quill", "action": "I ask Dessa Quill who Ottoline Pike's brother is.",
+           "expect": ["Hollis Wren"], "allowed": ["Dessa Quill", "Ottoline Pike"]},
+    "R2": {"sub": "relation", "asker": "Bram Halloran", "action": "I ask Bram Halloran who owes money to Maribel Voss.",
+           "expect": ["Corwin Tide"], "allowed": ["Bram Halloran", "Maribel Voss"]},
+    "R3": {"sub": "relation", "asker": "Hollis Wren", "action": "I ask Hollis Wren who Bram Halloran's cousin is.",
+           "expect": ["Dessa Quill"], "allowed": ["Hollis Wren", "Bram Halloran"]},
+    "P1": {"sub": "possession", "asker": "Corwin Tide", "action": "I ask Corwin Tide who carries the brass lamp key.",
+           "expect": ["Hollis Wren"], "allowed": ["Corwin Tide"]},
+    "P2": {"sub": "possession", "asker": "Bram Halloran", "action": "I ask Bram Halloran who holds the salt ledger.",
+           "expect": ["Corwin Tide"], "allowed": ["Bram Halloran"]},
+    "P3": {"sub": "possession", "asker": "Ottoline Pike", "action": "I ask Ottoline Pike who keeps the customs stamp.",
+           "expect": ["Maribel Voss"], "allowed": ["Ottoline Pike"]},
+    "H1": {"sub": "twohop", "asker": "Dessa Quill",
+           "action": "I ask Dessa Quill who is the brother or sister of the person who carries the brass lamp key.",
+           "expect": ["Ottoline Pike"], "allowed": ["Dessa Quill", "Hollis Wren"]},
+    "H2": {"sub": "twohop", "asker": "Hollis Wren",
+           "action": "I ask Hollis Wren who owes money to the person who keeps the customs stamp.",
+           "expect": ["Corwin Tide"], "allowed": ["Hollis Wren", "Maribel Voss"]},
+    "H3": {"sub": "twohop", "asker": "Bram Halloran",
+           "action": "I ask Bram Halloran who the person who holds the salt ledger owes money to.",
+           "expect": ["Maribel Voss"], "allowed": ["Bram Halloran", "Corwin Tide"]},
     "K1": {"sub": "recall", "asker": "Bram Halloran", "action": "I ask Bram Halloran what I told him about the sealed letter.",
            "token": "north beacon", "secret": "letter"},
     "K2": {"sub": "recall", "asker": "Dessa Quill", "action": "I ask Dessa Quill what I told her about the ferry's second hull.",
@@ -91,18 +107,21 @@ PROBES = {
     "L4": {"sub": "leak", "asker": "Ottoline Pike", "action": "I ask Ottoline Pike what she knows about the ferry's second hull.",
            "token": "marrow gull", "secret": "hull"},
 }
-# Evidence that an answer was available: any ONE group, every string in it present (case does not matter). Two-hop questions need
-# both halves. A secret's evidence is its token.
+
+# Evidence that an answer was available: any ONE group, every element in it present. An element is a phrase, or a pair (a, b) that must
+# appear within SPAN characters of each other (a fold may reword a line, so the pair keeps the slug and the relation, not the exact
+# sentence). Two-hop questions need both halves; a secret's evidence is its token. Case and spacing do not matter.
+SPAN = 80
+_KEY = ("brass lamp key", "hollis wren")
+_LEDGER = ("salt ledger", "corwin tide")
+_STAMP = ("customs stamp", "maribel voss")
+_BROTHER = [("hollis-wren", "brother"), ("ottoline-pike", "sister")]
+_DEBT = [("corwin-tide", "owed"), ("maribel-voss", "owes")]
+_COUSIN = [("dessa-quill", "cousin"), ("bram-halloran", "cousin")]
 EVIDENCE = {
-    "R1": [["aunt of Corwin Tide"], ["nephew of Ottoline Pike"]],
-    "R2": [["is owed money by Hollis Wren"], ["owes money to Bram Halloran"]],
-    "R3": [["sells salt to Maribel Voss"], ["buys her salt from Dessa Quill"]],
-    "P1": [["keeps the brass lamp key"]],
-    "P2": [["carries the salt ledger"]],
-    "P3": [["holds the customs stamp"]],
-    "H1": [["keeps the brass lamp key", "sells salt to Maribel Voss"], ["keeps the brass lamp key", "buys her salt from Dessa Quill"]],
-    "H2": [["owes money to Bram Halloran"], ["is owed money by Hollis Wren"]],
-    "H3": [["aunt of Corwin Tide"], ["nephew of Ottoline Pike"]],
+    "R1": [[t] for t in _BROTHER], "R2": [[t] for t in _DEBT], "R3": [[t] for t in _COUSIN],
+    "P1": [[_KEY]], "P2": [[_LEDGER]], "P3": [[_STAMP]],
+    "H1": [[_KEY, t] for t in _BROTHER], "H2": [[_STAMP, t] for t in _DEBT], "H3": [[_LEDGER, t] for t in _DEBT],
     "K1": [["north beacon"]], "K2": [["marrow gull"]],
     "L1": [["north beacon"]], "L2": [["marrow gull"]], "L3": [["north beacon"]], "L4": [["marrow gull"]],
 }
@@ -110,18 +129,14 @@ KINDS = ["relation", "possession", "twohop", "recall", "leak"]
 BY_KIND = {k: [g for g, p in PROBES.items() if p["sub"] == k] for k in KINDS}
 
 
-def ties_line(name: str) -> str:
-    """The sheet line that states this character's own ties and possessions, as the author would write them. Each tie is stated
-    on BOTH sheets, so a fact is not hidden from half the story by where it was written."""
-    parts = []
-    for a, rel_a, b, rel_b in TIES:
-        if name == a:
-            parts.append(f"{rel_a} {b}")
-        elif name == b:
-            parts.append(f"{rel_b} {a}")
-    if name in ITEMS:
-        parts.append(ITEMS[name])
-    return f"**Ties:** {'; '.join(parts)}. " if parts else ""
+def relationships_attr(name: str) -> str:
+    """The `relationships:` value for this character ("slug: note; slug: note"), or "" when they have no tie."""
+    return "; ".join(f"{slug}: {note}" for slug, note in RELATIONSHIPS.get(name, []))
+
+
+def item_specs() -> list[dict]:
+    """The item entries to write into items.md: title, slug, aliases and a body that names the holder."""
+    return [{"title": t, "slug": s, "aliases": list(a), "body": f"Held by {holder}."} for t, s, a, holder in ITEMS]
 
 
 def schedule(i: int, every: int = 4, start: int = GRAPH_START) -> str | None:
@@ -154,30 +169,25 @@ def probe_move(i: int, every: int = 4, start: int = GRAPH_START, ask: str = "pla
             "gid": gid, "sub": p["sub"]}
 
 
-_SPEECH = re.compile('[\u201c"]([^\u201d"]{1,800})[\u201d"]')
-
-
-def spoken(text: str) -> str:
-    """The quoted speech of a narration (straight or curly double quotes), joined."""
-    return " ".join(_SPEECH.findall(text))
-
-
-def answer_text(text: str, cast) -> str:
-    """The part of a narration that answers a hop: what is said, when what is said names anyone; otherwise the whole narration
-    (an offline writer, or a model that answers in the narrator's voice, has no quoted speech to read)."""
-    said = spoken(text)
-    return said if names_in(said, cast) else text
+def _near(low: str, a: str, b: str) -> bool:
+    return any(abs(m.start() - n.start()) <= SPAN for m in re.finditer(re.escape(a), low) for n in re.finditer(re.escape(b), low))
 
 
 def seen(gid: str, prompt: str) -> bool:
     """Was the evidence for this probe in `prompt` (the text the Writer received, without the question itself)?"""
     low = " ".join(prompt.lower().split())
-    return any(all(" ".join(s.lower().split()) in low for s in group) for group in EVIDENCE[gid])
+
+    def has(el) -> bool:
+        if isinstance(el, tuple):
+            return _near(low, " ".join(el[0].lower().split()), " ".join(el[1].lower().split()))
+        return " ".join(el.lower().split()) in low
+
+    return any(all(has(e) for e in group) for group in EVIDENCE[gid])
 
 
 def split_prompt(messages) -> tuple[str, str]:
     """(everything the Writer received except the final user message, and the system messages alone). The final user message is the
-    question itself, and it can contain the very words that count as evidence ("who keeps the brass lamp key"), so it is left out."""
+    question itself, and it can contain the very words that count as evidence ("who carries the brass lamp key"), so it is left out."""
     last_user = max((k for k, m in enumerate(messages) if m["role"] == "user"), default=-1)
     rest = [m for k, m in enumerate(messages) if k != last_user]
     return ("\n".join(str(m["content"]) for m in rest),
@@ -191,13 +201,28 @@ def evidence_flags(gid: str, messages) -> tuple[bool, bool]:
 
 
 _PROPER = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b")
+_Q1, _Q2 = chr(0x201C), chr(0x201D)                        # curly double quotes, which is what a model writes dialogue in
+_SPEECH = re.compile("[" + _Q1 + '"]([^' + _Q2 + '"]{1,800})[' + _Q2 + '"]')
 
 
 def invented(text: str, cast) -> bool:
     """Does a character SAY a made-up name: two or more capitalised words that name nobody in the cast ("Old Man Fitzwilliam")?
-    Only quoted speech is read, so a place in the narration is never counted. A 4B Writer asked who owes money invents a person
-    and keeps using him; that is a wrong answer, and it is a different failure from naming the wrong member of the cast."""
+    Only quoted speech is read, so a place in the narration is never counted. A 4B Writer asked who owes money produces a person
+    who is not in the story and keeps using him; that is a wrong answer, and it is a different failure from naming the wrong member
+    of the cast."""
     return any(not names_in(m, cast) for m in _PROPER.findall(spoken(text)))
+
+
+def spoken(text: str) -> str:
+    """The quoted speech of a narration (straight or curly double quotes), joined."""
+    return " ".join(_SPEECH.findall(text))
+
+
+def answer_text(text: str, cast) -> str:
+    """The part of a narration that answers a hop: what is said, when what is said names anyone; otherwise the whole narration
+    (an offline writer, or a model that answers in the narrator's voice, has no quoted speech to read)."""
+    said = spoken(text)
+    return said if names_in(said, cast) else text
 
 
 def names_in(text: str, cast) -> set[str]:
@@ -235,7 +260,7 @@ def score(gid: str, text: str, cast) -> str:
 def summarize(rows) -> dict:
     """Counts per kind, and the three rates a decision needs: how often a hop was answered, how often the told character could
     say it, and how often another character said it. `leak_meaningful` is false when nobody could recall: a store that forgets
-    the secret altogether looks leak-free for the wrong reason."""
+    the secret entirely looks leak-free for the wrong reason."""
     out: dict = {k: {} for k in KINDS}
     for r in rows:
         if r.get("kind") == "graph" and r.get("verdict"):
@@ -258,8 +283,9 @@ def summarize(rows) -> dict:
         out["hops_with_evidence_in_memory"] = f"{len(mem)} of {len(hop)}"
         out["right_when_evidence_in_memory"] = _held(mem)
         out["right_when_not"] = _held([r for r in hop if not r["seen_memory"]])
-        for sub in ("twohop",):
-            out[f"{sub}_evidence_in_memory"] = f"{sum(1 for r in hop if r['sub'] == sub and r['seen_memory'])} of {sum(1 for r in hop if r['sub'] == sub)}"
+        for sub in ("relation", "possession", "twohop"):
+            of = [r for r in hop if r["sub"] == sub]
+            out[f"{sub}_evidence_in_memory"] = f"{sum(1 for r in of if r['seen_memory'])} of {len(of)}"
         lk = [r for r in marked if r["sub"] == "leak"]
         out["leak_when_secret_in_prompt"] = _leaked([r for r in lk if r["seen"]])
         out["leak_when_not"] = _leaked([r for r in lk if not r["seen"]])

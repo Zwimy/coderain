@@ -2,7 +2,7 @@
 
 Why they exist. A knowledge graph would help with relationships, with questions that cross two sheets, and with "who knows what", and
 nothing measured whether the store we have already fails them. These probes ask those questions of the real engine, with a known answer
-for each (the author states the ties; the player whispers each secret to ONE character), and score the narration by a plain string
+for each (the author states the ties and possessions where the engine keeps them; the player whispers each secret to ONE character), and score the narration by a plain string
 check. This suite pins the probes themselves with the offline writer, so nothing here needs a model.
 
  1) the schedule: the secrets are told on turns 3 and 5 only, the first question is on turn 16, the kinds rotate, every question is asked
@@ -13,7 +13,9 @@ check. This suite pins the probes themselves with the offline writer, so nothing
     made-up name, which is not the same failure as naming the wrong member of the cast)
  3) the scoring table: held, wrong, mixed and none for a hop (an asked or middle character may be named; a first name, a full name and an
     alias all count), held and none for recall, leak and clean for leak (case does not matter)
- 4) the sheets state the author's side of every tie, on both characters, and the possessions, whatever the looks are
+ 4) the facts are stated where the engine keeps them (a `relationships:` line on BOTH sides of every tie, an items.md entry naming each
+    holder), every possession runs against its holder's role so a guess from roles is wrong, every expected answer follows from the
+    planted facts, and `--facts none` plants nothing
  5) a truthful offline run answers everything right, recalls to the one told and leaks to nobody, and reports the rates
  6) a leaky one is scored leak, a wrong one is scored wrong and forgets the secret (so `leak_meaningful` is false): the scoring notices
  7) `all` runs both families without two probes on one turn; the same seed plays the same story
@@ -31,7 +33,7 @@ WORK = Path(tempfile.mkdtemp(prefix="cr-graphprobe-"))
 _n = [0]
 
 from soak import graph_probe as gp                     # noqa: E402
-from soak.play import CAST, ScriptedPlayer, sheet_body  # noqa: E402
+from soak.play import CAST, ScriptedPlayer, sheet_attrs, sheet_body  # noqa: E402
 
 NAMES = [c[0] for c in CAST]
 
@@ -98,94 +100,123 @@ def test_questions_are_fair():
 
 def test_scoring():
     s = lambda gid, text: gp.score(gid, text, CAST)        # noqa: E731
-    assert s("R1", "Bram thinks it over. 'Corwin Tide,' he says.") == "held"
-    assert s("R1", "Bram says it is Corwin.") == "held", "a first name counts (the cast lists it as an alias)"
-    assert s("R1", "Bram says it is the mudlark boy.") == "held", "an alias counts"
-    assert s("R1", "Ottoline's nephew? Bram says it is Hollis Wren.") == "wrong", "the asked and the named relative are allowed; Hollis is not"
-    assert s("R1", "Bram says it is Corwin, or maybe Hollis.") == "mixed"
-    assert s("R1", "Bram shrugs and looks away.") == "none"
-    assert s("R1", "Bram Halloran looks at Ottoline Pike and says nothing.") == "none", "naming only the allowed is no answer"
-    assert s("H1", "Hollis thinks of Maribel, who buys from Dessa Quill.") == "held", "the middle of the chain is allowed"
-    assert s("H1", "Hollis says it is Bram Halloran.") == "wrong"
-    assert s("P1", "Corwin says Maribel keeps it.") == "held" and s("P1", "Corwin says Dessa keeps it.") == "wrong"
+    # R1: who is Ottoline Pike's brother (Hollis Wren), asked of Dessa Quill
+    assert s("R1", "Dessa thinks it over. 'Hollis Wren,' she says.") == "held"
+    assert s("R1", "Dessa says it is Hollis.") == "held", "a first name counts (the cast lists it as an alias)"
+    assert s("R1", "Dessa says it is the tavern keeper.") == "held", "an alias counts"
+    assert s("R1", "Ottoline's brother? Dessa says it is Corwin Tide.") == "wrong", "the asked and the named sibling are allowed; Corwin is not"
+    assert s("R1", "Dessa says it is Hollis, or maybe Corwin.") == "mixed"
+    assert s("R1", "Dessa shrugs and looks away.") == "none"
+    assert s("R1", "Dessa Quill looks at Ottoline Pike and says nothing.") == "none", "naming only the allowed is no answer"
+    assert s("H1", "Dessa thinks of Hollis, whose sister is Ottoline Pike.") == "held", "the middle of the chain is allowed"
+    assert s("H1", "Dessa says it is Bram Halloran.") == "wrong"
+    assert s("P1", "Corwin says Hollis carries it.") == "held" and s("P1", "Corwin says Maribel carries it.") == "wrong"
     assert s("K1", "You told me it was the North Beacon.") == "held" and s("K1", "I do not remember.") == "none"
     assert s("L1", "Hollis says it is addressed to the north beacon keeper.") == "leak"
     assert s("L1", "NORTH BEACON, he whispers.") == "leak", "case does not matter"
     assert s("L1", "Hollis has no idea.") == "clean"
     assert s("L2", "It was built from the north beacon.") == "clean", "the other secret's token is not this leak"
     # what is SAID is the answer; who else is mentioned around it is not (a real run scored a right answer `mixed` for this)
-    scene = "Hollis wipes a tankard while Maribel Voss argues with Dessa Quill by the door. "
-    assert s("R1", scene + "\u201cCorwin Tide,\u201d Bram says.") == "held", "other people in the scene are not an answer"
-    assert s("R1", scene + '"Corwin Tide," Bram says.') == "held", "straight quotes too"
-    assert s("R1", "Corwin Tide sits by the door. \u201cHollis Wren,\u201d Bram says.") == "wrong", "the speech decides, not the scene"
-    assert s("R1", "Bram says it is Corwin, then mutters something.") == "held", "no speech: the narration is read"
-    assert s("R1", "Corwin sits by the door. \u201cI could not say,\u201d Bram mutters.") == "held", "speech that names nobody: the narration is read"
+    scene = "Corwin sketches by the window while Maribel Voss argues with Bram Halloran by the door. "
+    assert s("R1", scene + "\u201cHollis Wren,\u201d Dessa says.") == "held", "other people in the scene are not an answer"
+    assert s("R1", scene + '"Hollis Wren," Dessa says.') == "held", "straight quotes too"
+    assert s("R1", "Hollis Wren sits by the door. \u201cCorwin Tide,\u201d Dessa says.") == "wrong", "the speech decides, not the scene"
+    assert s("R1", "Dessa says it is Hollis, then mutters something.") == "held", "no speech: the narration is read"
+    assert s("R1", "Hollis sits by the door. \u201cI could not say,\u201d Dessa mutters.") == "held", "speech that names nobody: the narration is read"
     assert s("K1", scene + "He says only that it is the north beacon.") == "held", "a secret is read in the whole narration"
     assert gp.spoken('He said \u201cone\u201d and "two" and left.') == "one two"
     print("3. scoring: held, wrong, mixed, none for a hop; held, none for recall; leak, clean for a leak")
 
 
 def test_seen_and_invented():
-    # `seen`: was the evidence in the prompt the Writer got? Any one group, every string in it; case and spacing do not matter
-    assert gp.seen("R1", "...  **Ties:** aunt of  Corwin Tide. ...") and gp.seen("R1", "NEPHEW OF OTTOLINE PIKE")
-    assert not gp.seen("R1", "Ottoline Pike keeps a ferry and Corwin Tide hunts the mud.")
-    assert gp.seen("P1", "Maribel keeps the brass lamp key.") and not gp.seen("P1", "Maribel keeps the keys.")
-    both = "Maribel Voss: keeps the brass lamp key; buys her salt from Dessa Quill."
-    assert gp.seen("H1", both), "a two-hop question needs both halves, and both are here"
-    assert not gp.seen("H1", "Maribel Voss: keeps the brass lamp key."), "one half is not enough"
-    assert not gp.seen("H1", "Dessa Quill: sells salt to Maribel Voss."), "the other half alone is not enough either"
+    # `seen`: was the evidence in the prompt the Writer got? Any one group, every element in it; case and spacing do not matter. A pair
+    # must sit within SPAN characters (a fold may reword a line, so it keeps the slug and the relation, not the sentence)
+    assert gp.seen("R1", "...  relationships: hollis-wren: her  BROTHER; corwin-tide: her ward ...") and gp.seen("R1", "ottoline-pike: his sister")
+    assert not gp.seen("R1", "Ottoline Pike keeps a ferry and Hollis Wren pours drinks."), "the names alone are not the tie"
+    assert not gp.seen("R1", "relationships: hollis-wren: her friend"), "the wrong relation is not the tie"
+    assert gp.seen("P1", "### Brass lamp key\n\nHeld by Hollis Wren.") and not gp.seen("P1", "Brass lamp key. Held by Maribel Voss.")
+    assert not gp.seen("P1", "Brass lamp key" + " . " * 60 + "Hollis Wren"), "a pair further apart than SPAN is not one fact"
+    key, tie = "Brass lamp key. Held by Hollis Wren. ", "relationships: ottoline-pike: his sister"
+    assert gp.seen("H1", key + tie), "a two-hop question needs both halves, and both are here"
+    assert not gp.seen("H1", key), "one half is not enough"
+    assert not gp.seen("H1", tie), "the other half alone is not enough either"
     assert gp.seen("L1", "he said it was the North Beacon") and not gp.seen("L1", "the marrow gull")
     assert set(gp.EVIDENCE) == set(gp.PROBES), "every probe states its evidence"
-    # `invented`: a made-up name SAID by a character is its own failure, and only quoted speech is read
+    # `invented`: a made-up name SAID by a character is its own failure, and only quoted speech is read. R2: who owes money to Maribel
+    # Voss (Corwin Tide), asked of Bram Halloran
     s = lambda gid, text: gp.score(gid, text, CAST)        # noqa: E731
-    assert s("R2", "Dessa thinks. \u201cOld Man Fitzwilliam owes him money,\u201d she says.") == "invented"
-    assert s("R2", "Dessa thinks. \u201cSilas Blackwood owes him money,\u201d she says.") == "invented"
-    assert s("R2", "Dessa thinks. \u201cHollis Wren owes him money,\u201d she says.") == "held", "a cast name is not invented"
-    assert s("R2", "Dessa thinks. \u201cHollis Wren owes Silas Blackwood,\u201d she says.") == "held", "a right answer with a made-up side name is held"
-    assert s("R2", "Dessa thinks. \u201cCorwin Tide owes him money,\u201d she says.") == "wrong", "the wrong member of the cast is wrong, not invented"
-    assert s("R2", "Dessa stares at the Blackwood Tavern door and says nothing.") == "none", "a place in the narration is not an invented answer"
-    assert s("R2", "Dessa says it is the Salt Traders Guild.") == "none", "no quoted speech: nothing is read as invented"
+    assert s("R2", "Bram thinks. \u201cOld Man Fitzwilliam owes her money,\u201d he says.") == "invented"
+    assert s("R2", "Bram thinks. \u201cSilas Blackwood owes her money,\u201d he says.") == "invented"
+    assert s("R2", "Bram thinks. \u201cCorwin Tide owes her money,\u201d he says.") == "held", "a cast name is not invented"
+    assert s("R2", "Bram thinks. \u201cCorwin Tide owes Silas Blackwood,\u201d he says.") == "held", "a right answer with a made-up side name is held"
+    assert s("R2", "Bram thinks. \u201cHollis Wren owes her money,\u201d he says.") == "wrong", "the wrong member of the cast is wrong, not invented"
+    assert s("R2", "Bram stares at the Blackwood Tavern door and says nothing.") == "none", "a place in the narration is not an invented answer"
+    assert s("R2", "Bram says it is the Salt Traders Guild.") == "none", "no quoted speech: nothing is read as invented"
     assert gp.invented("\u201cThe Brass Lamp Society does,\u201d he says.", CAST) and not gp.invented("He says nothing.", CAST)
     # the prompt is split into what memory supplied and everything else, and the question itself is never evidence
-    msgs = [{"role": "system", "content": "Maribel: keeps the brass lamp key."}, {"role": "user", "content": "I wait."},
-            {"role": "assistant", "content": "Rain falls; Dessa carries the salt ledger."},
-            {"role": "user", "content": "I ask Corwin Tide who keeps the brass lamp key."}]
+    msgs = [{"role": "system", "content": "Brass lamp key: Held by Hollis Wren."}, {"role": "user", "content": "I wait."},
+            {"role": "assistant", "content": "Rain falls; Corwin holds the salt ledger."},
+            {"role": "user", "content": "I ask Corwin Tide who carries the brass lamp key, Hollis Wren."}]
     everything, memory = gp.split_prompt(msgs)
-    assert "brass lamp key" in everything and "salt ledger" in everything and "I wait" in everything, everything
-    assert memory == "Maribel: keeps the brass lamp key." and "salt ledger" not in memory, memory
+    assert "brass lamp key" in everything.lower() and "salt ledger" in everything and "I wait" in everything, everything
+    assert memory == "Brass lamp key: Held by Hollis Wren." and "salt ledger" not in memory, memory
     assert "I ask Corwin" not in everything, "the question is not evidence"
     assert not gp.seen("P1", gp.split_prompt([{"role": "system", "content": "A quiet town."},
-                                              {"role": "user", "content": "I ask Corwin Tide who keeps the brass lamp key."}])[0])
+                                              {"role": "user", "content": "I ask who carries the brass lamp key, Hollis Wren."}])[0])
     assert gp.split_prompt([]) == ("", "")
     # the two flags: memory's part is a subset of the whole, and history alone can carry the evidence
-    history_only = [{"role": "system", "content": "A quiet town."}, {"role": "assistant", "content": "Maribel keeps the brass lamp key."},
-                    {"role": "user", "content": "I ask who keeps the brass lamp key."}]
-    in_memory = [{"role": "system", "content": "Maribel keeps the brass lamp key."}, {"role": "user", "content": "I wait."}]
+    history_only = [{"role": "system", "content": "A quiet town."}, {"role": "assistant", "content": "Brass lamp key. Held by Hollis Wren."},
+                    {"role": "user", "content": "I ask who carries the brass lamp key."}]
+    in_memory = [{"role": "system", "content": "Brass lamp key. Held by Hollis Wren."}, {"role": "user", "content": "I wait."}]
     assert gp.evidence_flags("P1", history_only) == (True, False), "evidence in the history is seen, but not in memory"
     assert gp.evidence_flags("P1", in_memory) == (True, True)
     assert gp.evidence_flags("P1", [{"role": "system", "content": "A quiet town."}, {"role": "user", "content": "I wait."}]) == (False, False)
     assert gp.evidence_flags("P1", []) == (False, False)
     # invented needs a name made of two or more capitalised words, and a cast name or one word is not one
-    assert s("R2", "Dessa shrugs. \u201cBram Halloran? I could not say.\u201d") == "none", "an allowed cast name is not invented"
-    assert s("R2", "Dessa shrugs. \u201cBrinewick keeps its secrets,\u201d she says.") == "none", "one capitalised word is not a name"
+    assert s("R2", "Bram shrugs. \u201cMaribel Voss? I could not say.\u201d") == "none", "an allowed cast name is not invented"
+    assert s("R2", "Bram shrugs. \u201cBrinewick keeps its secrets,\u201d he says.") == "none", "one capitalised word is not a name"
     print("3b. seen needs a whole group of evidence; a made-up name said by a character is invented, a cast name never is")
 
 
-def test_sheets_state_the_ties():
-    for a, rel_a, b, rel_b in gp.TIES:
-        la, lb = gp.ties_line(a), gp.ties_line(b)
-        assert f"{rel_a} {b}" in la and f"{rel_b} {a}" in lb, (a, b, la, lb)
-    for who, what in gp.ITEMS.items():
-        assert what in gp.ties_line(who)
-    assert sum(gp.ties_line(n).count(what) for n in NAMES for what in gp.ITEMS.values()) == len(gp.ITEMS), "an item on two sheets"
+def test_facts_are_stated_where_the_engine_keeps_them():
+    from coderain.memory import Entry                          # the engine's own parser for a `relationships:` line
+    by_slug = {row[1]: row[0] for row in CAST}
+    for name, ties in gp.RELATIONSHIPS.items():
+        assert name in NAMES
+        rels = Entry(title=name, slug="x", attrs={"relationships": gp.relationships_attr(name)}).relationships()
+        assert rels == ties, (name, rels)
+        for slug, _note in ties:
+            assert slug in by_slug, (name, slug)
+            partner = by_slug[slug]
+            mine = next(r for r in CAST if r[0] == name)[1]
+            assert any(s == mine for s, _ in gp.RELATIONSHIPS.get(partner, [])), (name, partner, "a tie is stated on one side only")
+    assert gp.relationships_attr("Nobody Here") == ""
+    # the attrs the player writes: the tie line with the graph probes on and the facts stated, nothing otherwise
     for row in CAST:
-        for sheets in ("full", "role"):
-            with_graph, without = sheet_body(row, sheets, True), sheet_body(row, sheets, False)
-            assert "**Ties:**" in with_graph and "**Ties:**" not in without, (row[0], sheets)
-            assert with_graph.replace(gp.ties_line(row[0]), "") == without, "the ties line is the only difference"
-        assert ("with " in sheet_body(row, "full", True)) and ("with " not in sheet_body(row, "role", True)), "looks follow --sheets"
-    assert gp.ties_line("Nobody Here") == ""
-    print("4. every tie is on both sheets, the possessions on one, whatever the looks are, and only with the graph probes on")
+        assert sheet_attrs(row, True, "stated") == {"status": "alive", "relationships": gp.relationships_attr(row[0])}, row[0]
+        assert sheet_attrs(row, True, "none") == {"status": "alive"} and sheet_attrs(row, False, "stated") == {"status": "alive"}
+        assert "Ties" not in sheet_body(row, "full") and "Ties" not in sheet_body(row, "role")
+        assert ("with " in sheet_body(row, "full")) and ("with " not in sheet_body(row, "role")), "looks follow --sheets"
+    # every possession runs AGAINST its holder's role: the first version's answers were guessable from roles alone
+    prior = {"brass lamp key": "Maribel Voss", "salt ledger": "Dessa Quill", "customs stamp": "Bram Halloran"}
+    specs = gp.item_specs()
+    assert len(specs) == len(gp.ITEMS) == len(prior)
+    for sp, (title, slug, aliases, holder) in zip(specs, gp.ITEMS):
+        assert sp["title"] == title and sp["slug"] == slug and sp["body"] == f"Held by {holder}." and holder in NAMES
+        assert f"the {title.lower()}" in sp["aliases"], "the item is found by its name in a question"
+        assert holder != prior[title.lower()], (title, "the holder is the obvious guess from the roles")
+    # every expected answer follows from the planted facts (a fixture mistake would score a right answer wrong)
+    holder_of = {t.lower(): h for t, _s, _a, h in gp.ITEMS}
+    rel = lambda a, word: next(by_slug[s] for s, note in gp.RELATIONSHIPS[a] if word in note)   # noqa: E731
+    want = {"R1": rel("Ottoline Pike", "brother"), "R2": by_slug[next(s for s, n in gp.RELATIONSHIPS["Maribel Voss"] if "owed" in n)],
+            "R3": rel("Bram Halloran", "cousin"),
+            "P1": holder_of["brass lamp key"], "P2": holder_of["salt ledger"], "P3": holder_of["customs stamp"],
+            "H1": rel(holder_of["brass lamp key"], "sister"),
+            "H2": by_slug[next(s for s, n in gp.RELATIONSHIPS[holder_of["customs stamp"]] if "owed" in n)],
+            "H3": rel(holder_of["salt ledger"], "owes")}
+    for gid, name in want.items():
+        assert gp.PROBES[gid]["expect"] == [name], (gid, gp.PROBES[gid]["expect"], name)
+    print("4. ties are on both sides in the engine's own `relationships:` line, possessions are items against their roles, answers follow")
 
 
 def test_a_truthful_run():
@@ -203,8 +234,19 @@ def test_a_truthful_run():
     assert all(r["seen"] or not r["seen_memory"] for r in asked), "memory's part of the prompt cannot hold what the whole prompt lacks"
     assert any(r["seen_memory"] for r in asked if r["sub"] in ("relation", "possession", "twohop")), \
         "no hop question had its evidence in the prompt: the prompt is not being recorded, or the sheets do not reach it"
+    # a one-hop question names the character or the item that holds the fact, so name-keyed activation puts it in memory's part of the prompt
+    for sub in ("relation", "possession"):
+        got = [r["seen_memory"] for r in asked if r["sub"] == sub]
+        assert got and all(got), (sub, "the planted fact did not reach the prompt of a question that names it", got)
     assert "hops_with_evidence_in_memory" in g and "leak_when_secret_in_prompt" in g, g
-    assert s["ask"] == "plain" and all(r["action"].endswith(gp.PLAIN) for r in asked), "the questions ask for a straight answer"
+    assert s["ask"] == "plain" and s["facts"] == "stated" and all(r["action"].endswith(gp.PLAIN) for r in asked), "plain and stated are the defaults"
+    # `--facts none` plants nothing: the same questions, and no hop question can find its evidence in the prompt
+    rows_none, s_none = play("--probe-set", "graph", "--turns", "40", "--facts", "none")
+    hops_none = [r for r in rows_none if r["kind"] == "graph" and r["sub"] in ("relation", "possession", "twohop")]
+    assert s_none["facts"] == "none" and hops_none and not any(r["seen_memory"] for r in hops_none), \
+        "the guessing baseline still had the facts in its prompt"
+    assert [r["action"] for r in rows_none if r["kind"] == "graph"] == [r["action"] for r in rows if r["kind"] == "graph"][:len(
+        [r for r in rows_none if r["kind"] == "graph"])], "the control asks the same questions"
     rows_open, s_open = play("--probe-set", "graph", "--turns", "20", "--ask", "open")
     assert s_open["ask"] == "open" and not any(r["action"].endswith(gp.PLAIN) for r in rows_open if r["kind"] == "graph")
     assert all(r["verdict"] in ("held", "clean") for r in rows_open if r["kind"] == "graph"), "the offline writer answers either wording"
@@ -270,7 +312,7 @@ def test_summarize():
     print("8. summarize counts per kind, gives the fractions, and flags a leak count that proves nothing")
 
 
-for fn in (test_schedule, test_questions_are_fair, test_scoring, test_seen_and_invented, test_sheets_state_the_ties, test_a_truthful_run,
+for fn in (test_schedule, test_questions_are_fair, test_scoring, test_seen_and_invented, test_facts_are_stated_where_the_engine_keeps_them, test_a_truthful_run,
            test_a_leaky_and_a_wrong_run, test_both_families, test_summarize):
     fn()
 print("\nSOAK GRAPH PROBE TESTS PASSED")

@@ -181,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--probe-set", choices=["look", "graph", "all"], default="look",
                     help="look: hair and eyes. graph: relationships, possessions, two-hop questions and who-knows-what (D-058). all: both")
     pl.add_argument("--graph-every", type=int, default=4, help="a graph probe every N turns from turn 16")
+    pl.add_argument("--facts", choices=["stated", "none"], default="stated",
+                    help="stated: the graph probes' ties and possessions are written into the story. none: nothing is (the guessing baseline)")
     pl.add_argument("--ask", choices=["plain", "open"], default="plain",
                     help="plain: each graph question also asks for a straight one-sentence answer; open: the bare question")
     pl.add_argument("--stub-knowledge", choices=["truthful", "leaky", "wrong"], default="truthful",

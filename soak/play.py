@@ -8,7 +8,8 @@ turn plus a summary.
 
     python -m soak play --out DIR [--turns 30] [--seed 5] [--stub | --model NAME] [--fate off|preview|on]
                         [--sheets full|role] [--window 4] [--budget 5000] [--probe-every 8] [--canon off|card]
-                        [--probe-set look|graph|all] [--graph-every 4] [--ask plain|open] [--stub-knowledge truthful|leaky|wrong]
+                        [--probe-set look|graph|all] [--graph-every 4] [--ask plain|open] [--facts stated|none]
+                        [--stub-knowledge truthful|leaky|wrong]
 
   --stub   an offline writer (deterministic prose, no model, no network): what the tests and a dry run use
   --model  a local Ollama model on this machine. It must already be running: this never starts it, and a host that is
@@ -24,9 +25,12 @@ is compared with the sheet (held, drift, or none). Rows and the summary hold the
 are written only to --out.
 
   --probe-set  look (default): the hair and eyes probes above. graph (D-058): relationship, possession, two-hop and who-knows-what
-           probes instead: the sheets state ties and possessions, the player whispers a secret to one character on turns 3 and 5,
+           probes instead: the characters' `relationships:` lines state ties and items.md states who holds what, the player
+           whispers a secret to one character on turns 3 and 5,
            and from turn 16 every `graph-every` turns asks a question about them (soak/graph_probe.py). all: both, the look probe
            winning a turn they share.
+  --facts  stated (default): the ties and possessions above are written into the story. none: nothing is, and the same questions are
+           asked, so what the Writer gets right is the guessing baseline
   --ask    plain (default): each graph question also asks for a straight answer in one sentence, because a model that narrates
            around the question can neither be scored right nor caught leaking; open: the bare question
   --stub-knowledge  what the OFFLINE writer does with those questions (truthful, leaky, wrong): it exists so a test can show the
@@ -180,13 +184,21 @@ def probe_verdict(text: str, who: str, slot: str, truth: str) -> str:
     return "held" if any(_family(c) == _family(truth) for c in found) else "drift"
 
 
-def sheet_body(cast_row, sheets: str, graph_on: bool) -> str:
-    """One character's sheet. `sheets` decides whether the look is stated; the graph probes need the author's ties and
-    possessions stated on the sheets whatever the looks are, so they are added whenever those probes are on."""
-    name, _slug, _aliases, hair, eyes, role = cast_row
+def sheet_body(cast_row, sheets: str) -> str:
+    """One character's sheet body. `sheets` decides whether the look is stated (the look probes score against it)."""
+    _name, _slug, _aliases, hair, eyes, role = cast_row
     looks = f"**Visual:** {role}, with {hair} hair and {eyes} eyes. " if sheets == "full" else f"**Role:** {role}. "
-    ties = gp.ties_line(name) if graph_on else ""
-    return looks + ties + "**Mentality:** guarded but fair. **Voice:** plain, short sentences."
+    return looks + "**Mentality:** guarded but fair. **Voice:** plain, short sentences."
+
+
+def sheet_attrs(cast_row, graph_on: bool, facts: str) -> dict:
+    """One character's attrs. The graph probes' ties go where the engine keeps them, the `relationships:` line; with `--facts none`
+    nothing is stated, which is the guessing baseline."""
+    attrs = {"status": "alive"}
+    ties = gp.relationships_attr(cast_row[0]) if graph_on and facts == "stated" else ""
+    if ties:
+        attrs["relationships"] = ties
+    return attrs
 
 
 def _config(model: str, window: int, budget: int, canon: str, stub: bool) -> str:
@@ -259,8 +271,12 @@ def run_play(args, home: Path) -> int:
     graph_on = probe_set in ("graph", "all")
     for row in CAST:
         store.upsert_entry("characters.md", Entry(
-            title=row[0], slug=row[1], aliases=row[2], importance=4, attrs={"status": "alive"},
-            body=sheet_body(row, args.sheets, graph_on)))
+            title=row[0], slug=row[1], aliases=row[2], importance=4, attrs=sheet_attrs(row, graph_on, args.facts),
+            body=sheet_body(row, args.sheets)))
+    if graph_on and args.facts == "stated":
+        for spec in gp.item_specs():
+            store.upsert_entry("items.md", Entry(title=spec["title"], slug=spec["slug"], aliases=spec["aliases"], importance=3,
+                                                 attrs={}, body=spec["body"]))
     # A new story draws a random dice seed. Pin it to --seed so the same seed gives the same dice as well as the same
     # moves, which is what an on/off comparison of fate (or anything that rolls) needs.
     rpg = store.rpg_state()
@@ -323,7 +339,7 @@ def run_play(args, home: Path) -> int:
                "model_calls": dict(writer.calls) if writer is not None else None,
                "health_rows": len(store.health(200))}
     if graph_on:
-        summary["probe_set"], summary["ask"] = probe_set, ask
+        summary["probe_set"], summary["ask"], summary["facts"] = probe_set, ask, args.facts
         summary["graph"] = gp.summarize(rows)
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

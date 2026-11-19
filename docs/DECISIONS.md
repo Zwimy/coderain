@@ -2484,12 +2484,14 @@ thousands of turns, and nothing measured whether the store we already have fails
 before believing, so the probe comes before any graph.
 
 **What it is.** `soak/graph_probe.py`, wired into the scripted player (D-048). With `--probe-set graph` (or `all`, which keeps the look
-probes too), the author's sheets state ties and possessions (each tie on BOTH characters' sheets, each possession on one), the player
-whispers one secret to one character on turn 3 and another to a different character on turn 5, and from turn 16 every `--graph-every`
-turns (default 4) it asks a question. The kinds rotate and each walks its own list:
-- **relation and possession (one hop):** who is Ottoline's nephew, who keeps the brass lamp key. The answer is on one sheet.
-- **twohop:** who sells salt to the keeper of the brass lamp key. The question names nobody whose sheet holds the answer, so name-keyed
-  activation has to find the second entry through the first. This is the question an edge table would answer and the current store may not.
+probes too), the ties and possessions are stated where the engine keeps them, the player whispers one secret to one character on turn 3
+and another to a different character on turn 5, and from turn 16 every `--graph-every` turns (default 4) it asks a question. Ties are each
+character's `relationships:` line (both sides of every tie: a sibling pair, a debt, a cousin pair) and possessions are `items.md` entries
+that name their holder. The kinds rotate and each walks its own list:
+- **relation and possession (one hop):** who is Ottoline's brother, who carries the brass lamp key. The question names the character or the
+  item that holds the fact, so name-keyed activation should put it in the prompt.
+- **twohop:** who is the brother of the person who carries the brass lamp key. The question names nobody whose entry holds the second half,
+  so something has to follow the item to its holder. This is the question an edge table would answer and name-keyed activation may not.
 - **recall:** ask the character who WAS told what the player told them. It is the control for the next kind.
 - **leak:** ask the characters who were NOT told. A single narrator writes everyone, so a secret in the prompt can come out of any
   mouth; the probe asks whether it does once the telling is far outside the verbatim window and only memory can carry it.
@@ -2515,6 +2517,17 @@ to make it unexposed. The summary splits the rates on these flags (`right_when_e
 token, so a fold that paraphrases a fact counts as not seen; that undercounts what memory carries and is the safe direction for a case
 that argues for retrieval, not against it.
 
+**`--facts stated|none`, and what the first design taught.** The first design put the ties in the sheets' free text and gave the items
+obvious holders (the lighthouse keeper keeps the key, the salt trader carries the ledger, the customs officer holds the stamp). A first real
+run on gemma3:4b (120 turns, squeezed memory: window 4, budget 5000) found both mistakes. (1) After 120 turns the final `characters.md`
+held no "Ties" line at all, and none of the 17 hop probes had its evidence in the prompt, not even at turn 16: the folds rewrite a sheet's
+body, and a `relationships:` line is "managed" (an omission by the rewrite is read as an intentional clear), so a fact written as free text,
+or left out of a rewrite, is gone. That is the same mechanism that drifted a hair colour in the long real story, now seen on ties. (2) The
+one-hop questions were answered right 11 of 12 times with the evidence ABSENT, because every answer was guessable from the role, so that
+number measured nothing. The possessions now run against the roles (the tavern keeper carries the lamp key, the mudlark boy holds the
+ledger, the lighthouse keeper keeps the stamp), a test pins that no holder is the role's obvious guess, and `--facts none` plants nothing
+and asks the same questions, so what the Writer gets right there is the guessing and inventing baseline to subtract.
+
 **`--ask plain|open`.** The first run asked the bare question and gemma3:4b narrated around it (about 400 words a turn, no stated answer),
 which hides both a right answer and a leak. `plain` (the default) adds "I want a straight answer, in a single sentence" to each question
 (37 words a turn, a direct answer); `open` keeps the bare question so the two can be compared on one model.
@@ -2530,10 +2543,12 @@ problem is the reader or the sheets, and a graph would store the same mistakes. 
 small (27 probes in 120 turns, 5 or 6 per kind), so repeat over seeds and more turns before believing a difference of a few points, and
 ask the same questions of more than one model (the Writer is the part that varies).
 
-**Not done.** No real-model run yet. The probe asks for a Writer that answers in character, so a model that refuses or changes the subject
+**Not done.** The results of the redesigned probe are not in this entry yet. The probe asks for a Writer that answers in character, so a model that refuses or changes the subject
 scores `none`, which the summary shows separately from `wrong`. Control for the verbatim window is by construction (the first question
 is 11 turns after the second secret, with a window of 4), not by a second run with the window wide open.
 
-**Tests.** `soak_graph_probe_test.py` (8 cases: the schedule, the fairness of every question, the scoring table, the sheets, a truthful
-run, a leaky and a wrong run, both families together, the summary); `soak_play_test.py` is unchanged and still passes. 24 guard
-mutations broken in a repo copy, all caught (one equivalent mutant, a first-name term the aliases already cover, was removed).
+**Tests.** `soak_graph_probe_test.py` (9 cases: the schedule, the fairness of every question, the scoring table, the evidence and the
+invented-name checks, the facts (each tie on both sides in the engine's own parser, each possession against its role, every expected
+answer derived from the planted facts), a truthful run with the `--facts none` control, a leaky and a wrong run, both families together,
+the summary); `soak_play_test.py` is unchanged and still passes. About 55 guard mutations broken in a repo copy, all caught (three equivalent
+or untestable lines were removed along the way).
