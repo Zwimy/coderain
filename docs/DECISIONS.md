@@ -2493,12 +2493,31 @@ turns (default 4) it asks a question. The kinds rotate and each walks its own li
 - **recall:** ask the character who WAS told what the player told them. It is the control for the next kind.
 - **leak:** ask the characters who were NOT told. A single narrator writes everyone, so a secret in the prompt can come out of any
   mouth; the probe asks whether it does once the telling is far outside the verbatim window and only memory can carry it.
-Scoring is a plain string check, no judge: `held`, `wrong`, `mixed` or `none` for a hop (the asked character and the middle of a chain
-may be named), `held` or `none` for recall, `leak` or `clean` for leak. Secrets are two invented phrases ("north beacon", "marrow
+Scoring is a plain string check, no judge: `held`, `wrong`, `mixed`, `invented` or `none` for a hop (the asked character and the middle
+of a chain may be named), `held` or `none` for recall, `leak` or `clean` for leak. A hop is scored on what the characters SAY (the quoted
+speech), because the first real run showed a correct answer scored `mixed` whenever the narration also named the others in the scene;
+when nothing said names anyone the whole narration is read, and a secret is read in the whole narration wherever it was written.
+`invented` is a character saying a made-up name (two or more capitalised words that name nobody in the cast): a 4B Writer asked who owes
+money produced an NPC that is not in the story and kept using him, and that is a different failure from naming the wrong member of the cast. Secrets are two invented phrases ("north beacon", "marrow
 gull") that a narrator will not produce by accident, and a test pins that no question contains its own answer or its token, that a leak
 probe never asks the one who was told, and that every secret is told to exactly one character. The summary adds the counts per kind,
 `one_hop_right`, `two_hop_right`, `recall_rate`, `leak_rate`, and `leak_meaningful`, which is false when nobody recalled: a store that
 forgets the secret entirely looks leak-free for the wrong reason. The look probes are unchanged and are still the default.
+
+**What was in front of the Writer.** Every graph row also records, from the messages the Writer actually received (the final user message,
+which is the question itself, is left out because it can contain the evidence words), whether the answer's evidence was in the prompt
+(`seen`) and whether it was in memory's part of it, the system message (`seen_memory`). That is the measurement the decision needs. When
+the fact was NOT in the prompt the failure is retrieval, and better structure (a graph, an edge table the retrieval can walk) can help;
+when it WAS in the prompt and the Writer ignored it or invented around it, the failure is faithfulness, and a graph cannot help. For a
+leak probe it records whether the secret was in the prompt at all: a leak needs an exposed secret, and "who witnessed what" metadata exists
+to make it unexposed. The summary splits the rates on these flags (`right_when_evidence_in_memory`, `right_when_not`,
+`leak_when_secret_in_prompt`, `leak_when_not`, `recall_when_secret_in_prompt`). Evidence is an exact phrase from the sheets or the secret's
+token, so a fold that paraphrases a fact counts as not seen; that undercounts what memory carries and is the safe direction for a case
+that argues for retrieval, not against it.
+
+**`--ask plain|open`.** The first run asked the bare question and gemma3:4b narrated around it (about 400 words a turn, no stated answer),
+which hides both a right answer and a leak. `plain` (the default) adds "I want a straight answer, in a single sentence" to each question
+(37 words a turn, a direct answer); `open` keeps the bare question so the two can be compared on one model.
 
 **The offline writer** answers every question truthfully, which only proves the harness runs. `--stub-knowledge leaky` also lets everyone
 say the secret and `wrong` names the wrong person and forgets it, so a test can show the scoring notices.

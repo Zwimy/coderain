@@ -8,7 +8,7 @@ turn plus a summary.
 
     python -m soak play --out DIR [--turns 30] [--seed 5] [--stub | --model NAME] [--fate off|preview|on]
                         [--sheets full|role] [--window 4] [--budget 5000] [--probe-every 8] [--canon off|card]
-                        [--probe-set look|graph|all] [--graph-every 4] [--stub-knowledge truthful|leaky|wrong]
+                        [--probe-set look|graph|all] [--graph-every 4] [--ask plain|open] [--stub-knowledge truthful|leaky|wrong]
 
   --stub   an offline writer (deterministic prose, no model, no network): what the tests and a dry run use
   --model  a local Ollama model on this machine. It must already be running: this never starts it, and a host that is
@@ -27,6 +27,8 @@ are written only to --out.
            probes instead: the sheets state ties and possessions, the player whispers a secret to one character on turns 3 and 5,
            and from turn 16 every `graph-every` turns asks a question about them (soak/graph_probe.py). all: both, the look probe
            winning a turn they share.
+  --ask    plain (default): each graph question also asks for a straight answer in one sentence, because a model that narrates
+           around the question can neither be scored right nor caught leaking; open: the bare question
   --stub-knowledge  what the OFFLINE writer does with those questions (truthful, leaky, wrong): it exists so a test can show the
            scoring notices a wrong answer and a leak
 """
@@ -97,8 +99,8 @@ COLOUR_FAMILIES = [
 class ScriptedPlayer:
     """The same moves for the same seed: a probe every `probe_every` turns, ordinary actions between."""
 
-    def __init__(self, seed: int = 5, probe_every: int = 8, probe_set: str = "look", graph_every: int = 4):
-        self.rng, self.probe_every = random.Random(seed), probe_every
+    def __init__(self, seed: int = 5, probe_every: int = 8, probe_set: str = "look", graph_every: int = 4, ask: str = "plain"):
+        self.rng, self.probe_every, self.ask = random.Random(seed), probe_every, ask
         self.look_on, self.graph_on, self.graph_every = probe_set in ("look", "all"), probe_set in ("graph", "all"), graph_every
 
     def act(self, i: int) -> dict:
@@ -112,9 +114,9 @@ class ScriptedPlayer:
             action = f"I study {name}'s hair." if slot == "hair" else f"I meet {name}'s eyes and study them."
             return {"kind": "probe", "action": action, "who": name, "slot": slot}
         if self.graph_on:
-            ask = gp.probe_move(i, self.graph_every)
-            if ask:
-                return ask
+            question = gp.probe_move(i, self.graph_every, ask=self.ask)
+            if question:
+                return question
         place = self.rng.choice(PLACES)
         return {"kind": "play", "action": self.rng.choice(ACTIONS).format(n=name, p=place), "who": name, "slot": ""}
 
@@ -252,8 +254,8 @@ def run_play(args, home: Path) -> int:
     lib = Library(home)
     slug = lib.create_story("Brinewick", PREMISE)
     store = lib.store(slug)
-    probe_set = getattr(args, "probe_set", "look")
-    graph_every = getattr(args, "graph_every", 4)
+    probe_set = args.probe_set
+    graph_every = args.graph_every
     graph_on = probe_set in ("graph", "all")
     for row in CAST:
         store.upsert_entry("characters.md", Entry(
@@ -267,14 +269,24 @@ def run_play(args, home: Path) -> int:
     if args.fate != "off":
         fate.set_settings(store, args.fate, True)
     eng = Engine(load_config(), store)
-    writer = StubWriter(args.sheets, getattr(args, "stub_knowledge", "truthful")) if stub else None
+    writer = StubWriter(args.sheets, args.stub_knowledge) if stub else None
     if writer is not None:
         eng.llm = writer
+    # What the Writer actually received, for the graph probes' `seen` fields: the last call is the turn's own.
+    sent: list = []
+    real_stream = eng.llm.stream
+
+    def _spy(messages, **k):
+        sent.append(messages)
+        return real_stream(messages, **k)
+
+    eng.llm.stream = _spy
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     truth = {n: (h, e) for n, _s, _a, h, e, _r in CAST}
-    player = ScriptedPlayer(args.seed, args.probe_every, probe_set, graph_every)
+    ask = args.ask
+    player = ScriptedPlayer(args.seed, args.probe_every, probe_set, graph_every, ask)
     rows, verdicts = [], {"held": 0, "drift": 0, "none": 0}
     t_all = time.time()
     with (out / "turns.jsonl").open("w", encoding="utf-8") as f:
@@ -294,6 +306,7 @@ def run_play(args, home: Path) -> int:
                 row["gid"], row["sub"] = mv["gid"], mv["sub"]
                 if mv["kind"] == "graph":
                     row["verdict"] = gp.score(mv["gid"], text, CAST)
+                    row["seen"], row["seen_memory"] = gp.evidence_flags(mv["gid"], sent[-1] if sent else [])
             rows.append(row)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
@@ -310,7 +323,7 @@ def run_play(args, home: Path) -> int:
                "model_calls": dict(writer.calls) if writer is not None else None,
                "health_rows": len(store.health(200))}
     if graph_on:
-        summary["probe_set"] = probe_set
+        summary["probe_set"], summary["ask"] = probe_set, ask
         summary["graph"] = gp.summarize(rows)
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

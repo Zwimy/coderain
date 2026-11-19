@@ -9,6 +9,8 @@ check. This suite pins the probes themselves with the offline writer, so nothing
     again in a long run, and the look-only default has no graph rows at all
  2) the questions are fair: no question contains its own answer or its token, a told character is never asked as a leak probe, every
     secret is told to exactly one character, and every answer is a cast member
+ 3b) `seen` (the evidence was in the prompt the Writer got: a whole group, case and spacing aside) and `invented` (a character SAYS a
+    made-up name, which is not the same failure as naming the wrong member of the cast)
  3) the scoring table: held, wrong, mixed and none for a hop (an asked or middle character may be named; a first name, a full name and an
     alias all count), held and none for recall, leak and clean for leak (case does not matter)
  4) the sheets state the author's side of every tie, on both characters, and the possessions, whatever the looks are
@@ -54,6 +56,10 @@ def test_schedule():
     seen = {g for g in (gp.schedule(i) for i in range(16, 16 + 4 * 5 * 4)) if g}
     assert seen == set(gp.PROBES), ("a long run must ask every question", set(gp.PROBES) - seen)
     assert gp.schedule(16, every=0) is None and gp.schedule(15) is None and gp.schedule(18) is None
+    plain, bare = gp.probe_move(16), gp.probe_move(16, ask="open")
+    assert plain["action"] == bare["action"] + gp.PLAIN and not bare["action"].endswith(gp.PLAIN.strip()), (plain, bare)
+    assert ScriptedPlayer(5, 8, "graph").act(16)["action"] == plain["action"], "plain is the default"
+    assert ScriptedPlayer(5, 8, "graph", ask="open").act(16)["action"] == bare["action"]
     p = ScriptedPlayer(5, 8)                                   # the default: look probes only, no graph move ever
     assert not any(p.act(i)["kind"] in ("graph", "tell") for i in range(1, 80))
     g = ScriptedPlayer(5, 8, "graph")
@@ -83,6 +89,8 @@ def test_questions_are_fair():
         p = gp.PROBES[gid]
         assert p["asker"] == gp.SECRETS[p["secret"]]["to"], (gid, "a recall probe asks someone who was not told")
     assert gp.SECRETS["letter"]["to"] != gp.SECRETS["hull"]["to"]
+    low = gp.PLAIN.lower()                                     # the nudge to answer plainly must not hand over an answer either
+    assert not any(t["token"] in low for t in gp.SECRETS.values()) and not any(n.lower() in low for n in NAMES), gp.PLAIN
     for gid in gp.BY_KIND["twohop"]:
         assert gp.PROBES[gid]["asker"] in gp.PROBES[gid]["allowed"] and len(gp.PROBES[gid]["allowed"]) == 2
     print("2. no question contains its own answer or token; a leak probe never asks the one told; a recall probe always does")
@@ -105,7 +113,62 @@ def test_scoring():
     assert s("L1", "NORTH BEACON, he whispers.") == "leak", "case does not matter"
     assert s("L1", "Hollis has no idea.") == "clean"
     assert s("L2", "It was built from the north beacon.") == "clean", "the other secret's token is not this leak"
+    # what is SAID is the answer; who else is mentioned around it is not (a real run scored a right answer `mixed` for this)
+    scene = "Hollis wipes a tankard while Maribel Voss argues with Dessa Quill by the door. "
+    assert s("R1", scene + "\u201cCorwin Tide,\u201d Bram says.") == "held", "other people in the scene are not an answer"
+    assert s("R1", scene + '"Corwin Tide," Bram says.') == "held", "straight quotes too"
+    assert s("R1", "Corwin Tide sits by the door. \u201cHollis Wren,\u201d Bram says.") == "wrong", "the speech decides, not the scene"
+    assert s("R1", "Bram says it is Corwin, then mutters something.") == "held", "no speech: the narration is read"
+    assert s("R1", "Corwin sits by the door. \u201cI could not say,\u201d Bram mutters.") == "held", "speech that names nobody: the narration is read"
+    assert s("K1", scene + "He says only that it is the north beacon.") == "held", "a secret is read in the whole narration"
+    assert gp.spoken('He said \u201cone\u201d and "two" and left.') == "one two"
     print("3. scoring: held, wrong, mixed, none for a hop; held, none for recall; leak, clean for a leak")
+
+
+def test_seen_and_invented():
+    # `seen`: was the evidence in the prompt the Writer got? Any one group, every string in it; case and spacing do not matter
+    assert gp.seen("R1", "...  **Ties:** aunt of  Corwin Tide. ...") and gp.seen("R1", "NEPHEW OF OTTOLINE PIKE")
+    assert not gp.seen("R1", "Ottoline Pike keeps a ferry and Corwin Tide hunts the mud.")
+    assert gp.seen("P1", "Maribel keeps the brass lamp key.") and not gp.seen("P1", "Maribel keeps the keys.")
+    both = "Maribel Voss: keeps the brass lamp key; buys her salt from Dessa Quill."
+    assert gp.seen("H1", both), "a two-hop question needs both halves, and both are here"
+    assert not gp.seen("H1", "Maribel Voss: keeps the brass lamp key."), "one half is not enough"
+    assert not gp.seen("H1", "Dessa Quill: sells salt to Maribel Voss."), "the other half alone is not enough either"
+    assert gp.seen("L1", "he said it was the North Beacon") and not gp.seen("L1", "the marrow gull")
+    assert set(gp.EVIDENCE) == set(gp.PROBES), "every probe states its evidence"
+    # `invented`: a made-up name SAID by a character is its own failure, and only quoted speech is read
+    s = lambda gid, text: gp.score(gid, text, CAST)        # noqa: E731
+    assert s("R2", "Dessa thinks. \u201cOld Man Fitzwilliam owes him money,\u201d she says.") == "invented"
+    assert s("R2", "Dessa thinks. \u201cSilas Blackwood owes him money,\u201d she says.") == "invented"
+    assert s("R2", "Dessa thinks. \u201cHollis Wren owes him money,\u201d she says.") == "held", "a cast name is not invented"
+    assert s("R2", "Dessa thinks. \u201cHollis Wren owes Silas Blackwood,\u201d she says.") == "held", "a right answer with a made-up side name is held"
+    assert s("R2", "Dessa thinks. \u201cCorwin Tide owes him money,\u201d she says.") == "wrong", "the wrong member of the cast is wrong, not invented"
+    assert s("R2", "Dessa stares at the Blackwood Tavern door and says nothing.") == "none", "a place in the narration is not an invented answer"
+    assert s("R2", "Dessa says it is the Salt Traders Guild.") == "none", "no quoted speech: nothing is read as invented"
+    assert gp.invented("\u201cThe Brass Lamp Society does,\u201d he says.", CAST) and not gp.invented("He says nothing.", CAST)
+    # the prompt is split into what memory supplied and everything else, and the question itself is never evidence
+    msgs = [{"role": "system", "content": "Maribel: keeps the brass lamp key."}, {"role": "user", "content": "I wait."},
+            {"role": "assistant", "content": "Rain falls; Dessa carries the salt ledger."},
+            {"role": "user", "content": "I ask Corwin Tide who keeps the brass lamp key."}]
+    everything, memory = gp.split_prompt(msgs)
+    assert "brass lamp key" in everything and "salt ledger" in everything and "I wait" in everything, everything
+    assert memory == "Maribel: keeps the brass lamp key." and "salt ledger" not in memory, memory
+    assert "I ask Corwin" not in everything, "the question is not evidence"
+    assert not gp.seen("P1", gp.split_prompt([{"role": "system", "content": "A quiet town."},
+                                              {"role": "user", "content": "I ask Corwin Tide who keeps the brass lamp key."}])[0])
+    assert gp.split_prompt([]) == ("", "")
+    # the two flags: memory's part is a subset of the whole, and history alone can carry the evidence
+    history_only = [{"role": "system", "content": "A quiet town."}, {"role": "assistant", "content": "Maribel keeps the brass lamp key."},
+                    {"role": "user", "content": "I ask who keeps the brass lamp key."}]
+    in_memory = [{"role": "system", "content": "Maribel keeps the brass lamp key."}, {"role": "user", "content": "I wait."}]
+    assert gp.evidence_flags("P1", history_only) == (True, False), "evidence in the history is seen, but not in memory"
+    assert gp.evidence_flags("P1", in_memory) == (True, True)
+    assert gp.evidence_flags("P1", [{"role": "system", "content": "A quiet town."}, {"role": "user", "content": "I wait."}]) == (False, False)
+    assert gp.evidence_flags("P1", []) == (False, False)
+    # invented needs a name made of two or more capitalised words, and a cast name or one word is not one
+    assert s("R2", "Dessa shrugs. \u201cBram Halloran? I could not say.\u201d") == "none", "an allowed cast name is not invented"
+    assert s("R2", "Dessa shrugs. \u201cBrinewick keeps its secrets,\u201d she says.") == "none", "one capitalised word is not a name"
+    print("3b. seen needs a whole group of evidence; a made-up name said by a character is invented, a cast name never is")
 
 
 def test_sheets_state_the_ties():
@@ -136,6 +199,15 @@ def test_a_truthful_run():
     assert g["leak_rate"].startswith("0 of ") and g["recall_rate"].split(" of ")[0] == g["recall_rate"].split(" of ")[1]
     assert g["leak_meaningful"] is True
     assert all(r["text"] and r["words"] > 3 for r in rows)
+    assert all(isinstance(r["seen"], bool) and isinstance(r["seen_memory"], bool) for r in asked), "the prompt was not recorded"
+    assert all(r["seen"] or not r["seen_memory"] for r in asked), "memory's part of the prompt cannot hold what the whole prompt lacks"
+    assert any(r["seen_memory"] for r in asked if r["sub"] in ("relation", "possession", "twohop")), \
+        "no hop question had its evidence in the prompt: the prompt is not being recorded, or the sheets do not reach it"
+    assert "hops_with_evidence_in_memory" in g and "leak_when_secret_in_prompt" in g, g
+    assert s["ask"] == "plain" and all(r["action"].endswith(gp.PLAIN) for r in asked), "the questions ask for a straight answer"
+    rows_open, s_open = play("--probe-set", "graph", "--turns", "20", "--ask", "open")
+    assert s_open["ask"] == "open" and not any(r["action"].endswith(gp.PLAIN) for r in rows_open if r["kind"] == "graph")
+    assert all(r["verdict"] in ("held", "clean") for r in rows_open if r["kind"] == "graph"), "the offline writer answers either wording"
     for r in asked:
         if r["sub"] == "leak":
             assert gp.PROBES[r["gid"]]["token"] not in r["text"].lower(), ("a truthful writer leaked", r["gid"])
@@ -176,14 +248,29 @@ def test_summarize():
             {"kind": "graph", "sub": "twohop", "verdict": "held"}, {"kind": "graph", "sub": "recall", "verdict": "none"},
             {"kind": "graph", "sub": "leak", "verdict": "clean"}, {"kind": "tell", "sub": "tell"}, {"kind": "play"}]
     g = gp.summarize(rows)
+    assert "hops_with_evidence_in_memory" not in g, "a run made before the prompt was recorded has no such field"
     assert g["relation"] == {"held": 1, "wrong": 1} and g["twohop"] == {"none": 1, "held": 1}, g
     assert g["one_hop_right"] == "2 of 3" and g["two_hop_right"] == "1 of 2" and g["right_hops"] == "3 of 5", g
     assert g["recall_rate"] == "0 of 1" and g["leak_rate"] == "0 of 1" and g["leak_meaningful"] is False, g
     assert gp.summarize([])["right_hops"] == "0 of 0"
+    # with the prompt recorded: the answer rate splits by whether the evidence was in front of the Writer
+    def row(sub, verdict, seen, mem):
+        return {"kind": "graph", "sub": sub, "verdict": verdict, "seen": seen, "seen_memory": mem}
+    rows = [row("relation", "held", True, True), row("relation", "none", True, True), row("possession", "none", False, False),
+            row("twohop", "held", False, False), row("twohop", "invented", False, False), row("twohop", "held", True, True),
+            row("possession", "held", True, False),
+            row("recall", "held", True, True), row("recall", "none", False, False),
+            row("leak", "leak", True, True), row("leak", "clean", True, False), row("leak", "clean", False, False)]
+    g = gp.summarize(rows)
+    assert g["hops_with_evidence_in_memory"] == "3 of 7" and g["twohop_evidence_in_memory"] == "1 of 3", g
+    assert g["right_when_evidence_in_memory"] == "2 of 3" and g["right_when_not"] == "2 of 4", g
+    assert g["leak_when_secret_in_prompt"] == "1 of 2" and g["leak_when_not"] == "0 of 1", g
+    assert g["recall_when_secret_in_prompt"] == "1 of 1" and g["recall_when_not"] == "0 of 1", g
+    assert g["twohop"] == {"held": 2, "invented": 1}, g
     print("8. summarize counts per kind, gives the fractions, and flags a leak count that proves nothing")
 
 
-for fn in (test_schedule, test_questions_are_fair, test_scoring, test_sheets_state_the_ties, test_a_truthful_run,
+for fn in (test_schedule, test_questions_are_fair, test_scoring, test_seen_and_invented, test_sheets_state_the_ties, test_a_truthful_run,
            test_a_leaky_and_a_wrong_run, test_both_families, test_summarize):
     fn()
 print("\nSOAK GRAPH PROBE TESTS PASSED")
