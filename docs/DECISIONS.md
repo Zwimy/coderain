@@ -2683,7 +2683,8 @@ Two things the new runs show that were not visible before.
   front of whoever is asked; in the seed-6 run it is in none of them, and there was neither recall nor leak.
 
 **Default.** The shipped default stays off, with a recommendation: turn it on (`memory: {follow_links: true}`). One more seed pair and a second
-Writer would justify flipping it for everyone; the cost to a story is at most six short lines a turn.
+Writer would justify flipping it for everyone; the cost to a story is at most six short lines a turn. (D-061 ran that seed pair and a second Writer: it
+did not justify the flip, and the recommendation to turn it on is withdrawn.)
 
 **Defaults, and what would change them.** The merge rule is on. The follow pass is off until a measured run says it helps; the probe takes
 `--follow-links` and changes nothing else. A stale tie in a real story (a tie the story ended that no one removed) would call for an explicit
@@ -2703,7 +2704,7 @@ took for redundant that handled a self-tie), one redundant bound (a note only ev
 encoded the rule this entry replaces, `phase3_sweep_test.py` A-H2 ("relationships dropped, not re-emitted"); it was changed with the
 reasoning written into it, not to make it pass.
 
-## D-060: Gemma 4 E4B (heretic) as Writer and as reader, against gemma3:4b (graph probe and reader corpus; transcript read and look probe not run)
+## D-060: Gemma 4 E4B (heretic) as Writer and as reader, against gemma3:4b (graph probe and reader corpus; the transcript read, look probe, refusal count and second control seed are in D-061)
 
 **Question.** The Gemma 4 E4B heretic build (`hf.co/mradermacher/gemma-4-E4B-it-heretic-GGUF:Q4_K_M`, the same weights as the ablated repo the owner linked, pulled 2026-11-19) loads in 3.34 GB and answers fast. Is it a better Writer or reader than gemma3:4b, the default?
 
@@ -2741,14 +2742,110 @@ With the accessory prompt on, overall recall is 0.72 and precision 0.70 for Gemm
 What it says, with 15 to 17 questions a run and one control seed:
 - Not better than gemma3:4b. With the pass on, hops right are 18 of 34 against 24 of 34. Relations are level (9 of 12 each) and two-hop is level (4 of 10 against 5 of 10). The whole gap is possessions: 5 of 12 against 10 of 12 with the pass on, 5 of 18 against 14 of 18 over all three runs. The failure turns were read, not just counted. The scorer was right: Gemma 4 answers in character with a role instead of a name ("the keeper of the record", "those who enforce the law"), echoes the question back, or drifts into narration. It never invented a name.
 - It is quieter than gemma3:4b, but less than the row counts suggest. Of gemma3:4b's 26 degraded rows in the seed 5 run, 25 are the fold trying to promote the player as a character ("you", "player"), which the engine skips and logs. Gemma 4's few rows are dropped promotions of a mystery or a character as a "kind". The real failures are rare and sit in gemma3:4b's control run: 2 folds with no valid JSON and 2 scenes with no summary. Gemma 4 had none in the runs read (the no-pass run has no rows at all). It also made no made-up name, where gemma3:4b made 6 in its control run.
-- The follow pass replicates on a second Writer, in direction. One-hop right 8 of 12 against 2 of 12 at seed 5, evidence in the prompt 17 of 17 against 12 of 17 (gemma3:4b: 10 of 12 against 7 of 12, 17 of 17 against 15 of 17). The control is still one seed (D-059's condition for flipping the default is a second seed pair and a second Writer; the Writer is now met, the second control seed is not).
+- (Corrected in D-061: the second control seed did not replicate this.) The follow pass replicates on a second Writer, in direction. One-hop right 8 of 12 against 2 of 12 at seed 5, evidence in the prompt 17 of 17 against 12 of 17 (gemma3:4b: 10 of 12 against 7 of 12, 17 of 17 against 15 of 17). The control is still one seed (D-059's condition for flipping the default is a second seed pair and a second Writer; the Writer is now met, the second control seed is not).
 - A leak needs an exposed secret. With Gemma 4 the secret was in the prompt for all 15 leak questions and it was said 6 times (2, 0, 4); gemma3:4b had it in the prompt for 4 of 15 and said it 2 times. Given exposure the rate is about the same (6 of 15, 2 of 4). The difference is how often it is exposed. Why was not measured; longer turns folding more of the story into the shared summaries is the obvious guess.
 - The tie rule held on a second fold model: 6 of 6 planted ties kept in every save. The D-059 count of 14, 3 and 3 added ties leaves out ties to the player ("you", "player"); counted the same way Gemma 4 added 1, 1 and 5 (two of the 5 are invented cousins, three are a `char-` prefix on a real slug). Counting them too the totals are 2, 1, 5 and 18, 3, 15 (gemma3:4b attached "working together" or "rival" to the player on most characters).
 
 **Decision.** Not adopted as the default Writer or reader; gemma3:4b stays the default and llama3.1:8b the recommended reader. Gemma 4 stays installed. Qwen3.5 9B heretic is not removed on this evidence: the reason that build was installed (a reader that does not refuse adult passages) is a reason to keep Gemma 4 and Qwen3.5 as the two candidates until the transcript read below compares them.
 
-**Not run** (paused by the owner after the graph passes): the 161-passage transcript read (`reader_record.py`) for Gemma 4 and gemma3:4b, which is the comparison against llama3.1:8b and Qwen3.5 that D-036 and D-041 used; the look probe (hair and eyes, canon off and on) for both; llama3.1:8b as a Writer (53 s a turn); the refusal count of D-043 on Gemma 4. A smoke run of 14 turns with the canon card on (role-only sheets) completed with 1 degraded row and no probes yet.
+**Not run when this entry was written** (paused by the owner after the graph passes; all of it was run afterwards and is in D-061): the 161-passage transcript read (`reader_record.py`) for Gemma 4 and gemma3:4b, which is the comparison against llama3.1:8b and Qwen3.5 that D-036 and D-041 used; the look probe (hair and eyes, canon off and on) for both; llama3.1:8b as a Writer (53 s a turn); the refusal count of D-043 on Gemma 4. A smoke run of 14 turns with the canon card on (role-only sheets) completed with 1 degraded row and no probes yet.
 
 **What would change this.** A transcript read where Gemma 4 holds the looks and files fewer weak identity values than Qwen3.5 (D-041) would make it the uncensored reader and retire Qwen3.5. A look probe where Gemma 4 holds hair and eyes better than gemma3:4b under the same squeeze would make it a Writer candidate despite the possession misses.
 
 **Tests.** No engine or probe code changed, so no tests were added. The runs are in the session scratchpad (`g4_graph_*`, `scribe_g4_*`), not in the repo.
+
+## D-061: The rest of the Gemma 4 measurements, the second control seed for the follow pass (it did not hold), and llama3.1:8b as Writer
+
+**What this closes.** D-060 listed what it had not run: the 161-passage transcript read for Gemma 4 and gemma3:4b, the look probe, llama3.1:8b as a Writer and the refusal count. D-059 set a condition for turning the follow pass on for everyone: a second seed pair and a second Writer. All of it is run now (2026-11-20, code 82c1b86, one GPU, invented story only, my own Ollama stopped and port 11434 confirmed closed after each phase). Every number is one story, one script and a handful of questions a run; read the tables as direction, not as a score.
+
+### 1. The follow pass: the second control seed does not replicate the gain, so the default stays off
+
+Seed 6 with the pass OFF, for both Writers (everything else as the D-059 and D-060 runs: 120 turns, plain wording, facts stated, window 4, budget 5000). One-hop answers right are out of 12 a run, two-hop out of 5, evidence in the prompt out of 17 hops.
+
+| gemma3:4b | one-hop right | two-hop right | evidence in prompt | right when the evidence was there |
+|---|---|---|---|---|
+| s5, pass on | 10 | 1 | 17 | 11 of 17 |
+| s5, pass off | 7 | 0 | 15 | 7 of 15 |
+| s6, pass on | 9 | 4 | 17 | 13 of 17 |
+| s6, pass off | 11 | 4 | 16 | 15 of 16 |
+| both seeds, on / off | 19 / 18 of 24 | 5 / 4 of 10 | 34 / 31 of 34 | 24 of 34 / 22 of 31 |
+
+| Gemma 4 | one-hop right | two-hop right | evidence in prompt | right when the evidence was there |
+|---|---|---|---|---|
+| s5, pass on | 8 | 2 | 17 | 10 of 17 |
+| s5, pass off | 2 | 1 | 12 | 3 of 12 |
+| s6, pass on | 6 | 2 | 17 | 8 of 17 |
+| s6, pass off | 8 | 2 | 17 | 10 of 17 |
+| both seeds, on / off | 14 / 10 of 24 | 4 / 3 of 10 | 34 / 29 of 34 | 18 of 34 / 13 of 29 |
+
+What it says.
+- With the pass off, seed 6 put the evidence in the prompt anyway (16 and 17 of 17), because the recent narration happened to name the holders. Seed 5 without the pass is the run where it did not, and every gap D-059 and D-060 reported came from that one run. On seed 6 the pass was neutral to slightly worse on one-hop answers for both Writers (9 against 11, 6 against 8).
+- What the pass does is put the evidence in the prompt on the seeds where the narration has not named the holder (34 of 34 against 31 and 29). It does not make the Writer more faithful once the evidence is there: gemma3:4b was right 11 of 17 with the pass at seed 5 and 7 of 15 without, then 13 of 17 with and 15 of 16 without at seed 6. D-059's reading that the Linked lines raise faithfulness "with the evidence there" is not supported; the seed-5 gap reversed on seed 6.
+- The other seed-5 contrast went the same way. gemma3:4b's 6 made-up names in its seed-5 control run did not come back: neither seed-6 control made one (the wrong hop answers used cast names or no name). That looks like the seed, not an effect of the pass.
+- The tie rule held again: 6 of 6 planted ties kept in both control saves. Ties added that nobody planted, counted as in D-059 (not counting ties to the player): 1 for gemma3:4b (a second one, to "you", is left out) and 3 for Gemma 4 (a sibling tie written from both sides, and a brother-in-law).
+- Leak, with the pass off at seed 6: Gemma 4 had the secret in the prompt for 5 of 5 questions and said it 2 times; gemma3:4b had it in the prompt for 2 and said it 0 times.
+
+**Decision.** `follow_links` stays off and D-059's "turn it on" recommendation is withdrawn. It is a cheap insurance (at most six short lines a turn) for a story where an item's holder or a person's tie is not named in the recent narration, and there is no measured loss, but the benefit has been shown on one seed in two, and never on correctness. A third seed with the pass off is the cheapest test that could change this, and only if it came out like seed 5 again.
+
+### 2. Gemma 4 as a reader on the real transcript, and the refusal count
+
+`reader_record.py` on the 161-passage soak transcript (the D-041 method), replayed through the current validator with no model. The Qwen3.5 and llama3.1:8b rows are the earlier recordings; all four are replayed under the same rules.
+
+| | minutes | claims kept / thrown out by the parser | passages with a malformed reply | looks held (of the 7 the story set) | extra values filed | identity records |
+|---|---|---|---|---|---|---|
+| Gemma 4 E4B heretic | 34.8 | 1447 / 117 | 1 | 6, 0 differ | 2 ("dark" for Bram and Corwin) | 80 |
+| gemma3:4b | 41.3 | 1935 / 230 | 42 (52 of 255 calls the wrong shape) | 6, 0 differ | 3 | 73 |
+| llama3.1:8b | 31.4 | 1174 / 311 | 5 | 6, 0 differ | 2 | 59 |
+| Qwen3.5 9B heretic | 24.8 | 915 / 114 | 1 | 6, 0 differ | 4 | 165 |
+
+All four hold the same 6 of 7 looks and none contradicts the story, so this transcript does not separate them on looks. They differ on format and on how many identity values they file: Gemma 4 and Qwen3.5 have the cleanest replies, gemma3:4b has the worst (a fifth of its calls the wrong shape), and Qwen3.5 files two to three times as many identity values as the others (165 against 59 to 80), including weak ones like "intricate braid", which D-041 counted against it.
+
+Refusal count (the D-043 method on a copy of the review save; counts only, no prose written or kept): 60 of the densest explicit narrator turns and 20 ordinary ones.
+- Explicit group: 60 of 60 replies ok, 3.2 claims a passage (gemma3:4b found 4.7 on the same turns, llama3.1:8b 7.1), one passage with 0 claims.
+- Control group: 19 ok and 1 reply that started valid JSON and did not finish (not a refusal), 4.5 claims a passage.
+- Claims per 100 words: 1.46 on the explicit group and 1.54 on the control (llama3.1:8b 3.15 and 2.91). The densest half of the explicit group yielded 3.4 claims a passage and the least dense half 2.9, so yield does not fall as the text gets more explicit.
+- Six explicit passages and one control passage where gemma3:4b found 4 or more claims and Gemma 4 found 0 or 1 (llama3.1:8b: one explicit passage).
+
+It does not refuse and shows no sign of skipping explicit text. It is a lower-yield reader than llama3.1:8b on every passage, explicit or not.
+
+### 3. The look probe (hair and eyes, role sheets): Gemma 4 does not state a colour
+
+`soak play --probe-set look --sheets role`, seed 5, 120 turns, canon off and canon card, both Writers. **A trap in the harness:** with `--sheets role` the sheets state no looks, so `summary.json` reports held, drift and none as 0 for every run (it scores against a sheet only with `--sheets full`). These runs are scored the D-034 way, the story against itself (the first colour the story gives is the truth, later statements are checked against it).
+
+| | looks the story set (of 12) | later statements agree / contradict | probes agree / contradict / set a look / name no colour (15) | words a turn |
+|---|---|---|---|---|
+| gemma3:4b, card off | 9 | 8 / 1 | 1 / 1 / 5 / 8 | 315 |
+| gemma3:4b, card on | 6 | 8 / 0 | 2 / 0 / 2 / 11 | 271 |
+| Gemma 4, card off | 2 | 1 / 0 | 1 / 0 / 1 / 13 | 291 |
+| Gemma 4, card on | 2 | 0 / 0 | 0 / 0 / 1 / 14 | 312 |
+
+- gemma3:4b with the card is no better than without it (8 agree either way, 1 contradiction against none, 3 fewer looks set); the same "no gain measured" as D-034, on smaller numbers.
+- Gemma 4 almost never gives a colour. I read the probe sentences to be sure it was not the scorer: it writes "her dark, thick hair", "a shade of faded sea-glass", "the color of deep, undisturbed water", "dark and knowing". Those are not colours in the list the scorer and the card use, which is the same reason the transcript read filed "dark" as an extra value for Bram and Corwin. Where it names no colour it cannot contradict itself, and it gives the card at most a weak value like "dark" (D-041) to hold. That is a Writer this probe cannot test, not a Writer that holds looks well, and D-060's test "holds hair and eyes better under the same squeeze" is not one it can meet.
+- The probe with the looks written in the sheet (`--sheets full`, held and drift against the sheet) was not run, so whether Gemma 4 repeats a stated colour is unmeasured.
+
+### 4. llama3.1:8b as the Writer: the most faithful on this probe, at five times the time
+
+One run, seed 5, `follow_links` on, the same settings as D-060 (no control with the pass off).
+
+| | llama3.1:8b | gemma3:4b (s5 / s6, pass on) | Gemma 4 (s5 / s6, pass on) |
+|---|---|---|---|
+| one-hop right (12) | 11 | 10 / 9 | 8 / 6 |
+| two-hop right (5) | 5 | 1 / 4 | 2 / 2 |
+| hops right of 17 | 16 | 11 / 13 | 10 / 8 |
+| evidence in the prompt (17) | 17 | 17 / 17 | 17 / 17 |
+| recall of a secret (5), secret in prompt | 3, 5 of 5 | 2 / 0 | 2 / 1 |
+| leak to someone never told (5) | 1 | 1 / 0 | 2 / 0 |
+| planted ties kept (6), added ties | 6, 1 | 6, 14 / 6, 3 | 6, 1 / 6, 1 |
+| seconds a turn, words a turn | 58.4, 98 | 11 / 11, 119 | 22.7 / 22.2, 260 |
+
+With the evidence in the prompt every time, it was right on 16 of 17 hops, against 11 and 13 for gemma3:4b and 10 and 8 for Gemma 4 under the same settings. It writes shorter turns (98 words), takes 58 seconds for one, and 0.6 seconds a word against 0.1 for gemma3:4b. Its 88 degraded rows are 2 folds with no valid JSON and 2 arc-folds with no synopsis (the same real-failure count as gemma3:4b's control run) and 84 logged skips and dropped promotions (the player, characters that already exist, a few kinds the fold made up). This probe counts facts only; it says nothing about how the prose reads, and one run is one run.
+
+### Decision for the models
+
+- gemma3:4b stays the default Writer and fold model (fast, held its own on the fact probes); llama3.1:8b stays the recommended reader. llama3.1:8b is also the most faithful Writer measured, for someone who will wait a minute a turn; that is a note for the README, not a default.
+- Gemma 4 is not adopted as a Writer (possessions, longer turns, no colours to test) nor as the recommended reader (lowest yield, though the cleanest format and no refusal). It stays installed as a candidate for a reader that does not refuse.
+- Qwen3.5 9B heretic: D-060 said Gemma 4 would retire it if the transcript read showed Gemma 4 holding the looks and filing fewer weak identity values. It holds the same 6 of 7 and files 80 identity records against 165 and 2 extra values against 4, so that condition is met on this transcript. Its other reason for being installed, a reader that does not refuse adult passages, is met by llama3.1:8b (D-043) and by Gemma 4 (this entry). It is redundant on this evidence. It is not removed: deleting the model is the owner's call.
+
+**Not run, and what would change this.** The look probe with the sheet stating the looks; llama3.1:8b with the pass off and on a second seed; a third control seed for the follow pass; a second transcript for the reader table (all four are one story). A seed where the pass-off run again misses the holder would be the only thing that moves the follow-pass default.
+
+**Tests.** No engine or probe code changed, so no tests were added. The runs are in the session scratchpad, not in the repo.
