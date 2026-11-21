@@ -9,6 +9,8 @@ Generation has two modes:
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import re
 from typing import Iterator
 
@@ -720,6 +722,56 @@ class Engine:
             if len(self.store.turns()) == before:
                 self._abort_turn(prior)
 
+    # The versions of the last reply (a swipe, or a retry that kept what it replaced) used to live only in memory, so a restart, a closed
+    # tab's server or a settings save (which drops every engine) lost them. They are kept in <save>/swipes.json too. The file is never
+    # invalidated: seven places change a story (an edit, an undo, a branch, a new turn, a retry...) and keeping the file in step with each
+    # was the hard part. It is TRUSTED only while it still describes the transcript, and a file that does not is ignored, never repaired.
+    SWIPES_FILE = "swipes.json"
+    MAX_VARIANTS = 12
+
+    @staticmethod
+    def _text_key(text: str) -> str:
+        return hashlib.sha1(str(text).encode("utf-8")).hexdigest()[:16]
+
+    def _save_swipes(self) -> None:
+        sw = self._swipes
+        turns = self.store.turns()
+        if not sw or not turns or turns[-1]["role"] != "narrator":
+            return
+        try:
+            self.store.write(self.SWIPES_FILE, json.dumps(
+                {"turns": len(turns), "tail": self._text_key(turns[-1]["text"]), "idx": sw["idx"], "variants": sw["variants"]},
+                ensure_ascii=False))
+        except OSError as e:  # noqa: BLE001 — the versions are a convenience, never a reason to fail a turn
+            self.store.log_degraded("swipes", f"could not keep the versions of this reply: {e}")
+
+    def _load_swipes(self, turns: list[dict]) -> dict | None:
+        """The versions on disk, when (and only when) they still describe the transcript: the same number of turns, the selected version
+        is the text of the last turn, and the shape is what this wrote. Anything else, including a hand-edited or half-written file, is
+        no versions at all."""
+        try:
+            raw = json.loads(self.store.read(self.SWIPES_FILE) or "")
+        except (ValueError, OSError):
+            return None
+        try:
+            variants, idx = raw["variants"], raw["idx"]
+            if (not isinstance(variants, list) or not variants or len(variants) > self.MAX_VARIANTS
+                    or not all(isinstance(v, str) for v in variants)
+                    or isinstance(idx, bool) or not isinstance(idx, int) or not 0 <= idx < len(variants)
+                    or raw["turns"] != len(turns) or not turns or turns[-1]["role"] != "narrator"
+                    or raw["tail"] != self._text_key(turns[-1]["text"]) or variants[idx] != turns[-1]["text"]):
+                return None
+        except (KeyError, TypeError):
+            return None
+        return {"variants": list(variants), "idx": idx}
+
+    def restore_swipes(self) -> None:
+        """Pick the versions up from disk when this engine has none in memory (a restart, a settings save) and they still fit the story."""
+        if self._swipes is None:
+            turns = self.store.turns()
+            if turns and turns[-1]["role"] == "narrator":
+                self._swipes = self._load_swipes(turns)
+
     def _ensure_swipes(self) -> dict | None:
         """Swipe state for the LAST narrator turn (ST-02). Seeds from the current
         text on first swipe. None when the tail isn't a narrator turn."""
@@ -727,7 +779,7 @@ class Engine:
         if not turns or turns[-1]["role"] != "narrator":
             return None
         if self._swipes is None:
-            self._swipes = {"variants": [turns[-1]["text"]], "idx": 0}
+            self._swipes = self._load_swipes(turns) or {"variants": [turns[-1]["text"]], "idx": 0}
         return self._swipes
 
     def swipe_browse(self, direction: int) -> dict | None:
@@ -739,6 +791,7 @@ class Engine:
         sw["idx"] = max(0, min(len(sw["variants"]) - 1, sw["idx"] + direction))
         text = sw["variants"][sw["idx"]]
         self.store.update_turn(len(self.store.turns()) - 1, text)
+        self._save_swipes()
         return {"text": text, "idx": sw["idx"], "count": len(sw["variants"])}
 
     def swipe_generate(self, on_stage=None) -> "Iterator[str]":
@@ -790,7 +843,10 @@ class Engine:
         # in transcript.md, which is the source of truth (invariant 7).
         if len(tail) == n and tail[-1]["role"] == "narrator":
             sw["variants"].append(tail[-1]["text"])
+            if len(sw["variants"]) > self.MAX_VARIANTS:               # the oldest goes first; the file and the screen agree on the cap
+                del sw["variants"][0]
             sw["idx"] = len(sw["variants"]) - 1
+            self._save_swipes()
         else:
             # The exchange this swipe state describes is gone. Keeping the
             # variants would let the next ◄ write the deleted exchange's prose

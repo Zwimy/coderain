@@ -2463,6 +2463,27 @@ equivalent, are named).
   by another form's answer, a find that marked the version bar, and two long-press cancels (a lifting and a moving finger) that were checked
   together, so one open menu hid the other's failure.
 
+**Later the same day: items 16, 17, 18 and 20 are built.** Left: 15 (a per-story response length: it needs the length to reach three call sites and the
+trinity writer, and streaming is not a setting at all) and 19's two large parts.
+- 20, autosave in the world builder: a pause of 1.2 s after the last key saves the main fields, one save at a time, none while the title is blank
+  (the route would blank the world's name), a failure is a line the next edit retries, an AI answer and Undo AI are saved too. The first version had a
+  bug that a flaky smoke case found: the pause timer of a builder that was left fired while ANOTHER world's builder was open and, looking its fields
+  up by id, saved that page's text to the world it belonged to. The fields are held when the page is built; a case opens two worlds in a row.
+- 16, the RPG sheet below 900px was `display: none`, so a story with mechanics had no way to show its own sheet on a phone. It is a Story and a Sheet
+  tab now (arrow keys, a roving tab stop), side by side above 900px, none without mechanics; the Talk drawer is a side panel on a tablet.
+- 17, the phone-width pass is one smoke case over every route and every play dialog at 375px: nothing off the right edge, buttons 40px, fields and the
+  first-run link 32px, a strip that scrolls sideways on purpose exempt. It found a chapter title box 25px tall and a first-run link 17px tall, and it
+  found that the RPG sheet's section headings had em dashes (the dash sweep had never seen an RPG story): plain upper case now.
+- 18, the versions of the last reply (a swipe, or a retry that kept what it replaced) lived only in the engine's memory, so a restart or a settings
+  save (which drops every engine) left the page saying "Version 1 of 1" over a reply that had had three. They are kept in `swipes.json` beside the
+  transcript and the file is TRUSTED only while it still describes the transcript: the same number of turns, the selected version is the text of
+  the last turn, the tail hash matches, the shape is what the engine wrote (a list of at most 12 texts and a position inside it). It is never
+  invalidated from the seven places that change a story, and a file that does not fit is ignored, never repaired. A consequence that is deliberate:
+  undoing a LATER exchange puts the transcript back exactly as the file describes it, so the real versions of the reply it exposes are offered
+  again (the live engine used to forget them at the new turn; nothing about them was wrong). A write that fails is a line in the health log and
+  costs the turn nothing. One file, so a new reply's first swipe replaces the earlier reply's versions on disk. What would change this: a report
+  that versions of an old reply appear when they should not (the hash would then need the exchange's player text too).
+
 ## D-057 — Retry keeps what it replaces, and a failed or stopped retry puts the exchange back
 
 **What was wrong.** A retry deleted the last exchange first and regenerated second. A model error, the Stop button or an empty reply ended

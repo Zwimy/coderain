@@ -209,6 +209,7 @@ def _save_payload(slug: str) -> dict:
 
 
 def _swipe_state(eng) -> dict | None:
+    eng.restore_swipes()                  # versions kept on disk from before a restart or a settings save, while they still fit the story
     sw = getattr(eng, "_swipes", None)
     return {"count": len(sw["variants"]), "idx": sw["idx"]} if sw else None
 
