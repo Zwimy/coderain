@@ -18,7 +18,8 @@ export async function renderLibrary() {
       <div class="actions">
         <button data-act="open">Open</button>
         <button data-act="branch">Branch…</button>
-        <button data-act="export">Export</button>
+        <button data-act="export" title="a zip of the whole story, to move or restore it">Export</button>
+        <button data-act="export-text" title="the story as a readable Markdown file">Export text</button>
         <button data-act="delete" class="danger">Delete</button>
       </div>
     </div>`).join("");
@@ -140,6 +141,9 @@ export async function renderLibrary() {
       } else if (act === "export") {
         ev.stopPropagation();
         window.location.href = `/api/saves/${slug}/export`;
+      } else if (act === "export-text") {
+        ev.stopPropagation();
+        window.location.href = `/api/saves/${slug}/readable`;
       } else {
         location.hash = `#play/${slug}`;
       }

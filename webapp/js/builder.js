@@ -537,6 +537,12 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
   };
   // What an AI answer changes is decided in pieceform.js: everything it states, nothing it leaves out.
   const fill = entry => apply(mergeFill(collect(), entry));
+  // The form this function wired. The model answers a moment later, and by then the dialog can have been closed and ANOTHER
+  // piece's form opened into the same host with the same element ids: looking the fields up by id then wrote the answer into
+  // that other piece. The title box of THIS form is detached the moment any dialog replaces it, so it tells the two apart.
+  const thisForm = $("#p-title");
+  const formOpen = () => thisForm.isConnected;
+  const droppedAnswer = () => toast("That form was closed before the AI answered, so its answer was not used.", "info");
   // One level of undo for the last AI result, until the piece is saved or the form closed.
   let undo = null;
   const applyAI = entry => {
@@ -599,35 +605,40 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
   });
   $("#p-seed-go").addEventListener("click", async () => {
     const idea = $("#p-idea").value;
-    $("#p-seed-go").disabled = true;
-    $("#p-seed").disabled = true;
-    $("#p-seed").textContent = "✨ generating…";
+    // The buttons of THIS form, held now: a lookup by id after the answer would find another form's.
+    const goBtn = $("#p-seed-go"), seedBtn = $("#p-seed");
+    goBtn.disabled = true;
+    seedBtn.disabled = true;
+    seedBtn.textContent = "✨ generating…";
     try {
       const out = await api("/api/assist", {method: "POST", body: {
         kind, mode: "seed", text: idea, scenario: slug,
         improve: Boolean($("#b-improve") && $("#b-improve").checked),
       }});
-      applyAI(out.entry);
-      seedRow.hidden = true;
+      if (formOpen()) {
+        applyAI(out.entry);
+        seedRow.hidden = true;
+      } else droppedAnswer();
     } catch (e) { toast(e.message); }
     // The modal can have been closed while the model worked: touch only what is still on screen.
-    for (const [sel, fn] of [["#p-seed-go", el => { el.disabled = false; }],
-                             ["#p-seed", el => { el.disabled = false; el.textContent = "✨ Seed from idea"; }]]) {
-      const el = $(sel);
-      if (el) fn(el);
-    }
+    if (goBtn.isConnected) goBtn.disabled = false;
+    if (seedBtn.isConnected) { seedBtn.disabled = false; seedBtn.textContent = "✨ Seed from idea"; }
   });
   $("#p-improve").addEventListener("click", async () => {
-    $("#p-improve").disabled = true;
-    $("#p-improve").textContent = "✨ improving…";
+    const btn = $("#p-improve");
+    btn.disabled = true;
+    btn.textContent = "✨ improving…";
     try {
       const out = await api("/api/assist", {method: "POST", body: {
         kind, mode: "improve", text: JSON.stringify(collect()),
         scenario: slug,
       }});
-      applyAI(out.entry);
+      if (formOpen()) applyAI(out.entry);
+      else droppedAnswer();
     } catch (e) { toast(e.message); }
-    $("#p-improve").disabled = false;
-    $("#p-improve").textContent = "Improve with AI";
+    if (btn.isConnected) {
+      btn.disabled = false;
+      btn.textContent = "Improve with AI";
+    }
   });
 }

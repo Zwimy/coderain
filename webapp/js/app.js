@@ -20,6 +20,21 @@ import {renderPlay} from "./play.js";
 import {renderCharacters} from "./characters.js";
 import {renderSettings, setBrainline} from "./settings.js";
 
+/* A route change throws the old page away under the reader's focus, which falls to <body>: a screen reader said nothing about
+   the new page and a keyboard user had to Tab from the top of it again. Put focus on the new page's heading (the view itself
+   when it has none), so the page is announced and the next Tab lands in it. Only on a CHANGE of route, only when nothing took
+   focus (a view that focuses its own field, or a dialog that is open, keeps it), and not on first load. */
+let painted = null;
+function moveFocusIntoView(hash) {
+  const changed = painted !== null && painted !== hash;
+  painted = hash;
+  if (!changed || document.activeElement !== document.body) return;
+  const heading = view.querySelector("h1, h2");
+  const target = heading || view;
+  if (heading) heading.setAttribute("tabindex", "-1");     // a heading takes programmatic focus only; it is not a Tab stop
+  target.focus({preventScroll: true});
+}
+
 export async function render() {
   await flushDirty();          // persist the view we're leaving
   clearDirty();
@@ -70,6 +85,7 @@ export async function render() {
     // stale, so render whatever the URL says now. Converges, because each pass
     // targets wherever the hash has got to by then.
     if (stale()) return render();
+    moveFocusIntoView(h);
   } catch (e) {
     // A missing item (deleted save, dead bookmark) shouldn't read as a crash —
     // offer a way back rather than a dead end.

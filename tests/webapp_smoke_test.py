@@ -43,6 +43,15 @@ Asserts, once it can run:
 27) Test connection sends what is typed, says what happened and is not an unsaved edit
 28) the first-run key is tried before it is saved; a refused key is not saved, and "Save anyway" is explicit
 29) retry keeps the old text as a version; a failed, empty or stopped retry or swipe puts the exchange back and says so
+30) segmented buttons say which one is pressed (aria-pressed follows the "on" class, also when it is flipped in place)
+31) a route change moves focus into the new page (its heading), and leaves a field or dialog that already has focus alone
+32) a toast's kind is a glyph for the eye and a word for the ear, not a border colour
+33) every visible button, in every view and in the play dialogs, has a name made of letters (text or aria-label)
+34) the Talk drawer is named, and a field added to it later is named too (it is watched)
+35) an AI answer for a piece form that was closed (and another opened) is dropped and reported, not written into the other piece
+36) "Export text" downloads the story as readable Markdown (the title, "You:" quotes and the narration, no transcript markers)
+37) find in the story: highlights inside the turns, a count, Enter and Shift+Enter step and wrap, a new turn is searched, typed text
+    is literal, Escape closes and returns focus, and the turns and their text nodes are exactly as they were
 """
 import json
 import os
@@ -1257,6 +1266,315 @@ with sync_playwright() as p:
         failures.append(f"a swipe stopped from another visit lost the exchange, or Send came back before the repaint: {page.evaluate(tail_js)}")
     page.evaluate("() => { window.fetch = window.__realFetch; }")
     print("29) retry keeps the old text as a version; a failed, empty or stopped retry or swipe puts the exchange back and says so")
+
+    # --- D-056 item 9: the accessibility remainder ------------------------------------------------------------------
+    # 30) A segmented control said which choice was current by a colour only. The "on" class is mirrored into aria-pressed.
+    def pressed_all_match(root):
+        return (f"(() => {{ const bs = [...document.querySelectorAll('{root} .seg button')]; return bs.length > 0 && "
+                f"bs.every(b => b.getAttribute('aria-pressed') === String(b.classList.contains('on'))); }})()")
+
+    page.evaluate("location.hash = '#settings'")
+    page.wait_for_selector("#len-seg", timeout=10000)
+    try:
+        page.wait_for_function(pressed_all_match("#view"), timeout=5000)
+    except Exception:  # noqa: BLE001
+        failures.append("the segmented buttons on Settings do not carry an aria-pressed that matches the one that is on: "
+                        + repr(page.evaluate("[...document.querySelectorAll('#view .seg button')].map(b => [b.classList.contains('on'), b.getAttribute('aria-pressed')])")))
+    # the Author's note dialog flips the class in place (no repaint), so this is the path a later change has to follow
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    page.click("#note-btn")
+    page.wait_for_selector("#an-depth", timeout=6000)
+    try:
+        page.wait_for_function(pressed_all_match("#modal-card"), timeout=5000)
+        page.click("#an-depth button:not(.on)")
+        page.wait_for_function(pressed_all_match("#modal-card")
+                               + " && document.querySelectorAll('#an-depth button[aria-pressed=true]').length === 1", timeout=5000)
+    except Exception:  # noqa: BLE001
+        failures.append("a segmented button's pressed state did not follow the choice: "
+                        + repr(page.evaluate("[...document.querySelectorAll('#an-depth button')].map(b => [b.classList.contains('on'), b.getAttribute('aria-pressed')])")))
+    close_modal()
+    # markup that is already there when a root starts being watched (the Talk drawer is built that way) is synced at once
+    early = page.evaluate("""async () => { const m = await import('/js/a11y.js'); const d = document.createElement('div');
+        d.innerHTML = '<div class="seg"><button class="on">A</button><button>B</button></div>'; document.body.appendChild(d);
+        m.watchLabels(d); const r = [...d.querySelectorAll('button')].map(b => b.getAttribute('aria-pressed')); d.remove(); return r; }""")
+    if early != ["true", "false"]:
+        failures.append(f"segmented buttons already on the page when a root is watched are not synced at once: {early}")
+    print("30) segmented buttons say which one is pressed, and follow the choice")
+
+    # 31) A route change replaced the page under the reader's focus, which fell to <body>: nothing was announced and a keyboard
+    #     user had to Tab from the top again. Focus now lands in the new page, and is left alone when a view or a dialog has it.
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_function("document.querySelector('#view h1, #view h2')", timeout=8000)
+    page.wait_for_timeout(300)
+    page.evaluate("location.hash = '#characters'")
+    page.wait_for_selector("#lib-types", timeout=8000)
+    in_view_js = ("(() => { const a = document.activeElement; const v = document.querySelector('#view');"
+                  " return !!a && a !== document.body && v.contains(a) || a === v; })()")
+    try:
+        page.wait_for_function(in_view_js, timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append("after a route change focus is on "
+                        + repr(page.evaluate("document.activeElement && (document.activeElement.id || document.activeElement.tagName)"))
+                        + ", not in the new page")
+    if page.evaluate("document.activeElement.matches('h1, h2') && document.activeElement.getAttribute('tabindex') !== '-1'"):
+        failures.append("the heading that took focus is a Tab stop (it should take programmatic focus only)")
+    # a dialog that is open keeps the focus it has: the route change must not pull it out from under the reader
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#note-btn", timeout=8000)
+    page.click("#note-btn")
+    page.wait_for_selector("#an-depth", timeout=6000)
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_function("document.querySelector('#view h1, #view h2') && !document.querySelector('#note-btn')", timeout=8000)
+    page.wait_for_timeout(400)
+    if not page.evaluate("document.querySelector('#modal-card').contains(document.activeElement)"):
+        failures.append("a route change pulled focus out of an open dialog: "
+                        + repr(page.evaluate("document.activeElement && (document.activeElement.id || document.activeElement.tagName)")))
+    close_modal()
+    print("31) a route change moves focus into the new page, and leaves an open dialog's focus alone")
+
+    # 32) The kind of a toast was only the colour of its left border. It now has a glyph for the eye and a word for the ear.
+    for kind, word, glyph in (("error", "Error", "!"), ("ok", "Done", "✓"), ("info", "Note", "i")):
+        got = page.evaluate("""async (k) => { const m = await import('/js/util.js'); m.toast('A sample message', k);
+            const t = document.querySelector('#toast'); const mark = t.querySelector('.toast-mark');
+            const hidden = t.querySelector('.sr-only');
+            return {text: t.textContent, mark: mark && mark.textContent, ariaHidden: mark && mark.getAttribute('aria-hidden'),
+                    spoken: hidden && hidden.textContent, spokenWidth: hidden && getComputedStyle(hidden).width, cls: t.className}; }""", kind)
+        if got["mark"] != glyph or got["ariaHidden"] != "true":
+            failures.append(f"a {kind} toast has no glyph for the eye (mark {got['mark']!r}, aria-hidden {got['ariaHidden']!r})")
+        if got["spoken"] != f"{word}: " or got["spokenWidth"] != "1px":
+            failures.append(f"a {kind} toast has no word for the ear, or it is shown on screen: {got['spoken']!r} at {got['spokenWidth']}")
+        if "A sample message" not in got["text"] or not got["cls"].startswith(kind):
+            failures.append(f"a {kind} toast lost its message or its class: {got}")
+        no_dashes(f"the {kind} toast", got["text"])
+    page.evaluate("document.querySelector('#toast').className = ''")
+    print("32) a toast's kind is a glyph and a word, not a colour")
+
+    # 33) Every visible button has a name made of letters or digits (its text or an aria-label): the pencil on each turn, the
+    #     draft button, the close buttons. A bare glyph is read as the picture it is, or not at all.
+    nameless_js = """(root) => [...root.querySelectorAll('button, [role=button], a[href]')].filter(b => b.offsetParent !== null)
+      .filter(b => !/[A-Za-z0-9]/.test(b.getAttribute('aria-label') || b.textContent || ''))
+      .map(b => b.id || b.className || b.tagName)"""
+    for view in VIEWS:
+        page.evaluate(f"location.hash = {view!r}")
+        page.wait_for_timeout(700)
+        if view == "#settings":
+            page.wait_for_selector("#len-seg", timeout=10000)
+        nameless = page.evaluate(f"({nameless_js})(document.querySelector('#view'))")
+        if nameless:
+            failures.append(f"{view}: buttons with no name: {nameless[:6]}")
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    for btn in ("note-btn", "mem-btn", "ctx-btn", "plan-btn", "canon-btn", "aids-btn"):
+        page.click(f"#{btn}")
+        page.wait_for_selector("#modal-root:not(.hidden) #modal-card h1, #modal-root:not(.hidden) #modal-card h2", timeout=8000)
+        page.wait_for_timeout(150)                      # the names are added shortly after a dialog paints
+        nameless = page.evaluate(f"({nameless_js})(document.querySelector('#modal-card'))")
+        if nameless:
+            failures.append(f"the {btn} dialog: buttons with no name: {nameless[:6]}")
+        unnamed_fields = page.evaluate("""() => [...document.querySelectorAll('#modal-card input:not([type=hidden]):not([type=checkbox]):not([type=radio]), #modal-card textarea, #modal-card select')]
+          .filter(el => el.offsetParent !== null && !(el.labels && el.labels.length) && !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby'))
+          .map(el => el.id || el.className || el.type)""")
+        if unnamed_fields:
+            failures.append(f"the {btn} dialog: fields with no name: {unnamed_fields[:6]}")
+        close_modal()
+    page.evaluate(f"location.hash = '#world/{scen}'")
+    page.wait_for_selector("[data-newpiece='characters.md']", timeout=8000)
+    page.click("[data-newpiece='characters.md']")
+    page.wait_for_selector(".chip-in", timeout=4000)
+    page.fill(".chip-in", "brave")
+    page.press(".chip-in", "Enter")
+    chip_label = page.evaluate("(document.querySelector('.chip-tag button') || {getAttribute: () => null}).getAttribute('aria-label')")
+    if chip_label != "Remove brave":
+        failures.append(f"a chip's remove button is named {chip_label!r}, not by the chip it removes")
+    close_modal()
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    labels = page.evaluate("[...document.querySelectorAll('.turn-edit')].map(b => b.getAttribute('aria-label'))")
+    if len(set(labels)) < 2 or not all(labels):
+        failures.append(f"the pencils on the turns are not named by whose turn it is: {labels}")
+    print("33) every visible button has a name")
+
+    # 34) The Talk drawer lives on <body>, outside everything a11y.js watched: its select, its input and its close button had
+    #     no name, and a field added to it later would never get one.
+    page.evaluate("""async (s) => { const m = await import('/js/play.js'); m.talkDrawer(s, ['Mira', 'Odo']); }""", slug)
+    page.wait_for_selector("#talk-drawer", timeout=4000)
+    page.evaluate("""() => { const i = document.createElement('input'); i.id = 'talk-later'; i.placeholder = 'A later field';
+                             document.querySelector('#talk-drawer').appendChild(i); }""")
+    try:
+        page.wait_for_function("document.querySelector('#talk-later').getAttribute('aria-label') === 'A later field'", timeout=3000)
+    except Exception:  # noqa: BLE001
+        failures.append("a field added to the Talk drawer was never named (the drawer is not watched)")
+    drawer = page.evaluate("""() => { const d = document.querySelector('#talk-drawer');
+        const name = e => e && (e.getAttribute('aria-label') || (e.labels && e.labels[0] && e.labels[0].textContent) || '');
+        return {role: d.getAttribute('role'), label: d.getAttribute('aria-label'), who: name(d.querySelector('#talk-who')),
+                input: name(d.querySelector('#talk-input')), close: name(d.querySelector('#talk-close')),
+                log: d.querySelector('#talk-log').getAttribute('role')}; }""")
+    if not (drawer["role"] and drawer["label"] and drawer["who"] and drawer["input"] and drawer["close"] and drawer["log"] == "log"):
+        failures.append(f"the Talk drawer is missing names or roles: {drawer}")
+    page.evaluate("document.getElementById('talk-drawer') && document.getElementById('talk-drawer').remove()")
+    print("34) the Talk drawer is named and watched")
+
+    # 35) An AI answer for a piece form must not land in another piece. The model answers a moment later; by then the dialog can
+    #     be closed and a DIFFERENT piece's form open in the same host with the same element ids, and the answer was written
+    #     into it (and its buttons re-labelled). It is dropped now, and the reader is told. Both buttons that ask the model:
+    #     "Improve with AI" (an existing piece) and "Seed from idea" (a new one).
+    page.evaluate(f"location.hash = '#world/{scen}'")
+    page.wait_for_selector("[data-newpiece]", timeout=8000)
+    rels = page.evaluate("[...document.querySelectorAll('[data-newpiece]')].map(b => b.dataset.newpiece)")
+    first, second = rels[0], next(r for r in rels if r != rels[0])
+    answer = '{"entry": {"title": "AI Answer For Another Piece", "importance": 3, "aliases": [], "attrs": {}, "body": "x"}}'
+
+    def ask_seed():
+        page.click("#p-seed")
+        page.fill("#p-idea", "a grim ferryman")
+        page.click("#p-seed-go")
+
+    def late_answer_case(label, open_first, ask):
+        page.evaluate(f"location.hash = '#world/{scen}'")
+        page.wait_for_selector("[data-newpiece]", timeout=8000)
+        open_first()
+        held35 = []
+        page.route("**/api/assist", lambda route: held35.append(route))
+        ask()
+        wait_until_held(page, held35, label)
+        close_modal()
+        page.click(f"[data-newpiece='{second}']")
+        page.wait_for_selector("#p-title", timeout=4000)
+        page.fill("#p-title", "Piece Two")
+        if label == "seed":
+            # the form that is open now has a request of its own in flight: the OLD answer must not reset its buttons
+            ask_seed()
+            for _ in range(80):
+                if len(held35) >= 2:
+                    break
+                page.wait_for_timeout(100)
+            else:
+                failures.append("the second seed request never reached the stub")
+        before = len(errors)
+        held35[0].fulfill(status=200, content_type="application/json", body=answer)
+        page.wait_for_timeout(900)
+        if page.input_value("#p-title") != "Piece Two":
+            failures.append(f"{label}: an AI answer meant for another piece form was written into this one: {page.input_value('#p-title')!r}")
+        if "was not used" not in page.evaluate("(document.querySelector('#toast') || {}).textContent || ''"):
+            failures.append(f"{label}: a dropped AI answer was not reported")
+        if label == "seed":
+            untouched = page.is_disabled("#p-seed") and "generating" in page.inner_text("#p-seed")
+        else:
+            untouched = page.is_disabled("#p-improve") and "Seed from idea" in page.inner_text("#p-seed") and not page.is_disabled("#p-seed")
+        if not untouched:
+            failures.append(f"{label}: the late answer changed the buttons of the form that is open now "
+                            f"(improve disabled {page.is_disabled('#p-improve')}, seed {page.inner_text('#p-seed')!r})")
+        if len(errors) != before:
+            failures.append(f"{label}: a late AI answer threw: {errors[before:]}")
+        for r in held35[1:]:
+            r.fulfill(status=400, content_type="application/json", body='{"detail": "released by the test"}')
+        page.wait_for_timeout(400)
+        page.unroute("**/api/assist")
+        close_modal()
+
+    if not page.locator("[data-piece]").count():
+        failures.append("the bundled world has no existing piece to open for the Improve case")
+    else:
+        late_answer_case("improve", lambda: page.locator("[data-piece]").first.click(), lambda: page.click("#p-improve"))
+
+    late_answer_case("seed", lambda: page.click(f"[data-newpiece='{first}']"), ask_seed)
+    print("35) an AI answer for a closed piece form is dropped, not written into another piece")
+
+    # --- D-056 item 10: a readable export and find in the story ------------------------------------------------------
+    # 36) The only export was the zip backup. "Export text" downloads the story as Markdown a person can read: the stored turns,
+    #     not the transcript with its marker comments.
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_selector(f".card[data-slug='{slug}'] [data-act='export-text']", timeout=8000)
+    with page.expect_download() as download_info:
+        page.click(f".card[data-slug='{slug}'] [data-act='export-text']")
+    download = download_info.value
+    exported = Path(download.path()).read_text(encoding="utf-8")
+    if download.suggested_filename != f"{slug}.md":
+        failures.append(f"the readable export is named {download.suggested_filename!r}, not {slug}.md")
+    if not exported.startswith("# Smoke\n") or "NARRATOR-1" not in exported or "> **You:** PLAYER-1" not in exported:
+        failures.append(f"the readable export does not read as the story: {exported[:200]!r}")
+    if "<!--" in exported or "\u200b" in exported:
+        failures.append("the readable export carries the transcript's markers")
+    if not page.is_visible(f".card[data-slug='{slug}'] [data-act='export']"):
+        failures.append("the zip backup button is gone from the story card")
+    print("36) Export text downloads the story as readable Markdown")
+
+    # 37) Find in the story: marks inside the turns, a count, Enter and Shift+Enter step, Escape closes, and a search never
+    #     changes a turn's text or the turns themselves (edit and retry address a turn by its position in #transcript).
+    server._engine(slug).store.append_turn("narrator", "The Tallow burns low. A second tallow stub waits by the door.")
+    server._engine(slug).store.append_turn("player", "I snuff the TALLOW.")
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    page.wait_for_function("document.querySelectorAll('#transcript .turn').length > 3", timeout=8000)
+    snapshot_js = """() => { const t = document.querySelector('#transcript');
+        return {turns: t.children.length, text: t.textContent, nodes: [...t.querySelectorAll('.turn-body')].map(b => b.childNodes.length)}; }"""
+    before = page.evaluate(snapshot_js)
+    errors_before = len(errors)
+    if page.is_visible("#find-bar"):
+        failures.append("the find bar is showing before Find was pressed (a `hidden` row shown by CSS)")
+    page.click("#find-btn")
+    if not page.is_visible("#find-bar") or page.evaluate("document.activeElement.id") != "find-q" \
+            or page.get_attribute("#find-btn", "aria-expanded") != "true":
+        failures.append("Find did not open the bar with focus in its box")
+    page.fill("#find-q", "tallow")
+    try:
+        page.wait_for_function("document.querySelector('#find-count').textContent === '1 of 3'", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append("find said " + repr(page.inner_text("#find-count")) + " for a word that is in 3 places (any case)")
+    marks_js = """() => ({n: document.querySelectorAll('#transcript mark.find-hit').length,
+        inBody: [...document.querySelectorAll('#transcript mark.find-hit')].every(m => m.closest('.turn-body')),
+        current: [...document.querySelectorAll('#transcript mark.find-hit')].map(m => m.classList.contains('current'))})"""
+    got = page.evaluate(marks_js)
+    if got["n"] != 3 or not got["inBody"] or got["current"] != [True, False, False]:
+        failures.append(f"the highlights are wrong: {got}")
+    during = page.evaluate(snapshot_js)
+    if during["turns"] != before["turns"] or during["text"] != before["text"]:
+        failures.append("a search changed the turns or their text")
+    page.press("#find-q", "Enter")
+    if page.inner_text("#find-count") != "2 of 3" or page.evaluate(marks_js)["current"] != [False, True, False]:
+        failures.append(f"Enter did not step to the second match: {page.inner_text('#find-count')!r} {page.evaluate(marks_js)['current']}")
+    page.press("#find-q", "Shift+Enter")
+    page.press("#find-q", "Shift+Enter")
+    if page.inner_text("#find-count") != "3 of 3":
+        failures.append(f"Shift+Enter did not wrap back to the last match: {page.inner_text('#find-count')!r}")
+    page.press("#find-q", "Enter")
+    if page.inner_text("#find-count") != "1 of 3":
+        failures.append(f"Enter did not wrap to the first match: {page.inner_text('#find-count')!r}")
+    # a turn that arrives while the bar is open is searched too (the search re-runs when turns come or go)
+    page.evaluate("""() => { const d = document.createElement('div'); d.className = 'turn narrator'; const b = document.createElement('span');
+        b.className = 'turn-body'; b.textContent = 'One more tallow candle.'; d.appendChild(b); d.id = 'find-extra';
+        document.querySelector('#transcript').appendChild(d); }""")
+    try:
+        page.wait_for_function("document.querySelector('#find-count').textContent.endsWith('of 4')", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append("a turn added while the find bar was open was not searched: " + repr(page.inner_text("#find-count")))
+    page.evaluate("document.querySelector('#find-extra').remove()")
+    # what is typed is text, not a pattern
+    page.fill("#find-q", "(tallow")
+    try:
+        page.wait_for_function("document.querySelector('#find-count').textContent === 'No matches'", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append("a search for '(tallow' did not say there were no matches: " + repr(page.inner_text("#find-count")))
+    # the chrome of a turn (its version bar, its buttons) is not the story: only text inside a turn's body is marked
+    page.fill("#find-q", "version")
+    page.wait_for_function("document.querySelector('#find-count').textContent.includes(' of ')", timeout=4000)
+    chrome = page.evaluate(marks_js)
+    if chrome["n"] < 1 or not chrome["inBody"]:
+        failures.append(f"a search for a word on a turn's version bar marked something outside the turn bodies: {chrome}")
+    page.fill("#find-q", "tallow")
+    page.wait_for_function("document.querySelector('#find-count').textContent === '1 of 3'", timeout=4000)
+    page.press("#find-q", "Escape")
+    after = page.evaluate(snapshot_js)
+    if page.is_visible("#find-bar") or page.evaluate("document.querySelectorAll('#transcript mark.find-hit').length") != 0:
+        failures.append("Escape did not close the find bar and clear the highlights")
+    if page.evaluate("document.activeElement.id") != "find-btn" or page.get_attribute("#find-btn", "aria-expanded") != "false":
+        failures.append("closing find did not return focus to its button")
+    if after != before:
+        failures.append(f"after find the turns are not as they were (text nodes merged back?): {before['nodes']} -> {after['nodes']}")
+    if len(errors) != errors_before:
+        failures.append(f"find threw: {errors[errors_before:]}")
+    print("37) find in the story highlights, counts, steps, searches new turns and leaves the turns untouched")
 
     browser.close()
 

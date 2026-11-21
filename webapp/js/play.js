@@ -1,7 +1,9 @@
 /* The play view: transcript, composer, sheet, book plan, context
    inspector, companion drawer. */
 import {$, api, esc, guard, renderProse, sse, toast, view} from "./util.js";
+import {watchLabels} from "./a11y.js";
 import {canonModal} from "./canon.js";
+import {attachFind} from "./find.js";
 import {castModal} from "./cast.js";
 import {
   closeModal,
@@ -36,13 +38,15 @@ export async function outlineModal(slug) {
       // Rewrite one chapter in place. Offered on active too: rewording the goal
       // the writer is aiming at is legitimate steering. Never on done — that is
       // not a plan any more, it is what happened, and the server refuses it.
+      // The glyph buttons carry the chapter's number in their name: a list of "↑ ↑ ↑" tells a screen reader nothing.
+      const n = i + 1;
       const regen = ch.status === "done" ? ""
-        : `<button data-op="regen"
+        : `<button data-op="regen" aria-label="Rewrite chapter ${n}"
              title="rewrite just this chapter to fit the story so far">↻</button>`;
       const ops = ch.status === "planned"
-        ? `${regen}<button data-op="up" title="move earlier">↑</button>
-           <button data-op="down" title="move later">↓</button>
-           <button data-op="del" title="delete this chapter">🗑</button>`
+        ? `${regen}<button data-op="up" aria-label="Move chapter ${n} earlier" title="move earlier">↑</button>
+           <button data-op="down" aria-label="Move chapter ${n} later" title="move later">↓</button>
+           <button data-op="del" aria-label="Delete chapter ${n}" title="delete this chapter">🗑</button>`
         : ch.status === "active"
         ? `${regen}<button data-op="advance" class="primary"
              title="mark this chapter complete and plan the next">Chapter done →</button>`
@@ -50,7 +54,7 @@ export async function outlineModal(slug) {
       return `<div class="ch-row ${ch.status}" data-i="${i}">
         <div class="ch-head">
           <span class="ch-badge ${ch.status}">${label}</span>
-          <input class="ch-title" value="${esc(ch.title)}" ${ro}/>
+          <input class="ch-title" aria-label="Chapter ${n} title" value="${esc(ch.title)}" ${ro}/>
           <span class="ch-ops">${ops}</span>
         </div>
         <textarea class="ch-goal" rows="2" ${ro}
@@ -332,6 +336,16 @@ export async function renderPlay(slug) {
         <button id="talk-btn" ${s.companions.length ? "" : "disabled"}
           title="${s.companions.length ? "private companion chat"
                  : "no companions yet"}">Talk</button>
+        <button id="find-btn" aria-expanded="false" aria-controls="find-bar"
+          title="find a word in this story">Find</button>
+      </div>
+      <!-- Outside #transcript on purpose: the pen and retry address a turn by its position in it, so nothing may be added there. -->
+      <div id="find-bar" role="search" aria-label="Find in the story" hidden>
+        <input id="find-q" type="search" placeholder="Find in the story" aria-label="Find in the story" autocomplete="off">
+        <span id="find-count" role="status" aria-live="polite"></span>
+        <button id="find-prev" aria-label="Previous match">↑</button>
+        <button id="find-next" aria-label="Next match">↓</button>
+        <button id="find-close" aria-label="Close find">✕</button>
       </div>
       <div id="transcript" aria-label="Story"></div>
       <!-- role=status announces progress WITHOUT stealing focus. Deliberately
@@ -352,7 +366,7 @@ export async function renderPlay(slug) {
         </div>
         <div id="quick-bar"></div>
         <div id="composer-inner">
-          <button id="suggest" title="let the AI draft your next action">✍</button>
+          <button id="suggest" title="let the AI draft your next action" aria-label="Draft my next action with AI">✍</button>
           <textarea id="action" placeholder="What do you do?"></textarea>
           <button class="primary" id="send">Send</button>
         </div>
@@ -362,6 +376,7 @@ export async function renderPlay(slug) {
   </div>`;
 
   const transcript = $("#transcript");
+  attachFind({transcript, bar: $("#find-bar"), button: $("#find-btn")});
   const stage = $("#stageline");
   const evbar = $("#eventbar");
   let swipe = s.swipes || {count: 1, idx: 0};      // ST-02 state for the last narrator turn (the server knows which is showing)
@@ -381,6 +396,7 @@ export async function renderPlay(slug) {
     d.appendChild(body);
     const pen = document.createElement("button");
     pen.className = "turn-edit"; pen.textContent = "✎"; pen.title = "edit";
+    pen.setAttribute("aria-label", role === "player" ? "Edit your action" : "Edit this reply");   // a bare ✎ is read as a pencil, and there is one per turn
     pen.addEventListener("click", () => startEdit(d));   // ST-03
     d.appendChild(pen);
     paint(d, text);
@@ -1028,7 +1044,7 @@ export async function renderPlay(slug) {
         `<option value="${esc(f.rel)}">${esc(LABEL[f.rel] || f.rel)}</option>`
       ).join("")}</select>
       <div id="mem-layer" class="muted"></div>
-      <textarea id="mem-text" rows="14" spellcheck="false"></textarea>
+      <textarea id="mem-text" rows="14" spellcheck="false" aria-label="Contents of the chosen file"></textarea>
       <div class="modal-actions">
         <button id="mem-folds" title="review the scene summaries the folds wrote"
           >Recent folds…</button>
@@ -1157,19 +1173,23 @@ export function talkDrawer(slug, companions) {
   if ($("#talk-drawer")) { $("#talk-drawer").remove(); return; }
   const d = document.createElement("div");
   d.id = "talk-drawer";
+  // It lives on <body>, outside the view and the dialog the labels are watched in, so it names itself and is watched below.
+  d.setAttribute("role", "complementary");
+  d.setAttribute("aria-label", "Talk to a companion");
   d.innerHTML = `
     <div class="row" style="align-items:center">
-      <select id="talk-who">${companions.map(c =>
+      <select id="talk-who" aria-label="Who to talk to">${companions.map(c =>
         `<option>${esc(c)}</option>`).join("")}</select>
-      <button id="talk-close" style="flex:0">✕</button>
+      <button id="talk-close" style="flex:0" aria-label="Close the chat">✕</button>
     </div>
-    <div id="talk-log">(This chat stays between you two. It never enters
+    <div id="talk-log" role="log" aria-label="The conversation">(This chat stays between you two. It never enters
 the story transcript.)\n</div>
     <div id="talk-row">
       <input id="talk-input" placeholder="Say something…">
       <button class="primary" id="talk-send" style="flex:0">Send</button>
     </div>`;
   document.body.appendChild(d);
+  watchLabels(d);
   const log = $("#talk-log");
   let sending = false;                  // drawer-local; the server lock guards the rest
   const send = async () => {

@@ -37,19 +37,35 @@ export function labelize(root) {
   }
 }
 
+/* The choice a segmented control (`.seg`) has made is the button with class "on", which is only a colour: a screen reader
+   announced six or so buttons and never which one was current. Mirror the class into aria-pressed so it says "pressed" or "not
+   pressed". Read from the class, so no view has to remember to set it and the six places that toggle "on" stay as they are. */
+export function syncPressed(root) {
+  for (const b of root.querySelectorAll(".seg button")) {
+    const on = String(b.classList.contains("on"));
+    if (b.getAttribute("aria-pressed") !== on) b.setAttribute("aria-pressed", on);
+  }
+}
+
 /* Label what is on screen now and whatever a view or a modal renders later. Streaming text only adds text nodes, which are
    ignored, so a long reply costs nothing here. */
 export function watchLabels(...roots) {
   for (const root of roots) {
     if (!root) continue;
     labelize(root);
+    syncPressed(root);
     let queued = false;
+    // New elements are labelled; a class change on a segmented button re-reads which one is pressed. The class filter keeps
+    // the observer quiet (it does not see the aria-pressed it writes, so it cannot retrigger itself).
+    const relevant = m => m.type === "attributes"
+      ? m.target.matches && m.target.matches(".seg button")
+      : [...m.addedNodes].some(n => n.nodeType === 1);
     new MutationObserver(muts => {
-      if (queued || !muts.some(m => [...m.addedNodes].some(n => n.nodeType === 1))) return;
+      if (queued || !muts.some(relevant)) return;
       queued = true;
       // A timer, not requestAnimationFrame: a frame never comes for a tab that is in the background or a pane that is hidden,
       // and the names are for whoever is reading the page, painted or not.
-      setTimeout(() => { queued = false; labelize(root); }, 30);
-    }).observe(root, {childList: true, subtree: true});
+      setTimeout(() => { queued = false; labelize(root); syncPressed(root); }, 30);
+    }).observe(root, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
   }
 }

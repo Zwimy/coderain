@@ -43,7 +43,7 @@ export function chipInput(host, opts = {}) {
     host.className = "chips";
     host.innerHTML = values.map((v, i) =>
       `<span class="chip-tag">${esc(labelOf(v))}` +
-      `<button type="button" data-i="${i}" aria-label="remove">×</button></span>`
+      `<button type="button" data-i="${i}" aria-label="Remove ${esc(labelOf(v))}">×</button></span>`
     ).join("") +
       `<input class="chip-in" list="${listId}" ` +
       `placeholder="${esc(opts.placeholder || "add…")}">` +
@@ -95,6 +95,10 @@ export async function api(path, opts = {}) {
    means screen readers announce it without stealing focus. */
 export let _toastTimer = null;
 
+/* What kind of message it is must not live in the border colour alone (about one reader in twelve cannot tell the red from the
+   green, and a screen reader hears no colour at all): a glyph for the eye, the word for the ear. */
+const TOAST_MARK = {error: ["!", "Error"], ok: ["✓", "Done"], info: ["i", "Note"]};
+
 export function toast(msg, kind = "error") {
   let el = $("#toast");
   if (!el) {
@@ -104,7 +108,15 @@ export function toast(msg, kind = "error") {
     document.body.appendChild(el);
   }
   el.className = kind + " show";
-  el.textContent = msg;
+  const [glyph, word] = TOAST_MARK[kind] || TOAST_MARK.info;
+  const mark = document.createElement("span");
+  mark.className = "toast-mark";
+  mark.setAttribute("aria-hidden", "true");
+  mark.textContent = glyph;
+  const said = document.createElement("span");
+  said.className = "sr-only";
+  said.textContent = `${word}: `;
+  el.replaceChildren(mark, said, document.createTextNode(msg));
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => el.classList.remove("show"), 6000);
 }

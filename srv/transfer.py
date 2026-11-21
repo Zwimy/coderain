@@ -13,9 +13,11 @@ from fastapi import File
 from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from coderain import templates
 from coderain.memory import Entry
 from coderain.memory import _safe_zip_member
+from coderain.readable import story_markdown
 
 from .core import _EXPORT_DIR
 from .core import _exclusive
@@ -38,6 +40,20 @@ def export_save(slug: str):
         raise HTTPException(404, str(e))
     return FileResponse(path, filename=f"save-{slug}.zip",
                         media_type="application/zip")
+
+
+@router.get("/api/saves/{slug}/readable")
+def export_readable(slug: str):
+    """The story as one Markdown file a person can read: its stored turns, not the raw transcript with the engine's markers.
+    A download, like the zip above; the zip stays the backup that can be imported again."""
+    _guard_slug(slug)
+    try:
+        store = lib.saves.store(slug)
+    except FileNotFoundError:
+        raise HTTPException(404, f"no such save: {slug}")
+    body = story_markdown(store.title, store.turns())
+    return Response(body, media_type="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{slug}.md"'})
 
 # Upload ceilings. Without these a tiny archive can write gigabytes: a 204 KB
 # zip expanding to 200 MB was reproducible before this guard.
