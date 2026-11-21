@@ -2463,7 +2463,7 @@ equivalent, are named).
   by another form's answer, a find that marked the version bar, and two long-press cancels (a lifting and a moving finger) that were checked
   together, so one open menu hid the other's failure.
 
-**Later the same day: items 16, 17, 18 and 20 are built.** Left: 15 (a per-story response length: it needs the length to reach three call sites and the
+**Later the same day: items 16, 17, 18, 20 and the small part of 19 are built.** Left: 15 (a per-story response length: it needs the length to reach three call sites and the
 trinity writer, and streaming is not a setting at all) and 19's two large parts.
 - 20, autosave in the world builder: a pause of 1.2 s after the last key saves the main fields, one save at a time, none while the title is blank
   (the route would blank the world's name), a failure is a line the next edit retries, an AI answer and Undo AI are saved too. The first version had a
@@ -2474,6 +2474,11 @@ trinity writer, and streaming is not a setting at all) and 19's two large parts.
 - 17, the phone-width pass is one smoke case over every route and every play dialog at 375px: nothing off the right edge, buttons 40px, fields and the
   first-run link 32px, a strip that scrolls sideways on purpose exempt. It found a chapter title box 25px tall and a first-run link 17px tall, and it
   found that the RPG sheet's section headings had em dashes (the dash sweep had never seen an RPG story): plain upper case now.
+- 19, the small part: the three dialogs that used nothing of the play view but the modal helpers left `play.js` for `outline.js` (the chapter
+  plan), `context.js` (the context inspector and what the story has cost) and `folds.js` (the fold review). A pure move, 1288 lines to 999.
+  The fold review had no browser case, so smoke case 51 opens it, pages, saves, refuses an empty summary, and goes plan > Characters > back.
+  What is left of 19 is the dialogs that close over the view's own state (Memory, Canon, Branch) and the 785-line `renderPlay` closure; both
+  need the view split by what it owns, not by what it draws, and that is the large part.
 - 18, the versions of the last reply (a swipe, or a retry that kept what it replaced) lived only in the engine's memory, so a restart or a settings
   save (which drops every engine) left the page saying "Version 1 of 1" over a reply that had had three. They are kept in `swipes.json` beside the
   transcript and the file is TRUSTED only while it still describes the transcript: the same number of turns, the selected version is the text of

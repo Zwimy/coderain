@@ -72,6 +72,7 @@ Asserts, once it can run:
     thing, a piece cannot take another piece's name, and a character needs a name
 49) a refused delete of a world or a character says so in a toast and keeps the card
 50) a library character already in the world is refused with a reason and the picker stays open; a new one goes in once
+51) the fold review (folds.js) opens on the newest scene, pages to an older one, saves an edit, and refuses an empty summary
 """
 import json
 import os
@@ -2523,6 +2524,51 @@ with sync_playwright() as p:
     if sorted(full48()) != ["mara", "vesper", "zed-marrow"] or "There is already" in page.evaluate(toast_js):
         failures.append(f"a double click on a library character did not add it exactly once: {sorted(full48())} {page.evaluate(toast_js)!r}")
     print("50) a library character already in the world is refused with a reason and the picker stays; a new one goes in once")
+
+    # 51) The fold review (webapp/js/folds.js since D-056 item 19; it had no browser case): the Memory dialog's fold button opens it on the
+    #     newest scene, Previous goes to an older one, a summary edited and saved is what the story holds, an empty one is refused.
+    from coderain.memory import Entry as FoldEntry
+    f_slug = c.post("/api/saves", json={"title": "Fold review", "mode": "simple", "premise": "A harbour."}).json()["slug"]
+    f_store = server._engine(f_slug).store
+    for i_, t_ in enumerate(("The first fold", "The second fold")):
+        f_store.upsert_entry("memory/scenes.md", FoldEntry(title=t_, slug=f"scene-{i_ + 1}", importance=3,
+                                                           body=f"Summary {i_ + 1} of what happened.", attrs={"turns": f"{i_ * 10 + 1}-{i_ * 10 + 10}"}))
+    scene_texts = lambda: {x["slug"]: x["summary"] for x in c.get(f"/api/saves/{f_slug}/scenes?limit=6").json()["scenes"]}   # noqa: E731
+    page.evaluate(f"location.hash = '#play/{f_slug}'")
+    page.wait_for_selector("#mem-btn", timeout=8000)
+    page.click("#mem-btn")
+    page.wait_for_selector("#mem-folds", timeout=4000)
+    page.click("#mem-folds")
+    page.wait_for_selector("#fold-text", timeout=4000)
+    if page.input_value("#fold-text") != "Summary 2 of what happened." or "The second fold" not in page.inner_text("#modal-card"):
+        failures.append(f"the fold review did not open on the newest scene: {page.input_value('#fold-text')!r}")
+    if not page.is_disabled("#fold-next") or page.is_disabled("#fold-prev"):
+        failures.append("the newest scene should have Previous and no Next")
+    page.click("#fold-prev")
+    if page.input_value("#fold-text") != "Summary 1 of what happened." or not page.is_disabled("#fold-prev"):
+        failures.append(f"Previous did not show the older scene, or the oldest still offers Previous: {page.input_value('#fold-text')!r}")
+    page.fill("#fold-text", "   ")
+    page.click("#fold-save")
+    page.wait_for_function("document.querySelector('#fold-status').textContent.includes(\"can't be empty\")", timeout=3000)
+    if scene_texts()["scene-1"] != "Summary 1 of what happened.":
+        failures.append("an empty summary was saved")
+    page.fill("#fold-text", "Summary 1, corrected by hand.")
+    page.click("#fold-save")
+    page.wait_for_function("document.querySelector('#fold-status').textContent === 'Saved.'", timeout=3000)
+    if scene_texts() != {"scene-2": "Summary 2 of what happened.", "scene-1": "Summary 1, corrected by hand."}:
+        failures.append(f"a saved summary is not what the story holds: {scene_texts()}")
+    close_modal()
+    # The Characters screen opened from the chapter plan comes back to the plan: outline.js imports cast.js and calls itself.
+    page.click("#plan-btn")
+    page.wait_for_selector("#ch-cast", timeout=4000)
+    page.click("#ch-cast")
+    page.wait_for_selector("#ca-back", timeout=4000)
+    page.click("#ca-back")
+    page.wait_for_selector("#ch-close", timeout=4000)
+    if "chapter plan" not in page.inner_text("#modal-card").lower():          # headings are upper-cased by the stylesheet
+        failures.append("Back to the plan from the Characters screen did not show the chapter plan")
+    close_modal()
+    print("51) the fold review opens on the newest scene, pages to an older one, saves an edit, and refuses an empty summary; the plan's Characters screen comes back")
 
     browser.close()
 
