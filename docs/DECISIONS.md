@@ -2924,3 +2924,38 @@ a turn.
 not pinned and per person, the validator, unknown and ambiguous names, `state_values`, the card, removing a line), `canon_api_test.py` 7 (the view,
 the route, the ledger, the refusal in the reader's own pass), smoke case 41 (the panel). 14 + 4 mutants of the engine side and 6 of the panel, all
 caught in the end.
+
+## D-063: A ties line at the tail of the prompt, after the player's action (built, off, not measured)
+
+**Why.** The graph probe (D-058 to D-061) left a gap that retrieval does not close. With the evidence already in the Writer's prompt, a 4B Writer
+answered "who is her brother" or "who carries the key" wrongly a quarter to a third of the time (gemma3:4b with the pass on: 11 of 17 and 13 of 17
+right when the evidence was there, D-059 and D-061). The facts sit in the middle of a long system message, far from the question. The one thing the engine already
+puts after the player's action is the canon card (D-027), and it is built from the canon ledger, which holds looks and what people wear, not ties or
+possessions. Those live in the story's own files: a character's `relationships:` line and an item's `holder:` attr (D-059).
+
+**What it is.** `memory: {tail_ties: true}` (off, and only a literal true turns it on). `coderain/tailties.py` builds ONE short system message
+from those files for what the player's action and the last reply name, plus one hop (an item to its holder, then the holder's own ties, because
+"the sister of the person who carries the key" is the question that needs it). The engine appends it right after the card and before the chapter
+directive, so the chapter goal is still the last thing read. For the soak probe, `python -m soak play --tail-ties` turns it on and each graph row
+records the line (`tail_ties`), the summary counts how many questions had it (`tail_ties_rows`).
+
+    Facts in play, from the story's own files (they are true; use them as written): Brass lamp key is held by Hollis Wren. Hollis Wren is tied to Ottoline Pike (his sister).
+
+**Rules it keeps** (each is a promise a test pins): a hidden entry (a secret) is never said, as the thing named, a holder or a tie target; `chance: 0`,
+`delay` (against the committed message count) and `triggers_not` hold, as for the follow pass; a holder or tie that names no entry, a tie to oneself
+and an item held by itself are left out, never guessed; a first name shared by two entries names nobody; at most 8 facts and 600 characters, the later
+ones dropped whole; it depends only on the files and the text, so a retry builds the same line (invariant 5); a failure is reported once
+(`tail-ties` in the health log) and means no line. It is a system message, so the echo filter drops a copy of it at the START of a reply, like the
+card; a copy in the middle of the prose is not caught, and that is the filter's design (a legitimately repeated line must survive).
+
+**Not measured.** Nothing here has been run against a model. That is why it is off. The measurement is the graph probe with and without it on the
+same seeds (`--tail-ties` against the plain run, then with `--follow-links` too), reading right-when-the-evidence-was-there first, because that is
+the 30 percent it is for. It is a different lever from D-059's follow pass: that one gets the facts INTO the prompt, this one says them again where the
+Writer is looking. D-061 showed the follow pass makes no difference once the evidence is there, so there is a real chance this makes none either.
+
+**What would change it.** A measured gain on right-when-evidence-is-there on two seeds and a second Writer (on by default for stories that have
+ties); no gain, or a loss of prose quality (a Writer that now recites ties) would remove it. A scene with many named people would call for a lower cap.
+
+**Tests.** `tail_ties_test.py` (10 promises, including the engine: off for anything but a real true, the position, never stored, a failure costs no turn,
+the echo filter), `soak_graph_probe_test.py` 5 (the flag, the row and the summary). 18 + 6 mutants broken in a copy of the repo, all caught in the end
+(two first slipped through: an item held by itself was unchecked, and a mutant that was equivalent until the check it duplicated got a test of its own).

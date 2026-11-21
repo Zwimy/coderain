@@ -28,6 +28,7 @@ from .config import HISTORY_FLOOR_TURNS, history_budget, short_term_turns
 from .llm import LLM
 from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore, safe_output_regex
+from .tailties import tail_ties
 from .planner import ChapterPlanner
 from .summarizer import Summarizer
 
@@ -248,6 +249,8 @@ class Engine:
         # Follow one hop from what activated (an item's holder, a person's ties): off until a measured run says it
         # helps (D-059). `is True`, so a hand-written "false" string is not read as on.
         self.follow_links = config.memory.get("follow_links") is True
+        # The ties line at the tail of the prompt (D-063): off until a measured run says it helps.
+        self.tail_ties = config.memory.get("tail_ties") is True
         # Open-core seam: premium modules resolve through coderain.features —
         # None when a module is trimmed from the build, and every use below
         # degrades gracefully (core must run fully without them).
@@ -353,6 +356,21 @@ class Engine:
             shadow._degrade(f"no card this turn: {type(e).__name__}: {e}")
             return ""
         return card.text if mode == "on" else ""
+
+    def _tail_ties(self, messages=()) -> str:
+        """The ties line for the turn about to be written (D-063), or "". Off unless `memory: {tail_ties: true}`. It is built
+        from the player's action and the last reply, so a retry builds the same line (invariant 5), and a failure is
+        reported once and means no line: a turn is never broken by it."""
+        if not self.tail_ties:
+            return ""
+        try:
+            msgs = list(messages)
+            action = next((str(m.get("content") or "") for m in reversed(msgs) if m.get("role") == "user"), "")
+            reply = next((str(m.get("content") or "") for m in reversed(msgs) if m.get("role") == "assistant"), "")
+            return tail_ties(self.store, action + "\n" + reply, len(self.store.turns()))
+        except Exception as e:  # noqa: BLE001 — a line must never cost a turn
+            self.store.log_degraded("tail-ties", f"no ties line this turn: {type(e).__name__}: {e}")
+            return ""
 
     def _messages(self, history, player_input):
         messages = self.store.assemble(history, player_input,
@@ -1060,6 +1078,12 @@ class Engine:
         card = self._canon_card(messages)
         if card:
             messages = [*messages, {"role": "system", "content": card}]
+        # The ties line (D-063, off unless memory.tail_ties): who is tied to whom and who carries what, for what the action and the
+        # last reply name, right after the card and before the chapter directive. Also a system message, so the echo filter
+        # below catches a model copying it back into its prose.
+        ties = self._tail_ties(messages)
+        if ties:
+            messages = [*messages, {"role": "system", "content": ties}]
         chapter = (_chapter_directive(self.store)
                    if self.cfg.generation.get("chapter_outline", True) else "")
         # Fate (D-045, off unless the save turns it on): one hidden steering line for an action turn. BEFORE the

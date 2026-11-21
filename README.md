@@ -89,6 +89,33 @@ python start.py                                    # or: python server.py
 
 Prefer a cloud model? Paste a key instead (DeepSeek/GLM are cheap and strong).
 
+**Which local writer?** `gemma3:4b` is the default: about 11 seconds a turn on an
+8 GB card. `llama3.1:8b` followed the story's ties and possessions ("who is her
+brother", "who carries the key") more faithfully in our probe (16 of 17 questions
+right against 11 to 13 for `gemma3:4b`; one story, one run) and takes about a
+minute a turn on the same card. If you can wait, it is worth trying.
+
+### Optional: the memory reader
+
+A small local model can read each turn and keep a ledger of who looks like what and
+who is wearing or carrying what, so a long story stops drifting ("her hair was raven,
+now it is auburn"). It is off until you turn it on in `config.yaml`:
+
+```yaml
+canon:
+  shadow: true
+  model: llama3.1:8b     # the reader we recommend: it reads more precisely than gemma3:4b
+  inject: preview        # start here: build the card every turn but send nothing
+```
+
+Run `ollama pull llama3.1:8b` first. On an 8 GB card the reader and the writer take
+turns loading, so a turn is slower. With `inject: preview` you can read what the writer
+would be told in `<save>/canon/card-last.txt` before you set `inject: true`. The
+**Canon** button in the story shows what the reader holds about each person and lets
+you say what is true or false: set a look (`Name: hair = raven`), or mark something
+wrong, including a garment or an item it filed by mistake (`Name: outfit is not red
+cloak`). Your corrections win over the story's own text and survive undo and retry.
+
 **You don't have to read any of this first.** On first run Coderain checks
 whether it can reach a model and, if not, opens a setup screen with both options
 — it detects Ollama for you, or takes a key. You can change it later in

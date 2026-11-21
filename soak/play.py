@@ -33,6 +33,8 @@ are written only to --out.
            asked, so what the Writer gets right is the guessing baseline
   --follow-links  turn on `memory: follow_links` (D-059): an activated item leads to its holder, a person to their ties. Off by default,
            which is the shipped default; it changes nothing else in the run
+  --tail-ties  turn on `memory: tail_ties` (D-063): the ties and holders of what the action and the last reply name, said again at
+           the end of the prompt, after the action. Off by default, which is the shipped default; it changes nothing else in the run
   --ask    plain (default): each graph question also asks for a straight answer in one sentence, because a model that narrates
            around the question can neither be scored right nor caught leaking; open: the bare question
   --stub-knowledge  what the OFFLINE writer does with those questions (truthful, leaky, wrong): it exists so a test can show the
@@ -209,7 +211,7 @@ def sheet_attrs(cast_row, graph_on: bool, facts: str) -> dict:
 
 
 def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False,
-            stub_folds: bool = False) -> str:
+            stub_folds: bool = False, tail_ties: bool = False) -> str:
     cfg = f"""active_profile: local
 profiles:
   local:
@@ -236,6 +238,7 @@ memory:
   long_fold_size: 4
   context_budget_tokens: {budget}
   follow_links: {"true" if follow_links else "false"}
+  tail_ties: {"true" if tail_ties else "false"}
 rpg: {{}}
 retrieval:
   enabled: false
@@ -266,7 +269,8 @@ def run_play(args, home: Path) -> int:
         _require_local(args.host)
     model = "stub-writer" if stub else args.model
     (home / "config.yaml").write_text(
-        _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links), bool(args.stub_folds)),
+        _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links), bool(args.stub_folds),
+                bool(args.tail_ties)),
         encoding="utf-8")
 
     from coderain import fate
@@ -339,6 +343,7 @@ def run_play(args, home: Path) -> int:
                     row["prompt_found"] = writer_msgs is not None
                     row["seen"], row["seen_memory"] = gp.evidence_flags(mv["gid"], writer_msgs or [])
                     row["linked"] = gp.linked_lines(writer_msgs)
+                    row["tail_ties"] = gp.tail_line(writer_msgs)
             rows.append(row)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
@@ -357,6 +362,7 @@ def run_play(args, home: Path) -> int:
     if graph_on:
         summary["probe_set"], summary["ask"], summary["facts"] = probe_set, ask, args.facts
         summary["follow_links"] = bool(args.follow_links)
+        summary["tail_ties"] = bool(args.tail_ties)
         summary["graph"] = gp.summarize(rows)
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

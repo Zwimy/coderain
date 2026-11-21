@@ -254,6 +254,14 @@ def test_a_truthful_run():
     rows_f, s_f = play("--probe-set", "graph", "--turns", "60", "--follow-links")
     hops_f = [r for r in rows_f if r["kind"] == "graph" and r["sub"] == "twohop"]
     assert s_f["follow_links"] is True and hops_f and all(r["seen_memory"] for r in hops_f), [(r["gid"], r["seen_memory"]) for r in hops_f]
+    # `--tail-ties` (D-063) turns the ties line on and changes nothing else: the Writer's prompt for a question about a person or an
+    # item carries it, the row and the summary say so, and without the flag no prompt has it
+    assert s["tail_ties"] is False and s["graph"]["tail_ties_rows"] == 0 and not any(r.get("tail_ties") for r in rows)
+    rows_t, s_t = play("--probe-set", "graph", "--turns", "60", "--tail-ties")
+    asked_t = [r for r in rows_t if r["kind"] == "graph"]
+    assert s_t["tail_ties"] is True and s_t["graph"]["tail_ties_rows"] > 0, s_t["graph"]["tail_ties_rows"]
+    assert all(r["tail_ties"].startswith("Facts in play") for r in asked_t if r["tail_ties"]), "a row recorded something that is not the line"
+    assert [r["action"] for r in asked_t] == [r["action"] for r in rows_f if r["kind"] == "graph"], "the flag changed the questions"
     rows_open, s_open = play("--probe-set", "graph", "--turns", "20", "--ask", "open")
     assert s_open["ask"] == "open" and not any(r["action"].endswith(gp.PLAIN) for r in rows_open if r["kind"] == "graph")
     assert all(r["verdict"] in ("held", "clean") for r in rows_open if r["kind"] == "graph"), "the offline writer answers either wording"
