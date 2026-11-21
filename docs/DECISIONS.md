@@ -2996,3 +2996,37 @@ quoted line, and attribution through a pronoun is the failure D-024 exists to st
 **Tests.** `tics_test.py` (9 promises, including the engine and the echo filter), `soak_graph_probe_test.py` 5 (the flag, the repeat measure, the
 row). 22 mutants broken in a copy of the repo, 21 caught and one equivalent (the early return for fewer than three replies: no phrase can occur in
 three replies without them, so the later check covers it; it stays as a short cut).
+
+## D-065: Duplicates in the app: the merge of D-030 and D-038, with an undo
+
+**Why.** A story played through a small local model collects second and third entries for one person ("Dame Vesper", "Vesper", "Vesper Ann-Marie";
+a same-name pair under two slugs). Each is a separate character to the memory, the card and the Writer. `python -m coderain.dedupe` found them and
+merged them (D-030 same whole name, D-038 names that share words, a merge only when told), and the app had no way to: D-038 listed "the app has no
+button for it" under Not done. A merge rewrites a registry file that a fold wrote, and a fold is one-way, so the only way to offer it in an app is one
+that can be taken back.
+
+**What it is.** `srv/dedupe_api.py` and the "Duplicates..." button in the Memory dialog (`webapp/js/duplicates.js`).
+- `GET /api/saves/{slug}/duplicates`: entries with the same whole name (safe to offer as one button) and entries that may be one person (the author's
+  call, so each is a choice of who stays and who is folded in, the entry with the longest body suggested), the backups, and whether `canon/` exists.
+- `POST .../duplicates/merge`: `{rel, keep, drop: [slugs]}` or `{auto: true}` (same-name groups only). The same rules as the tool (`explicit_group`,
+  `apply_merges`): a backup of every registry it changes first, the player's sheet never merged, a refusal is a 400 that writes nothing.
+- `POST .../duplicates/restore`: `{backup: "<stamp>"}` puts that backup's registries back, after backing up what is there now, so a restore can be
+  restored too. Only a stamp the tool made is accepted (a path, a missing stamp, a folder with no registry are refused), and only registry files are
+  put back (a `meta.json` in a backup is never copied over the live one).
+A merge and a restore take the lock every save-changing call takes (409 while a turn is generating). The dialog asks before each one, says what a
+merge cannot do ("only you know whether they are one person"), and a declined question changes nothing.
+
+**What it does not do.** It changes the registries only. The canon ledger under `<save>/canon/` is derived and keeps the old entities until it is
+rebuilt; the dialog says so and tells the author how (delete that folder, and the reader reads the story again). It does not rewrite the
+`[[type:slug]]` links the folds wrote into scene summaries and the arc (the tool counts them; they point at slugs that go away). A restore returns the
+whole registry file as it was at that stamp: an edit made since is in the backup the restore makes first, not in the restored file. Names are matched
+as the tool matches them (a title only listed as another entry's alias is not a match), so "Master X" and "X" are found only when one name's words are
+all inside the other's.
+
+**Why a button for the canon rebuild is not here.** A rebuild reads the whole story again with a local model, which can be hours of GPU on a long
+story; that is a decision to make on purpose, not one click away from a merge.
+
+**Tests.** `dedupe_api_test.py` (8 promises: the view, an explicit merge and its backup, every refusal writing nothing, auto, restore byte for byte
+and its own undo, what a restore will accept, the lock, an unknown save), smoke case 45 (the dialog: the lists, the confirmations, a declined one
+changing nothing, a cluster with the keeper's own box ticked, nothing ticked, a restore). 15 + 11 mutants broken in a copy of the repo; the API ones
+caught in the end (two first slipped through: a restore of a non-registry file, a folder that is not a stamp listed as a backup).

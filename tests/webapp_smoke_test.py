@@ -66,6 +66,8 @@ Asserts, once it can run:
 43) the RPG character sheet is a tab below 900px (it was hidden, so unreachable on a phone), side by side above it, and only for a
     story with mechanics; arrow keys switch tabs and widening the window shows both again
 44) the phone-width pass: every route and every play dialog at 375px has nothing off the right edge and nothing too small to tap
+45) the Duplicates dialog: same-name entries merge with one confirmed button, names that share words are a choice of who stays, a
+    declined question changes nothing, every merge makes a backup, and a backup restores
 """
 import json
 import os
@@ -2239,6 +2241,87 @@ with sync_playwright() as p:
         close_modal()
     page.set_viewport_size({"width": 1280, "height": 720})
     print("44) every route and dialog at 375px has nothing off the right edge and nothing too small to tap")
+
+    # 45) A4: the Duplicates dialog (D-065) over the merge tool of D-030 and D-038. Same-name entries merge with one confirmed button,
+    #     names that only share words are a choice of who stays and who is folded in, every merge is preceded by a backup, and a
+    #     backup can be restored.
+    from coderain.memory import Entry as DupEntry
+    dup_slug = c.post("/api/saves", json={"title": "Dup UI", "mode": "simple", "premise": "A harbour town."}).json()["slug"]
+    dup_store = server._engine(dup_slug).store
+    long_body = "Dame Vesper keeps the harbour light and a ledger of every debt owed to the ferry. " * 3
+    for t_, sl_, body_ in (("Bram Halloran", "bram-halloran", "The customs officer."), ("Bram Halloran", "bram-halloran-2", "Second entry."),
+                           ("Vesper", "vesper", "Short."), ("Dame Vesper", "dame-vesper", long_body), ("Vesper Ann-Marie", "vesper-ann-marie", "Given name.")):
+        dup_store.upsert_entry("characters.md", DupEntry(title=t_, slug=sl_, importance=3, body=body_))
+    dup_slugs = lambda: sorted(e.slug for e in dup_store.entries("characters.md"))      # noqa: E731
+    (Path(dup_store.dir) / "canon").mkdir(exist_ok=True)
+    page.evaluate(f"location.hash = '#play/{dup_slug}'")
+    page.wait_for_selector("#mem-btn", timeout=8000)
+    page.click("#mem-btn")
+    page.wait_for_selector("#mem-dups", timeout=6000)
+    page.click("#mem-dups")
+    page.wait_for_selector("#dup-auto", timeout=6000)
+    rows = page.evaluate("""() => ({same: [...document.querySelectorAll('.dup-row')].map(r => r.textContent.trim().replace(/\\s+/g, ' ')),
+        picks: [...document.querySelectorAll('.dup-cluster input[type=radio]')].map(r => [r.value, r.checked]),
+        folded: [...document.querySelectorAll('.dup-fold')].map(r => [r.value, r.checked]), backups: document.querySelectorAll('[data-restore]').length})""")
+    if len(rows["same"]) != 1 or "Bram Halloran" not in rows["same"][0] or "bram-halloran-2" not in rows["same"][0]:
+        failures.append(f"the same-name group is not listed: {rows['same']}")
+    if sorted(p_[0] for p_ in rows["picks"]) != ["dame-vesper", "vesper", "vesper-ann-marie"] or [p_[0] for p_ in rows["picks"] if p_[1]] != ["dame-vesper"]:
+        failures.append(f"the possible cluster does not offer the three entries with the longest preselected: {rows['picks']}")
+    if dict(rows["folded"]) != {"dame-vesper": False, "vesper": True, "vesper-ann-marie": True} or rows["backups"]:
+        failures.append(f"the fold ticks or the backups are wrong at the start: {rows}")
+    # merge the same-name group: it asks first, and Keep editing leaves everything as it was
+    page.click("#dup-auto")
+    page.wait_for_selector("#cm-yes", timeout=3000)
+    page.click("#cm-no")
+    page.wait_for_selector("#dup-auto", timeout=3000)
+    if len(dup_slugs()) != 5:
+        failures.append("declining the confirmation still merged something")
+    page.click("#dup-auto")
+    page.wait_for_selector("#cm-yes", timeout=3000)
+    page.click("#cm-yes")
+    page.wait_for_function("!document.querySelector('#dup-auto') && document.querySelectorAll('[data-restore]').length === 1", timeout=6000)
+    if dup_slugs() != ["bram-halloran", "dame-vesper", "vesper", "vesper-ann-marie"]:
+        failures.append(f"merging the same-name group changed {dup_slugs()}")
+    if "canon" not in page.inner_text("#modal-card").lower() or "rebuilt" not in page.inner_text("#modal-card"):
+        failures.append("the dialog does not say that the memory reader keeps the old names until it is rebuilt")
+    # nothing ticked is refused with a word, not a question
+    n_backups = page.evaluate("document.querySelectorAll('[data-restore]').length")
+    page.uncheck(".dup-fold[value='vesper']")
+    page.uncheck(".dup-fold[value='vesper-ann-marie']")
+    page.click("[data-merge='0']")
+    page.wait_for_timeout(400)
+    if page.locator("#cm-yes").count() or page.evaluate("document.querySelectorAll('[data-restore]').length") != n_backups or len(dup_slugs()) != 4:
+        failures.append("a merge with nothing ticked went ahead or asked a question")
+    # the cluster: untick one, tick the keeper's own box too (it is never folded into itself), the rest fold into the keeper
+    page.check(".dup-fold[value='vesper']")
+    page.check(".dup-fold[value='dame-vesper']")
+    # declining the question changes nothing, for a cluster as for the same-name group (a cluster is the author's call, so it is asked
+    # about most of all)
+    page.click("[data-merge='0']")
+    page.wait_for_selector("#cm-yes", timeout=3000)
+    page.click("#cm-no")
+    page.wait_for_selector("[data-merge='0']", timeout=3000)
+    if len(dup_slugs()) != 4 or page.evaluate("document.querySelectorAll('[data-restore]').length") != 1:
+        failures.append(f"declining the cluster merge still merged or backed up: {dup_slugs()}")
+    # the question repaints the dialog with the default ticks (everyone but the keeper), so choose again
+    page.uncheck(".dup-fold[value='vesper-ann-marie']")
+    page.check(".dup-fold[value='dame-vesper']")
+    page.click("[data-merge='0']")
+    page.wait_for_selector("#cm-yes", timeout=3000)
+    page.click("#cm-yes")
+    page.wait_for_function("document.querySelectorAll('[data-restore]').length === 2", timeout=6000)
+    if dup_slugs() != ["bram-halloran", "dame-vesper", "vesper-ann-marie"]:
+        failures.append(f"merging the ticked entries of a cluster changed {dup_slugs()}")
+    # restore the oldest backup: everything is back
+    oldest = page.locator("[data-restore]").last
+    oldest.click()
+    page.wait_for_selector("#cm-yes", timeout=3000)
+    page.click("#cm-yes")
+    page.wait_for_function("document.querySelectorAll('[data-restore]').length === 3", timeout=6000)
+    if len(dup_slugs()) != 5:
+        failures.append(f"restoring the first backup left {dup_slugs()}")
+    close_modal()
+    print("45) the Duplicates dialog merges same-name entries and chosen ones, asks first, backs up, and restores")
 
     browser.close()
 

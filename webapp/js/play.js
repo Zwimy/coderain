@@ -6,6 +6,7 @@ import {canonModal} from "./canon.js";
 import {attachFind} from "./find.js";
 import {createTurnMenu} from "./turnmenu.js";
 import {displayModal} from "./display.js";
+import {duplicatesModal} from "./duplicates.js";
 import {castModal} from "./cast.js";
 import {
   closeModal,
@@ -1110,6 +1111,7 @@ export async function renderPlay(slug) {
       <div id="mem-layer" class="muted"></div>
       <textarea id="mem-text" rows="14" spellcheck="false" aria-label="Contents of the chosen file"></textarea>
       <div class="modal-actions">
+        <button id="mem-dups" title="find the same person written under two names, and merge them">Duplicates…</button>
         <button id="mem-folds" title="review the scene summaries the folds wrote"
           >Recent folds…</button>
         <button id="mem-override" class="hidden"></button>
@@ -1117,6 +1119,7 @@ export async function renderPlay(slug) {
         <button id="mem-cancel">Close</button>
         <button class="primary" id="mem-save">Save</button>
       </div>`);
+    $("#mem-dups").addEventListener("click", () => duplicatesModal(slug));
     $("#mem-folds").addEventListener("click",
       () => foldReview(slug, {onDemand: true}));
 
