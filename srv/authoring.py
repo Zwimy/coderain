@@ -27,6 +27,7 @@ from .core import characters
 from .core import lib
 from .core import pieces_lib
 from .pieces import _declare_custom_type
+from .pieces import _refuse_clash
 from .pieces import _entry_dict
 from .pieces import _entry_from_dict
 from .pieces import _kind_to_rel
@@ -187,6 +188,7 @@ def scenario_insert_character(slug: str, body: dict):
         raise HTTPException(404, "no such character")
     store = _scen_store(slug)
     entry = entry_from_character(char)
+    _refuse_clash(store, "characters.md", entry)
     store.upsert_entry("characters.md", entry)
     return {"ok": True, "slug": entry.slug}
 
@@ -273,5 +275,6 @@ def scenario_insert_piece(slug: str, body: dict):
     if rel not in _piece_files(store):
         _declare_custom_type(slug, rel.removesuffix(".md"))
         store = _scen_store(slug)          # re-read the declaration
+    _refuse_clash(store, rel, entry)
     store.upsert_entry(rel, entry)
     return {"ok": True, "rel": rel, "slug": entry.slug}

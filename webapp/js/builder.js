@@ -1,6 +1,6 @@
 /* The world builder: premise, pieces, custom lore types.
    Shared by scenarios and by a save's own copy of its world. */
-import {$, api, chipInput, esc, guard, sse, toast, view} from "./util.js";
+import {$, api, chipInput, esc, guard, sse, toast, view, whileBusy} from "./util.js";
 import {CHIPS, TRAIT_HINT, TRAIT_LABEL, TRAIT_LIMIT, csv, fieldsFor, mergeFill, unmanaged} from "./pieceform.js";
 import {
   closeModal,
@@ -342,14 +342,15 @@ export async function renderBuilder(slug, scope = "scenario") {
         <div class="modal-actions"><button id="lib-cancel">Cancel</button></div>`);
       $("#lib-cancel").addEventListener("click", closeModal);
       modalCard.querySelectorAll("[data-lib]").forEach(card =>
-        card.addEventListener("click", async () => {
-          await api(isChar ? `${base}/from-library`
-                           : `${base}/from-piece-library`,
-                    {method: "POST", body: {id: card.dataset.lib}});
+        card.addEventListener("click", () => whileBusy(card, async () => {
+          const ok = await guard(() => api(isChar ? `${base}/from-library`
+                                                   : `${base}/from-piece-library`,
+                                           {method: "POST", body: {id: card.dataset.lib}}), "Couldn't add it");
+          if (ok === undefined) return;          // the picker stays open; the reason (often "already here") is in the toast
           closeModal();
           await saveMain();
           render();
-        }));
+        })));
     }));
 
   view.querySelectorAll("[data-exportsec]").forEach(b => b.addEventListener(
@@ -364,7 +365,7 @@ export async function renderBuilder(slug, scope = "scenario") {
       if (!await confirmModal(`Remove the '${rel.replace(".md", "")}' lore type? Its `
                    + "pieces are deleted with it.")) return;
       await saveMain();
-      await api(`${base}/types/${rel}`, {method: "DELETE"});
+      if (await guard(() => api(`${base}/types/${rel}`, {method: "DELETE"}), "Couldn't remove the lore type") === undefined) return;
       render();
     }));
 
@@ -430,7 +431,7 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
     <h1>${piece ? "Edit" : "New"} ${esc(kind)}</h1>
     <div class="row" style="align-items:flex-end">
       <div style="flex:2"><label>Title</label>
-        <input id="p-title" value="${esc(piece ? piece.title : "")}"></div>
+        <input id="p-title" maxlength="200" value="${esc(piece ? piece.title : "")}"></div>
       <div><button class="mini" id="p-seed" style="width:100%">✨ Seed from idea</button></div>
       <div><button class="mini" id="p-improve" style="width:100%"
         ${piece ? "" : "disabled"}>Improve with AI</button></div>
@@ -620,7 +621,7 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
   });
 
   $("#p-cancel").addEventListener("click", closeModal);
-  $("#p-save").addEventListener("click", async () => {
+  $("#p-save").addEventListener("click", ev => whileBusy(ev.currentTarget, async () => {
     const entry = collect();
     if (!entry.title) { toast("A piece needs a title."); return; }
     // Guarded: a 409 (turn generating) used to close nothing, save nothing and
@@ -634,7 +635,7 @@ export function pieceModal(slug, rel, piece, lib = null, base = null, vocab = nu
     if (ok === undefined) return;            // keep the form open
     closeModal();
     render();
-  });
+  }));
   const del = $("#p-delete");
   if (del) del.addEventListener("click", async () => {
     if (!await confirmModal(`Delete “${piece.title}”?`,

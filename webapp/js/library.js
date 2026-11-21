@@ -1,5 +1,5 @@
 /* The library view — stories, worlds, and user defaults. */
-import {$, api, esc, guard, toast, view} from "./util.js";
+import {$, api, esc, guard, toast, view, whileBusy} from "./util.js";
 import {closeModal, confirmModal, openModal, promptModal} from "./modal.js";
 import {render} from "./app.js";
 import {ideaWorldModal} from "./ideaworld.js";
@@ -65,11 +65,11 @@ export async function renderLibrary() {
       if (slug && watching) location.hash = `#world/${slug}`;
       else render();                    // not watching: just show the new card in the list
     }));
-  $("#new-world").addEventListener("click", async () => {
-    const out = await api("/api/scenarios",
-                          {method: "POST", body: {title: "Untitled World"}});
-    location.hash = `#world/${out.slug}`;
-  });
+  $("#new-world").addEventListener("click", ev => whileBusy(ev.currentTarget, async () => {
+    const out = await guard(() => api("/api/scenarios", {method: "POST", body: {title: "Untitled World"}}),
+                            "Couldn't create the world");
+    if (out) location.hash = `#world/${out.slug}`;
+  }));
   $("#import-save").addEventListener("click", () =>
     uploadFile("/api/saves-import", ".zip", () => render()));
   $("#import-world").addEventListener("click", () =>
@@ -90,8 +90,7 @@ export async function renderLibrary() {
         ev.stopPropagation();
         if (!await confirmModal("Delete this world? Existing stories keep their copy."))
           return;
-        await api(`/api/scenarios/${scen}`, {method: "DELETE"});
-        render();
+        if (await guard(() => api(`/api/scenarios/${scen}`, {method: "DELETE"}), "Couldn't delete the world") !== undefined) render();
       } else if (act === "edit-scen") {
         ev.stopPropagation();
         location.hash = `#world/${scen}`;
@@ -246,9 +245,11 @@ export function newSaveModal(data, preselect) {
   fillPlayAs();
   $("#ns-char").addEventListener("change", toggleNewChar);
   $("#ns-cancel").addEventListener("click", closeModal);
-  $("#ns-go").addEventListener("click", async () => {
+  $("#ns-go").addEventListener("click", ev => whileBusy(ev.currentTarget, async () => {
     const pick = $("#ns-char").value;
-    const out = await api("/api/saves", {method: "POST", body: {
+    // Guarded: a refusal (the world was deleted in another window, a turn is generating) used to be an unhandled rejection that
+    // left the dialog open and said nothing. Now the dialog stays, with what was typed, and the reason is in a toast.
+    const out = await guard(() => api("/api/saves", {method: "POST", body: {
       title: $("#ns-title").value.trim() || "Untitled",
       scenario: $("#ns-scenario").value,
       premise: $("#ns-premise").value.trim(),
@@ -262,10 +263,11 @@ export function newSaveModal(data, preselect) {
         phase: $("#ns-phase").value.trim(),
         note: $("#ns-cal").value.trim(),
       },
-    }});
+    }}), "Couldn't start the story");
+    if (!out) return;
     closeModal();
     location.hash = `#play/${out.slug}`;
-  });
+  }));
 }
 
 /* ---------- user defaults (own nav page) ---------- */

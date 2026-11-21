@@ -17,6 +17,7 @@ from .pieces import _declare_custom_type
 from .pieces import _entry_dict
 from .pieces import _entry_from_dict
 from .pieces import _piece_files
+from .pieces import _refuse_clash
 from .pieces import _scen_store
 
 router = APIRouter()
@@ -77,8 +78,9 @@ def scenario_piece_put(slug: str, rel: str, body: dict):
     if rel not in _piece_files(store):
         raise HTTPException(400, f"not a lore file of this world: {rel}")
     entry = _entry_from_dict(body.get("entry") or {})
-    store.upsert_entry(rel, entry)
     old = str(body.get("old_slug", "")).strip()
+    _refuse_clash(store, rel, entry, old)
+    store.upsert_entry(rel, entry)
     if old and old != entry.slug:
         store.remove_entry(rel, old)          # slug rename cleans the old one
     return {"ok": True, "slug": entry.slug}

@@ -1,5 +1,5 @@
 /* Saved characters and the reusable piece library. */
-import {$, api, esc, view} from "./util.js";
+import {$, api, esc, guard, toast, view, whileBusy} from "./util.js";
 import {closeModal, confirmModal, modalCard, openModal} from "./modal.js";
 import {KIND_REL, pieceModal} from "./builder.js";
 import {render} from "./app.js";
@@ -100,8 +100,7 @@ export async function renderCharacters() {
       if (act === "delete") {
         if (!await confirmModal(`Delete ${c.name}? Worlds already using them keep their copy.`))
           return;
-        await api(`/api/characters/${c.id}`, {method: "DELETE"});
-        render();
+        if (await guard(() => api(`/api/characters/${c.id}`, {method: "DELETE"}), "Couldn't delete the character") !== undefined) render();
       } else if (act === "edit" || !act) {
         charModal(data.stats, c);
       }
@@ -114,8 +113,7 @@ export async function renderCharacters() {
       if (act === "delete") {
         if (!await confirmModal(`Delete '${p.entry.title}' from the library? Worlds `
                      + "already using it keep their copy.")) return;
-        await api(`/api/library/${p.id}`, {method: "DELETE"});
-        render();
+        if (await guard(() => api(`/api/library/${p.id}`, {method: "DELETE"}), "Couldn't delete the piece") !== undefined) render();
       } else if (act === "edit" || !act) {
         pieceModal("", KIND_REL(p.type), p.entry, {id: p.id, type: p.type});
       }
@@ -182,7 +180,8 @@ export function charModal(statNames, c) {
       b.classList.toggle("on", b.dataset.v === kind));
   });
   $("#ch-cancel").addEventListener("click", closeModal);
-  $("#ch-save").addEventListener("click", async () => {
+  $("#ch-save").addEventListener("click", ev => whileBusy(ev.currentTarget, async () => {
+    if (!$("#ch-name").value.trim()) { toast("A character needs a name."); $("#ch-name").focus(); return; }
     const extra = {...(c?.extra || {})};
     extra.weight = $("#ch-weight").value;
     extra.triggers = $("#ch-triggers").value.trim();
@@ -201,8 +200,8 @@ export function charModal(statNames, c) {
     modalCard.querySelectorAll("[data-stat]").forEach(inp => {
       body.stats[inp.dataset.stat] = Number(inp.value);
     });
-    await api("/api/characters", {method: "POST", body});
+    if (await guard(() => api("/api/characters", {method: "POST", body}), "Couldn't save the character") === undefined) return;
     closeModal();
     render();
-  });
+  }));
 }

@@ -148,6 +148,17 @@ export async function guard(fn, what = "That didn't work") {
   catch (e) { toast(`${what}: ${e.message}`); return undefined; }
 }
 
+/* Run a button's action once at a time. A second click while the first is still in flight used to send the request again: two
+   stories, two "Untitled World"s, two characters, and (now that a piece may not take another's name) a spurious refusal after the
+   first save had worked. The button is disabled while it runs and comes back if it is still on the page (the action failed and
+   the dialog stayed open). */
+export async function whileBusy(btn, fn) {
+  if (!btn || btn.disabled) return undefined;
+  btn.disabled = true;
+  try { return await fn(); }
+  finally { if (btn.isConnected) btn.disabled = false; }
+}
+
 /* POST + read an SSE body (fetch streaming — EventSource can't POST).
    `signal` lets the caller abort a run (the Stop button). */
 export async function sse(path, body, on, signal) {

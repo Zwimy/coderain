@@ -109,7 +109,12 @@ def list_characters():
 
 @router.post("/api/characters")
 def save_character(body: dict):
-    return characters.save(body if isinstance(body, dict) else {})
+    data = body if isinstance(body, dict) else {}
+    # A blank name used to be saved as "Unnamed" without a word, so a sheet whose name was forgotten sat in the library under a name
+    # nobody typed. A piece asks for a title; a character asks for a name.
+    if not str(data.get("name") or "").strip():
+        raise HTTPException(400, "A character needs a name.")
+    return characters.save(data)
 
 
 @router.delete("/api/characters/{cid}")

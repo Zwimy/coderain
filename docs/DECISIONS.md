@@ -3051,3 +3051,60 @@ story; that is a decision to make on purpose, not one click away from a merge.
 and its own undo, what a restore will accept, the lock, an unknown save), smoke case 45 (the dialog: the lists, the confirmations, a declined one
 changing nothing, a cluster with the keeper's own box ticked, nothing ticked, a restore). 15 + 11 mutants broken in a copy of the repo; the API ones
 caught in the end (two first slipped through: a restore of a non-registry file, a folder that is not a stamp listed as a backup).
+
+
+## D-066: The creation flow, probed: nothing is overwritten, nothing fails silently, every button runs once
+
+**Why.** The plan's creation-flow polish (A6) started from a list of where creation breaks today, made by driving the creation routes with awkward
+input in a throwaway data directory and reading every creation button's handler. Each finding below is reachable from the app, not only from a
+hand-made request:
+- A NEW piece whose name made the slug of one already in the file REPLACED it, with no question and no way back: a second character called "Vesper"
+  (or "VESPER", or "Vesper!") wiped the first one's text. A rename onto another piece's name did the same (the renamed piece's text replaced the
+  other, then the old one was removed), and so did dropping the same library character or library piece into a world twice. Six routes wrote a
+  piece by `upsert_entry`; none looked first.
+- A new story naming a world, a character or a playable character that no longer existed (a picker left open while it was deleted in another
+  window) was made anyway, without them and without a word.
+- A title of a few hundred characters (a pasted paragraph) made a folder name the file system refuses: creating the world or the story was a 500.
+- "Begin" on a new story was an unguarded call: a refusal left the dialog open and said nothing (an unhandled rejection). The deletes of a world, a
+  character and a library piece, saving a character sheet, adding a library piece to a world and removing a lore type were the same.
+- A double click on Begin, New world, Save piece or Save character sent the request twice: two stories, two "Untitled World"s, two characters.
+- A character sheet with a blank name was saved as "Unnamed" without a word; a piece title had no length limit (5000 characters were stored and
+  written into the roster; a chapter title stops at 200 and a goal at 2000).
+
+**What it is.**
+- `_refuse_clash` (`srv/pieces.py`): the only slug a piece save may land on is the piece's own (`old_slug`). Anything else that is already in the file
+  is a 409 naming the existing piece ("There is already <name> in this world. Open that one to change it, or give this one another name."). All six
+  routes call it: the world's and the story's piece save, and the four library drops. A drop of the same library piece twice is refused too: it says
+  what is already there instead of doing nothing.
+- `POST /api/saves` looks up the world, the library character and the playable character BEFORE it makes anything, so a refusal leaves no folder
+  behind: 404 "That world is gone", 404 "no longer in your library", 400 "not in this world any more", 400 for a bad id.
+- `slugify_name` caps a folder name at 60 characters and never leaves a trailing dash; the uniqueness suffix comes on top, so two long titles that
+  share their first 60 characters stay distinct and openable. The title is kept whole.
+- `POST /api/characters` refuses a blank name (400); the dialog asks first. A piece title of more than 200 characters is a 400, and the title box has
+  `maxlength`.
+- `whileBusy(button, fn)` (`webapp/js/util.js`): a button runs its action once at a time and comes back if it is still on the page; every creation
+  button uses it and every call is under `guard`, so a refusal is a toast and the dialog stays with what was typed.
+
+**What it does not do (found, left, and why).**
+- Chapters were probed too and are well behaved: indexes are validated, blanks are ignored, titles and goals are bounded in the planner.
+- `{"title": null}` or `{"premise": null}` from a hand-made request becomes the text "None" (`str(None)`). The app always sends strings, so nothing in
+  it reaches this; a body-shape guard on the creation routes would be the fix if an API client appears.
+- An alias that equals another piece's title is accepted (two pieces then claim one name for recall). It is a warning at most, and the Duplicates
+  dialog (D-065) already finds the pair.
+- The reusable library keeps one record per save (ids), so "Save to library" twice makes two records and the same-name sheets are allowed. Nothing
+  is lost; a clean-up is a library feature, not a creation fix.
+- A piece body is unbounded (1 MB was accepted). The context budget decides how much of it is ever read, so it costs disk, not a turn.
+- The confirm-then-delete of a world a story was made from is correct (a story keeps its copy).
+- `_unique_slug` checks that a folder name is free and the create happens later, so two creates of the same title that arrive together can
+  land in ONE folder (the double click showed it: two requests, one world). The buttons no longer send two; two windows still could. The fix
+  is an atomic `mkdir` that retries with the next suffix. Not done: it is a window of milliseconds on a single-user local app.
+
+**Tests.** `creation_guards_test.py` (8 groups: no replace by a new piece, an edit in place still works, renames, the four drops in a world and in a
+story, a new story's references with no folder left behind, long titles, a character's name, a piece title's length), smoke cases 46 to 50 (a
+refused Begin is said and keeps its dialog and its text; a double click on Begin, New world, Save piece, Save character and a library drop makes one
+thing, with the request slowed so the second click lands while the first is in flight; a refused delete of a world and of a character; a library
+character already in the world is refused and the picker stays). 19 mutants of the server side and 12 of the buttons were broken in a copy of the repo and all went red in the end. Five single-flight
+mutants slipped through the first version of the double-click cases: they counted worlds and stories in the store, and two concurrent creates
+race to the same folder name, so one world appeared although two requests went out. The cases now count the writes the page sent. One more
+equivalent finding: the `btn.disabled` test inside `whileBusy` is redundant for a real button (the browser drops clicks on a disabled one), and
+only matters for a card, which is a div; the library-drop case is what pins it.

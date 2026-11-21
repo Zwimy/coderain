@@ -43,12 +43,31 @@ def _entry_dict(e: Entry) -> dict:
             "importance": e.importance, "attrs": e.attrs, "body": e.body}
 
 
+MAX_PIECE_TITLE = 200
+
+
+def _refuse_clash(store: MemoryStore, rel: str, entry: Entry, old: str = "") -> None:
+    """Saving a piece whose slug is already in the file REPLACES that piece: a new character called "Vesper" wiped the Vesper that was
+    there, and so did a rename onto an existing name, or the same library piece dropped in twice, with no question and no way back. The
+    only slug a save may land on is the piece's own (`old`, the slug it was opened with)."""
+    if entry.slug == old:
+        return
+    taken = next((e for e in store.entries(rel) if e.slug == entry.slug), None)
+    if taken is not None:
+        raise HTTPException(
+            409, f"There is already “{taken.title}” in this world. Open that one to change it, or give this one another name.")
+
+
 def _entry_from_dict(d: dict) -> Entry:
     from coderain.templates import slugify
     title = str(d.get("title", "")).strip()
     slug = slugify(str(d.get("slug", "")).strip() or title)
     if not title or not slug:
         raise HTTPException(400, "a piece needs at least a title")
+    # A title is a name, and it is written into the roster and the recall triggers. A pasted paragraph was accepted whole (a chapter title
+    # stops at 200 and a goal at 2000); say so instead of storing it.
+    if len(title) > MAX_PIECE_TITLE:
+        raise HTTPException(400, f"A title can be at most {MAX_PIECE_TITLE} characters. Put the rest in the description.")
     try:
         imp = max(1, min(5, int(d.get("importance", 3))))
     except (TypeError, ValueError):

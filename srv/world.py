@@ -24,6 +24,7 @@ from .pieces import _entry_dict
 from .pieces import _entry_from_dict
 from .pieces import _kind_to_rel
 from .pieces import _piece_files
+from .pieces import _refuse_clash
 from .pieces import _save_store
 
 router = APIRouter()
@@ -150,6 +151,7 @@ def save_world_piece_put(slug: str, rel: str, body: dict):
     entry = _entry_from_dict(body.get("entry") or {})
     old = str(body.get("old_slug", "")).strip()
     with _exclusive():                           # don't race a live turn's state write
+        _refuse_clash(store, rel, entry, old)
         store.upsert_entry(rel, entry)
         if old and old != entry.slug:
             store.remove_entry(rel, old)
@@ -202,6 +204,7 @@ def save_world_insert_character(slug: str, body: dict):
     store = _save_store(slug)
     entry = entry_from_character(char)
     with _exclusive():                           # don't race a live turn's state write
+        _refuse_clash(store, "characters.md", entry)
         store.upsert_entry("characters.md", entry)
     return {"ok": True, "slug": entry.slug}
 
@@ -218,5 +221,6 @@ def save_world_insert_piece(slug: str, body: dict):
         if rel not in _piece_files(store):
             _declare_type_in(lib.saves.dir(slug), "meta.json", rel.removesuffix(".md"))
             store = _save_store(slug)
+        _refuse_clash(store, rel, entry)
         store.upsert_entry(rel, entry)
     return {"ok": True, "rel": rel, "slug": entry.slug}

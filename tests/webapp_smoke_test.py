@@ -68,6 +68,10 @@ Asserts, once it can run:
 44) the phone-width pass: every route and every play dialog at 375px has nothing off the right edge and nothing too small to tap
 45) the Duplicates dialog: same-name entries merge with one confirmed button, names that share words are a choice of who stays, a
     declined question changes nothing, every merge makes a backup, and a backup restores
+46-48) the creation buttons: a refused new story says why and keeps its dialog, a double click on Begin / New world / Save makes one
+    thing, a piece cannot take another piece's name, and a character needs a name
+49) a refused delete of a world or a character says so in a toast and keeps the card
+50) a library character already in the world is refused with a reason and the picker stays open; a new one goes in once
 """
 import json
 import os
@@ -2322,6 +2326,203 @@ with sync_playwright() as p:
         failures.append(f"restoring the first backup left {dup_slugs()}")
     close_modal()
     print("45) the Duplicates dialog merges same-name entries and chosen ones, asks first, backs up, and restores")
+
+    # 46-48) The creation buttons (D-066). A refusal is said in a toast and the dialog stays with what was typed (the "Begin" of a new
+    #     story used to be an unguarded call: a world deleted in another window left the dialog open and silent), a double click makes
+    #     ONE thing (two stories, two "Untitled World"s, two characters before), and a piece may not take another piece's name.
+    # Slows the matching write by 600 ms so a second click lands while the first is in flight, and COUNTS the writes the page sent. The
+    # count is the evidence: two concurrent creates race to the same folder name on the server, so the store can show one world or
+    # one story although two requests went out (counting results let five broken buttons through).
+    slow_post_js = """(pat) => { const f = window.fetch.bind(window); window.__realFetch = window.fetch; window.__slowCalls = 0;
+        window.fetch = (u, o) => { const hit = typeof u === 'string' && new RegExp(pat).test(u) && o && (o.method === 'POST' || o.method === 'PUT');
+          if (hit) window.__slowCalls += 1;
+          return hit ? new Promise(r => setTimeout(r, 600)).then(() => f(u, o)) : f(u, o); }; }"""
+    clear_toast_js = "() => { const t = document.querySelector('#toast'); if (t) t.textContent = ''; }"
+    toast_js = "() => (document.querySelector('#toast') || {}).textContent || ''"
+
+    def saves_titled(title):
+        return sum(1 for x in c.get("/api/saves").json()["saves"] if x["title"] == title)
+
+    def worlds_titled(title):
+        return sum(1 for x in c.get("/api/saves").json()["scenarios"] if x["title"] == title)
+
+    # 46) New story: a refusal is said and the dialog stays; a double click begins one story
+    doomed = c.post("/api/scenarios", json={"title": "Doomed world", "premise": "A harbour."}).json()["slug"]
+    # An earlier case reloaded the page, which brings the first-run gate back on a box with no model; skip it as case 7 does.
+    page.evaluate("async () => { const nav = await import('/js/nav.js'); nav.invalidateReady(); nav.skipReadyCheck(); }")
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_selector("#new-save", timeout=8000)
+    page.click("#new-save")
+    page.wait_for_selector("#ns-go", timeout=4000)
+    page.select_option("#ns-scenario", doomed)
+    page.fill("#ns-title", "Refused story")
+    c.delete(f"/api/scenarios/{doomed}")                                     # deleted in another window while the dialog was open
+    errors_before = len(errors)
+    page.evaluate(clear_toast_js)
+    page.click("#ns-go")
+    try:
+        page.wait_for_function("(document.querySelector('#toast') || {}).textContent.includes('gone')", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append(f"a refused new story said nothing: toast={page.evaluate(toast_js)!r}")
+    if not page.locator("#ns-go").is_visible() or page.input_value("#ns-title") != "Refused story" or page.is_disabled("#ns-go"):
+        failures.append("a refused new story closed the dialog, lost what was typed, or left Begin disabled")
+    if saves_titled("Refused story") or len(errors) != errors_before:
+        failures.append(f"a refused new story made a story or raised an unhandled error: {saves_titled('Refused story')} {errors[errors_before:]}")
+    page.select_option("#ns-scenario", "")
+    page.fill("#ns-title", "Once only")
+    page.fill("#ns-premise", "A harbour town in winter.")
+    page.evaluate(slow_post_js, r"^/api/saves$")
+    page.dblclick("#ns-go")
+    page.wait_for_function("location.hash.startsWith('#play/')", timeout=8000)
+    page.wait_for_timeout(1200)                                              # a second request, if it was sent, has landed by now
+    sent = page.evaluate("window.__slowCalls")
+    page.evaluate("() => { window.fetch = window.__realFetch; }")
+    if sent != 1:
+        failures.append(f"a double click on Begin sent {sent} requests, not one")
+    if saves_titled("Once only") != 1:
+        failures.append(f"a double click on Begin made {saves_titled('Once only')} stories, not one")
+
+    # 47) New world: a double click makes one world
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_selector("#new-world", timeout=8000)
+    worlds_before = worlds_titled("Untitled World")
+    page.evaluate(slow_post_js, r"^/api/scenarios$")
+    page.dblclick("#new-world")
+    page.wait_for_function("location.hash.startsWith('#world/')", timeout=8000)
+    page.wait_for_timeout(1200)                                              # a second request, if it was sent, has landed by now
+    sent = page.evaluate("window.__slowCalls")
+    page.evaluate("() => { window.fetch = window.__realFetch; }")
+    if sent != 1:
+        failures.append(f"a double click on New world sent {sent} requests, not one")
+    if worlds_titled("Untitled World") != worlds_before + 1:
+        failures.append(f"a double click on New world made {worlds_titled('Untitled World') - worlds_before} worlds, not one")
+
+    # 48) A piece may not take another piece's name; Save runs once; a character needs a name
+    w48 = c.post("/api/scenarios", json={"title": "Names world", "premise": "A harbour."}).json()["slug"]
+    c.put(f"/api/scenarios/{w48}/pieces/characters.md", json={"entry": {"title": "Vesper", "body": "First."}})
+    page.evaluate(f"location.hash = '#world/{w48}'")
+    page.wait_for_selector("[data-newpiece='characters.md']", timeout=8000)
+    page.click("[data-newpiece='characters.md']")
+    page.wait_for_selector("#p-title", timeout=4000)
+    page.fill("#p-title", "Vesper")
+    errors_before = len(errors)
+    page.evaluate(clear_toast_js)
+    page.click("#p-save")
+    try:
+        page.wait_for_function("(document.querySelector('#toast') || {}).textContent.includes('There is already')", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append(f"a new piece with a taken name said nothing: toast={page.evaluate(toast_js)!r}")
+    if not page.locator("#p-title").is_visible() or page.input_value("#p-title") != "Vesper" or page.is_disabled("#p-save"):
+        failures.append("a refused piece closed its form, lost its title, or left Save disabled")
+    full48 = lambda: {e["slug"]: e["body"] for e in c.get(f"/api/scenarios/{w48}/full").json()["pieces"]["characters.md"]}   # noqa: E731
+    if full48() != {"vesper": "First."} or len(errors) != errors_before:
+        failures.append(f"a refused piece changed the piece that was there, or raised an error: {full48()} {errors[errors_before:]}")
+    page.fill("#p-title", "Mara")
+    page.evaluate(clear_toast_js)
+    page.evaluate(slow_post_js, r"/pieces/characters\.md$")
+    page.dblclick("#p-save")
+    page.wait_for_selector("#p-title", state="hidden", timeout=8000)
+    page.wait_for_timeout(1200)                                              # a second request, if it was sent, has landed by now
+    sent = page.evaluate("window.__slowCalls")
+    page.evaluate("() => { window.fetch = window.__realFetch; }")
+    if sent != 1:
+        failures.append(f"a double click on Save piece sent {sent} requests, not one")
+    if sorted(full48()) != ["mara", "vesper"] or "There is already" in page.evaluate(toast_js):
+        failures.append(f"a double click on Save made a second request that was refused or doubled: {sorted(full48())} {page.evaluate(toast_js)!r}")
+    # the character sheet in the library
+    page.evaluate("location.hash = '#characters'")
+    page.wait_for_selector("#new-piece", timeout=8000)
+    page.click("#new-piece")
+    page.wait_for_selector("#ch-name", timeout=4000)
+    n_chars = len(c.get("/api/characters").json()["characters"])
+    page.evaluate(clear_toast_js)
+    page.click("#ch-save")
+    try:
+        page.wait_for_function("(document.querySelector('#toast') || {}).textContent.includes('needs a name')", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append(f"a character with no name said nothing: toast={page.evaluate(toast_js)!r}")
+    if len(c.get("/api/characters").json()["characters"]) != n_chars or not page.locator("#ch-name").is_visible():
+        failures.append("a nameless character was saved, or its dialog closed")
+    page.fill("#ch-name", "Dbl Click")
+    page.evaluate(slow_post_js, r"^/api/characters$")
+    page.dblclick("#ch-save")
+    page.wait_for_selector("#ch-name", state="hidden", timeout=8000)
+    page.wait_for_timeout(1200)                                              # a second request, if it was sent, has landed by now
+    sent = page.evaluate("window.__slowCalls")
+    page.evaluate("() => { window.fetch = window.__realFetch; }")
+    if sent != 1:
+        failures.append(f"a double click on Save character sent {sent} requests, not one")
+    made = [x for x in c.get("/api/characters").json()["characters"] if x["name"] == "Dbl Click"]
+    if len(made) != 1:
+        failures.append(f"a double click on Save made {len(made)} characters, not one")
+    print("46-48) creation buttons: a refusal is said and the dialog stays, a double click makes one thing, a piece cannot take another's name")
+
+    # 49) A refused delete (here: a turn is generating, 409) is said in a toast and the card stays. The delete of a world, a character
+    #     and a library piece were unguarded calls: nothing was shown and the rejection went unhandled.
+    refuse_delete = lambda route: (route.fulfill(status=409, content_type="application/json", body='{"detail": "A turn is generating."}')   # noqa: E731
+                                   if route.request.method == "DELETE" else route.continue_())
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_selector(".card[data-scen] [data-act='delete-scen']", timeout=8000)
+    cards_before = page.locator(".card[data-scen]").count()
+    errors_before = len(errors)
+    page.route("**/api/scenarios/*", refuse_delete)
+    page.evaluate(clear_toast_js)
+    page.locator(".card[data-scen] [data-act='delete-scen']").first.click()
+    page.wait_for_selector("#cm-yes", timeout=3000)
+    page.click("#cm-yes")
+    try:
+        page.wait_for_function("(document.querySelector('#toast') || {}).textContent.includes(\"Couldn't delete the world\")", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append(f"a refused world delete said nothing: toast={page.evaluate(toast_js)!r}")
+    page.unroute("**/api/scenarios/*")
+    if page.locator(".card[data-scen]").count() != cards_before or len(errors) != errors_before:
+        failures.append(f"a refused world delete removed the card or raised an unhandled error: {errors[errors_before:]}")
+    page.evaluate("location.hash = '#characters'")
+    page.wait_for_selector(".card[data-id] [data-act='delete']", timeout=8000)
+    chars_before = page.locator(".card[data-id]").count()
+    page.route("**/api/characters/*", refuse_delete)
+    page.evaluate(clear_toast_js)
+    page.locator(".card[data-id] [data-act='delete']").first.click()
+    page.wait_for_selector("#cm-yes", timeout=3000)
+    page.click("#cm-yes")
+    try:
+        page.wait_for_function("(document.querySelector('#toast') || {}).textContent.includes(\"Couldn't delete the character\")", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append(f"a refused character delete said nothing: toast={page.evaluate(toast_js)!r}")
+    page.unroute("**/api/characters/*")
+    if page.locator(".card[data-id]").count() != chars_before or len(errors) != errors_before:
+        failures.append(f"a refused character delete removed the card or raised an unhandled error: {errors[errors_before:]}")
+    print("49) a refused delete of a world or a character says so and keeps the card")
+
+    # 50) Dropping a library character into a world that already has one of that name is said in a toast, keeps the picker open and
+    #     replaces nothing; a character that is new to the world goes in once even on a double click.
+    vlib = c.post("/api/characters", json={"name": "Vesper", "description": "From the library."}).json()["id"]
+    zlib = c.post("/api/characters", json={"name": "Zed Marrow", "description": "New to this world."}).json()["id"]
+    page.evaluate(f"location.hash = '#world/{w48}'")
+    page.wait_for_selector("[data-fromlib='characters.md']", timeout=8000)
+    page.click("[data-fromlib='characters.md']")
+    page.wait_for_selector(f"[data-lib='{vlib}']", timeout=4000)
+    errors_before = len(errors)
+    page.evaluate(clear_toast_js)
+    page.click(f"[data-lib='{vlib}']")
+    try:
+        page.wait_for_function("(document.querySelector('#toast') || {}).textContent.includes('There is already')", timeout=4000)
+    except Exception:  # noqa: BLE001
+        failures.append(f"dropping in a character that is already there said nothing: toast={page.evaluate(toast_js)!r}")
+    if not page.locator("#lib-cancel").is_visible() or full48().get("vesper") != "First." or len(errors) != errors_before:
+        failures.append(f"a refused library drop closed the picker, replaced the piece, or raised an error: {full48()} {errors[errors_before:]}")
+    page.evaluate(clear_toast_js)
+    page.evaluate(slow_post_js, r"/from-library$")
+    page.dblclick(f"[data-lib='{zlib}']")
+    page.wait_for_selector("#lib-cancel", state="hidden", timeout=8000)
+    page.wait_for_timeout(1200)                                              # a second request, if it was sent, has landed by now
+    sent = page.evaluate("window.__slowCalls")
+    page.evaluate("() => { window.fetch = window.__realFetch; }")
+    if sent != 1:
+        failures.append(f"a double click on a library drop sent {sent} requests, not one")
+    if sorted(full48()) != ["mara", "vesper", "zed-marrow"] or "There is already" in page.evaluate(toast_js):
+        failures.append(f"a double click on a library character did not add it exactly once: {sorted(full48())} {page.evaluate(toast_js)!r}")
+    print("50) a library character already in the world is refused with a reason and the picker stays; a new one goes in once")
 
     browser.close()
 

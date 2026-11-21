@@ -586,9 +586,13 @@ def slugify(text: str) -> str:
     return re.sub(r"-+", "-", "".join(out)).strip("-")
 
 
+FOLDER_NAME_MAX = 60
+
+
 def slugify_name(text: str) -> str:
-    """Slug for something that MUST have a name (a save or scenario folder)."""
-    return slugify(text) or "story"
+    """Slug for something that MUST have a name (a save or scenario folder). Capped: a folder is named after the title, and a title of a
+    few hundred characters (a pasted paragraph) made a name the file system refuses, so creating the story was a server error."""
+    return slugify(text)[:FOLDER_NAME_MAX].strip("-") or "story"
 
 
 def _write(path: Path, content: str) -> None:

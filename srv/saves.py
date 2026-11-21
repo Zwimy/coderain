@@ -19,6 +19,7 @@ from .core import _save_payload
 from .core import characters
 from .core import lib
 from .pieces import _save_store
+from .pieces import _scen_store
 
 router = APIRouter()
 
@@ -39,16 +40,32 @@ def create_save(body: dict):
     premise = str(body.get("premise", "")).strip()
     start_time = body.get("start_time") if isinstance(
         body.get("start_time"), dict) else None
-    slug = lib.saves.create(title, scenario, mode=mode, premise=premise,
-                            rpg_cfg=core._cfg.rpg, start_time=start_time)
+    # Everything the new story names is looked up BEFORE it is made. A world or a character that was deleted in another tab while this
+    # dialog was open used to be dropped without a word: the story began with no world, or with nobody to play, and said nothing.
     cid = str(body.get("character", "")).strip()
+    pslug = str(body.get("playable", "")).strip()
+    if scenario:
+        try:
+            scen_store = _scen_store(scenario)      # 400 for a bad id, 404 when that world is gone
+        except HTTPException as e:
+            if e.status_code != 404:
+                raise
+            raise HTTPException(404, "That world is gone (deleted in another window?). Pick a world again.")
+        if pslug and not any(e.slug == pslug for e in scen_store.entries("characters.md")):
+            raise HTTPException(400, "That character is not in this world any more. Pick who to play as again.")
+    elif pslug:
+        raise HTTPException(400, "A character of a world needs that world.")
+    char = None
     if cid:
         char = characters.get(cid)
-        if char:
-            apply_character(lib.saves.store(slug), char)
+        if not char:
+            raise HTTPException(404, "That character is no longer in your library. Pick who to play as again.")
+    slug = lib.saves.create(title, scenario, mode=mode, premise=premise,
+                            rpg_cfg=core._cfg.rpg, start_time=start_time)
+    if char:
+        apply_character(lib.saves.store(slug), char)
     # Play as one of the WORLD's playable characters (piece slug): the files
     # were just copied from the scenario, so resolve it in the save itself.
-    pslug = str(body.get("playable", "")).strip()
     if pslug:
         store = lib.saves.store(slug)
         entry = next((e for e in store.entries("characters.md")
