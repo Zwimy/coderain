@@ -2951,7 +2951,7 @@ not pinned and per person, the validator, unknown and ambiguous names, `state_va
 the route, the ledger, the refusal in the reader's own pass), smoke case 41 (the panel). 14 + 4 mutants of the engine side and 6 of the panel, all
 caught in the end.
 
-## D-063: A ties line at the tail of the prompt, after the player's action (built, off, not measured)
+## D-063: A ties line at the tail of the prompt, after the player's action (built, off, measured in D-067: no effect where the ties were already in the prompt)
 
 **Why.** The graph probe (D-058 to D-061) left a gap that retrieval does not close. With the evidence already in the Writer's prompt, a 4B Writer
 answered "who is her brother" or "who carries the key" wrongly a quarter to a third of the time (gemma3:4b with the pass on: 11 of 17 and 13 of 17
@@ -2986,7 +2986,7 @@ ties); no gain, or a loss of prose quality (a Writer that now recites ties) woul
 the echo filter), `soak_graph_probe_test.py` 5 (the flag, the row and the summary). 18 + 6 mutants broken in a copy of the repo, all caught in the end
 (two first slipped through: an item held by itself was unchecked, and a mutant that was equivalent until the check it duplicated got a test of its own).
 
-## D-064: A tic guard: the phrases the Writer keeps reusing, found by counting and said back (built, off, not measured)
+## D-064: A tic guard: the phrases the Writer keeps reusing, found by counting and said back (built, off, measured in D-067: it did not help and it hurt; leave it off)
 
 **Why.** A small local Writer feeds on its own recent replies: they are the longest thing in its prompt, so what it wrote last turn is what it writes
 this turn. D-055 counted 103 recurring eight-word runs in one 80-turn story, and D-034 saw the reply length grow the same way. The cure that costs no
@@ -3113,3 +3113,53 @@ mutants slipped through the first version of the double-click cases: they counte
 race to the same folder name, so one world appeared although two requests went out. The cases now count the writes the page sent. One more
 equivalent finding: the `btn.disabled` test inside `whileBusy` is redundant for a real button (the browser drops clicks on a disabled one), and
 only matters for a card, which is a div; the library-drop case is what pins it.
+
+
+## D-067: The graph probe with the ties line and the tic guard (measured 2026-11-21): neither helps; the tic guard hurts
+
+**What was run.** `python -m soak play --probe-set graph`, gemma3:4b as the Writer and the fold model, 120 turns, window 4, budget 5000, plain
+wording, facts stated, canon off: the settings of D-058 to D-061. Three arms on seeds 5 and 6, one at a time on the one GPU, about 25 minutes
+each (12 s a turn): the baseline (no flag, so the code path of D-061's "pass off"), `--tail-ties` (D-063) and `--tic-guard` (D-064). Six runs,
+`prompt_missing` 0 in all of them. Each seed is a different story from the others and the model samples, so an arm is compared with the baseline of
+its own seed and nothing here is a controlled trial: 24 one-hop, 10 two-hop, 10 recall and 10 leak probes an arm.
+
+| (two seeds pooled) | baseline | `--tail-ties` | `--tic-guard` |
+|---|---|---|---|
+| one-hop answered right | 19 of 24 | 19 of 24 | 16 of 24 |
+| two-hop answered right | 7 of 10 | 8 of 10 | 3 of 10 |
+| right, with the evidence in memory's part of the prompt | 25 of 33 | 26 of 32 | 18 of 33 |
+| relation and possession evidence in the prompt | 24 of 24 | 24 of 24 | 24 of 24 |
+| the secret reported when asked (recall) | 1 of 10 | 1 of 10 | 3 of 10 |
+| a secret said by someone who was not told (leak) | 0 of 10 | 1 of 10 | 0 of 10 |
+| repeated 8-grams, seed 5 / seed 6 | 0.183 / 0.000 | 0.002 / 0.008 | 0.218 / 0.075 |
+| words a turn, seed 5 / seed 6 | 191 / 117 | 189 / 161 | 139 / 106 |
+
+**The ties line (D-063).** No measurable effect, and the probe could not have shown one. The line says again, at the end of the prompt, the ties
+and holders the action and the last reply name. In this setting the evidence for a tie or a holder was already in the prompt every time (24 of 24
+in every arm: D-059's `merge_ties` keeps the ties through a fold), so the Writer's misses are faithfulness, not retrieval, which is what D-058
+and D-061 found. Right with the evidence present went 25 of 33 to 26 of 32. The case the line is for, a tie that has fallen out of the prompt,
+did not occur (right with the evidence absent: 1 of 1, 1 of 1, 0 of 1, 1 of 1 across arms and seeds). It stays off, unproven. A fair test needs a
+condition where ties drop out (a much smaller `--budget`, or a larger cast, or a longer story) and compares the right-when-absent rate. The repeat
+share fell from 0.183 to 0.002 on seed 5 and not on seed 6, and the baseline's own repeat share is 0.183 on one seed and 0.000 on the other, so
+that fall cannot be attributed to the line.
+
+**The tic guard (D-064): leave it off, and the finder needs a different idea before another try.** Answers got worse, not better: two-hop 7 to 3 of
+10 (3 to 2 on seed 5, 4 to 1 on seed 6), one-hop 19 to 16 of 24 (a drop on seed 6, none on seed 5), right with the evidence present 25 to 18 of 33,
+and the turns got shorter (191 to 139 words on seed 5). It did not reduce repetition either: the repeated-8-gram share went up on both seeds
+(0.183 to 0.218, 0.000 to 0.075). Replaying the finder over the real replies shows why it cannot work as built. It never raised (117 windows in each
+of three runs), and it found a "tic" in about 90% of the windows (103, 105 and 110 of 117), but what it names is the story's own nouns:
+"the mudlark boy", "the mooring lines", "the ferry deck". The names of characters and places are excluded; epithets, props and settings are not,
+and a story that returns to its harbour will say "the ferry deck" often because it is where the story is. Telling the Writer to say them another
+way or leave them out pushes it away from the very nouns the probes ask about, which is a likely (not measured) reason the answers fell. The finder
+would have to ignore every noun phrase the story's own files already hold (titles, aliases, places, items, the words of the premise) and look only
+at what the story did not introduce, and then be measured again. With 10 and 24 probes an arm the answer drop is a direction, not a proof; the
+repetition result is the plainer one, because the guard did not do the one thing it exists for.
+
+**Leak probes and witness metadata (the plan's next item): not justified at this scale.** Over the six runs a leak happened 1 time in 30. With the
+secret in the prompt: 1 leak in 17 questions, and the secret was reported when asked 5 times in 17 (29%). With it absent: 0 of 13. So the secret is
+usually not what the Writer says even when it is in front of it (faithfulness again), and a leak is rare. "Who witnessed what" metadata would
+guard against a failure that this Writer almost never makes in this probe. It stays an idea. What the probe cannot say is what a larger or hosted
+Writer does, since a model that follows the prompt better is the one more likely to repeat an exposed secret.
+
+**What this closes in the plan.** Part C's first item is done. Both flags stay off by default and no documentation recommends turning either
+on. The pronoun-attribution item was already measured and built behind a switch in D-035 (94% of 36 answers right, `identity_via_pronoun`, off).
