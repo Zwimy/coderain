@@ -806,10 +806,14 @@ export async function renderPlay(slug) {
     if (mine) { $("#stop").classList.remove("hidden"); $("#stop").disabled = false; }
     runEndHooks.add(async () => {
       if (!document.body.contains(transcript)) return;
+      // Repaint BEFORE the controls come back. They used to come back first, so for the length of one request Send was live
+      // over a transcript that still showed the half-finished exchange (a smoke case saw it about one run in ten). resync()
+      // swallows its own errors, so the controls are released either way.
+      if (mine) await resync();
+      if (!document.body.contains(transcript)) return;       // the reader left while it repainted
       stage.textContent = "";
       $("#stop")?.classList.add("hidden");
       setBusy(false);
-      if (mine) await resync();
     });
   }
 

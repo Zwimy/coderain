@@ -1242,6 +1242,11 @@ with sync_playwright() as p:
       stop: !document.querySelector('#stop').classList.contains('hidden'), sendOff: document.querySelector('#send').disabled})""")
     if "Still generating" not in back_in["stage"] or not back_in["stop"] or not back_in["sendOff"]:
         failures.append(f"coming back to a story whose swipe is generating: {back_in}")
+    # Make the repaint from the store slow (700 ms). The controls must not come back before it lands: with the old order Send
+    # was live over the stale transcript for exactly that long, and this case failed about one run in ten by timing alone.
+    page.evaluate("""() => { const f = window.fetch.bind(window); window.__realFetch = window.fetch;
+      window.fetch = (u, o) => (typeof u === 'string' && /^\\/api\\/saves\\/[^/]+$/.test(u) && (!o || !o.method || o.method === 'GET'))
+        ? new Promise(r => setTimeout(r, 700)).then(() => f(u, o)) : f(u, o); }""")
     page.click("#stop")
     try:
         page.wait_for_function("!document.querySelector('#send').disabled && document.querySelector('#stop').classList.contains('hidden')", timeout=10000)
@@ -1249,7 +1254,8 @@ with sync_playwright() as p:
         failures.append("the re-entered view never took over when the swipe ended: " + repr(page.evaluate(
             "({send: document.querySelector('#send').disabled, stage: document.querySelector('#stageline').textContent})")))
     if page.evaluate(tail_js)[-1] != "A third version, written by the swipe.":
-        failures.append(f"a swipe stopped from another visit lost the exchange: {page.evaluate(tail_js)}")
+        failures.append(f"a swipe stopped from another visit lost the exchange, or Send came back before the repaint: {page.evaluate(tail_js)}")
+    page.evaluate("() => { window.fetch = window.__realFetch; }")
     print("29) retry keeps the old text as a version; a failed, empty or stopped retry or swipe puts the exchange back and says so")
 
     browser.close()
