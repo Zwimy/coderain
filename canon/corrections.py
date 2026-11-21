@@ -26,7 +26,11 @@ Removing a line releases what it set: the value is retracted and the story may s
 replaced or retracted is not brought back, because the ledger no longer holds it as open; the story can state
 it again, and the history keeps it.
 
-Identity only (hair, eyes, build, age, marks, accessories): state changes every few turns and is the story's to say.
+Identity (hair, eyes, build, age, marks, accessories) can be set or marked wrong. State (outfit, held) can only be marked
+wrong: what someone wears or holds right now changes every few turns and is the story's to say, so a standing "equals" would
+fight the story, and `plan` remembers nothing, so it could not tell a correction from a change of clothes. What the author
+CAN say is that an item the reader filed is wrong (a garment another person wore, a thing that was only mentioned): it is
+taken off the list and not accepted again for that person, and the story's next real change of state is believed as ever.
 Standard library only, plus the rest of canon/.
 """
 from __future__ import annotations
@@ -36,13 +40,17 @@ from dataclasses import dataclass
 
 from canon.ledger import make_record
 from canon.state import Canon
-from canon.validate import _slugify, norm, same_value
+from canon.validate import _slugify, norm, same_item, same_value
 
 FILE = "corrections.md"
-SLOTS = ("hair", "eyes", "build", "age", "marks", "accessories")
+SLOTS = ("hair", "eyes", "build", "age", "marks", "accessories", "outfit", "held")
 _SLOT_WORDS = {"hair": "hair", "eyes": "eyes", "eye": "eyes", "build": "build", "age": "age",
                "marks": "marks", "mark": "marks", "accessories": "accessories", "accessory": "accessories",
-               "jewellery": "accessories", "jewelry": "accessories"}
+               "jewellery": "accessories", "jewelry": "accessories",
+               "outfit": "outfit", "wearing": "outfit", "worn": "outfit", "clothes": "outfit", "clothing": "outfit",
+               "held": "held", "holding": "held", "carrying": "held", "carried": "held"}
+# The state slots a correction may name, and the ledger slot each one is. They take "is not" only (see the docstring).
+STATE_SLOTS = {"outfit": "state.outfit", "held": "state.held"}
 # Slots that hold several items, one ledger slot each: a "=" line adds one, "is not" removes the matching one.
 LIST_SLOTS = ("marks", "accessories")
 MAX_VALUE = 80
@@ -60,8 +68,11 @@ Write each correction as a bullet line: a dash, the character, a colon, the slot
     Name: hair is not raven          that value is wrong: remove it, and do not accept it again
     Name: marks = scar on his chin   a mark to add (marks is a list; add one line per mark)
     Name: accessories = gold hairpins   an ornament worn (a list too; add one line per item)
+    Name: outfit is not red cloak    a garment filed by mistake: take it off, and do not accept it again
+    Name: held is not brass key      the same for something carried
 
-Slots: hair, eyes, build, age, marks, accessories. Anything that is not a bullet is ignored, so you can write notes.
+Slots: hair, eyes, build, age, marks, accessories, outfit, held. Outfit and held take "is not" only: what someone wears or
+holds right now is the story's to say. Anything that is not a bullet is ignored, so you can write notes.
 """
 
 _LINE = re.compile(
@@ -102,8 +113,10 @@ def parse(text: str) -> tuple[list[Correction], list[dict]]:
         who, slot = _clean(m.group("who")), _SLOT_WORDS.get(m.group("slot").lower())
         value = _clean(m.group("value").partition(" -- ")[0])       # " -- " starts a note
         op = "set" if m.group("eq") else "wrong"
-        why = ("unknown slot %r (use hair, eyes, build, age, marks or accessories)" % m.group("slot") if slot is None
+        why = ("unknown slot %r (use hair, eyes, build, age, marks, accessories, outfit or held)" % m.group("slot") if slot is None
                else "no character name" if not who or len(who) > MAX_WHO
+               else "outfit and held can only be marked wrong ('is not'): what someone wears or holds now is the story's to say"
+               if slot in STATE_SLOTS and op == "set"
                else "no value" if not value
                else f"the value is longer than {MAX_VALUE} characters" if len(value) > MAX_VALUE
                else "")
@@ -153,6 +166,15 @@ def _record(eid: str, slot: str, value, turn: int) -> dict:
                 turn=turn, span=SPAN)
 
 
+def _state_record(eid: str, slot: str, items: list[str], turn: int) -> dict:
+    """What taking items off a state list writes: the list that is left, or a clear when nothing is left. Author authority,
+    but state is latest wins, so the story's next real change is believed as ever (state.py)."""
+    if not items:
+        return dict(kind="state_cleared", entity=eid, slot=slot, value=None, authority="author", turn=turn, span=SPAN)
+    return dict(kind="item_moved" if slot == "state.held" else "state_set", entity=eid, slot=slot, value=list(items),
+                authority="author", turn=turn, span=SPAN)
+
+
 def plan(canon: Canon, corrections, *, turn: int) -> tuple[list[dict], list[dict]]:
     """(the ledger records still needed to put `canon` in line with the corrections, what could not be
     applied). Pure: nothing is written and nothing is remembered, so a canon that is already in line gets
@@ -161,12 +183,25 @@ def plan(canon: Canon, corrections, *, turn: int) -> tuple[list[dict], list[dict
     problems: list[dict] = []
     wanted: set[tuple[str, str]] = set()          # (entity, slot) a "=" line still asks for
     unsettled: set[str] = set()                   # characters a line names ambiguously: nothing of theirs is released
+    state_work: dict[tuple[str, str], list[str]] = {}    # (entity, state slot) -> the items left after every line so far
+    state_was: dict[tuple[str, str], list[str]] = {}
     for c in corrections:
         eid = canon.resolve(c.who)
         if eid is None:
             unsettled |= canon.named(c.who)
             problems.append({"line": c.line, "text": c.text()[:100],
                              "why": f"no single character is called {c.who!r} (yet)"})
+            continue
+        if c.slot in STATE_SLOTS:
+            # Taken off cumulatively: two lines about one list must not each start from the original and put back what the
+            # other removed. One record per list, written once, after every line has had its say.
+            if c.op == "wrong":
+                key = (eid, STATE_SLOTS[c.slot])
+                if key not in state_work:
+                    cur = canon.current(*key)
+                    state_was[key] = [cur] if isinstance(cur, str) else [str(x) for x in (cur or [])]
+                    state_work[key] = list(state_was[key])
+                state_work[key] = [it for it in state_work[key] if not same_item(it, c.value)]
             continue
         if c.op == "set":
             wanted.add((eid, f"identity.{c.slot}.{_slugify(c.value)}" if c.slot in LIST_SLOTS
@@ -190,6 +225,9 @@ def plan(canon: Canon, corrections, *, turn: int) -> tuple[list[dict], list[dict
                 out.append(_record(eid, slot, c.value, turn))
         elif cur is not None and same_value(str(cur), c.value):
             out.append(_record(eid, slot, None, turn))
+    for (eid, slot), left in state_work.items():
+        if left != state_was[(eid, slot)]:
+            out.append(_state_record(eid, slot, left, turn))
     # RELEASE. A value this file wrote earlier and no line asks for any more (the author removed the line, or
     # changed it to another slot) must not stay locked in: it is retracted, so the slot is empty again and the
     # story may say what it is. Only a value that carries this file's own provenance is ever released, so an
@@ -229,7 +267,7 @@ def refusals(canon: Canon, corrections) -> dict[tuple[str, str], list[str]]:
             continue
         eid = canon.resolve(c.who)
         if eid is not None:
-            out.setdefault((eid, f"identity.{c.slot}"), []).append(c.value)
+            out.setdefault((eid, STATE_SLOTS.get(c.slot) or f"identity.{c.slot}"), []).append(c.value)
     return out
 
 
@@ -249,6 +287,22 @@ def held_values(canon: Canon) -> list[dict]:
                          "by": iv.authority})
     rows.sort(key=lambda r: (r["who"].lower(), SLOTS.index(r["slot"]) if r["slot"] in SLOTS else 9,
                              str(r["value"])))
+    return rows
+
+
+def state_values(canon: Canon) -> list[dict]:
+    """What canon currently holds as worn and carried, one row per item, for a person to read before marking one wrong:
+    who, which list (outfit or held), the item, and since which turn."""
+    rows = []
+    for eid, e in canon.entities.items():
+        for key, slot in STATE_SLOTS.items():
+            iv = next(iter(reversed(canon.slots.get(eid, {}).get(slot, []))), None)
+            if iv is None or iv.end_id is not None:
+                continue
+            for item in ([iv.value] if isinstance(iv.value, str) else list(iv.value)):
+                rows.append({"who": e["name"], "slug": eid, "slot": key, "value": str(item),
+                             "since_turn": iv.start_turn, "by": iv.authority})
+    rows.sort(key=lambda r: (r["who"].lower(), SLOTS.index(r["slot"]), r["value"].lower()))
     return rows
 
 

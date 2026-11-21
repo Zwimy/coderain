@@ -284,6 +284,16 @@ def _find_item(items: list[str], value: str) -> int | None:
     return hits[0] if len(hits) == 1 else None
 
 
+def same_item(a: str, b: str) -> bool:
+    """Do two worn or held item phrases name the same thing? Equal, or every word of one is inside the other ("cloak" and
+    "red cloak"). Never by colour alone: same_value (made for hair and eye colours, and generous on purpose) calls "grey
+    coat" and "grey scarf" one thing because both say grey, which would let a correction about one remove the other."""
+    ta, tb = set(norm(a).split()) - _STOP, set(norm(b).split()) - _STOP
+    if not ta or not tb:
+        return norm(a) == norm(b)
+    return ta <= tb or tb <= ta
+
+
 def _absorbed(items: list[str], value: str) -> set[int]:
     """Indices of the items that `value` says everything of and more: every word of the item is in it.
 
@@ -581,8 +591,9 @@ def validate(canon: Canon, claims: list[Claim], prose: str, *, turn: int,
             d.reason = "gender_mismatch"              # a sentence about a woman is not about him
             continue
         d.entity = eid
+        match = same_item if c.slot.startswith("state.") else same_value      # a garment is not a colour
         if refused and c.op in ("set", "add") and any(
-                same_value(c.value, w) for w in refused.get((eid, c.slot), ())):
+                match(c.value, w) for w in refused.get((eid, c.slot), ())):
             d.reason = "author_refused"
             continue
         planned, skip = _plan(scratch, eid, c, turn, world_time)

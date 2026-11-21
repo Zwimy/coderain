@@ -59,6 +59,8 @@ Asserts, once it can run:
     switch; closing the dialog never asks to discard anything
 40) the builder's Improve with AI and Seed from idea each have a one-level Undo AI per field: it restores what the last answer
     replaced, is dropped when the author types, is not offered after a failed request, and is not shared between fields
+41) the Canon panel lists what each person wears and holds, under that person, with Wrong on each item and no Change, and
+    "It is this" waits while Wearing or Holding is chosen (state corrections, D-062)
 """
 import json
 import os
@@ -1913,6 +1915,61 @@ with sync_playwright() as p:
     page.unroute("**/api/assist")
     page.fill("#b-premise", real_premise)                          # leave the world as it was found
     print("40) the builder's AI assist has a one-level undo per field")
+
+    # --- A2: canon builds ---------------------------------------------------------------------------------------------
+    # 41) State corrections (D-062): the Canon panel lists what each person wears and holds, with a Wrong button on each item
+    #     and no Change (what someone wears now is the story's to say), and "It is this" waits while Wearing or Holding is
+    #     chosen. The server is stubbed: the reader is off in this suite, so there is nothing real to list.
+    canon_view = {"shadow": True, "inject": "off", "unread": 0, "card": "", "text": "", "corrections": [], "problems": [],
+                  "values": [{"who": "Odile Marsh", "slug": "odile", "slot": "hair", "value": "raven", "since_turn": 1,
+                              "confirmations": 1, "by": "narration"}],
+                  "state": [{"who": "Odile Marsh", "slug": "odile", "slot": "outfit", "value": "red cloak", "since_turn": 2, "by": "narration"},
+                            {"who": "Odile Marsh", "slug": "odile", "slot": "held", "value": "brass key", "since_turn": 3, "by": "narration"}]}
+    posted = []
+
+    def canon_stub(route):
+        req = route.request
+        if req.method == "POST":
+            posted.append(json.loads(req.post_data))
+            after = dict(canon_view, state=[x for x in canon_view["state"] if x["value"] != posted[-1]["value"]])
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(after))
+        else:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(canon_view))
+
+    page.route("**/api/saves/*/canon", canon_stub)
+    page.route("**/api/saves/*/canon/corrections", canon_stub)
+    # straight to the story: case 39 reloaded the page, which forgot "Look around first", so the Library would show the first-run screen
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#canon-btn", timeout=8000)
+    page.click("#canon-btn")
+    page.wait_for_selector(".cn-row[data-slot='outfit']", timeout=5000)
+    rows = page.evaluate("""() => [...document.querySelectorAll('.cn-row')].map(r => [r.dataset.slot, r.dataset.value,
+        [...r.querySelectorAll('button')].map(b => b.dataset.act), r.querySelector('.cn-slot').textContent.trim()])""")
+    by_slot = {r[0]: r for r in rows}
+    if set(by_slot) != {"hair", "outfit", "held"}:
+        failures.append(f"the Canon panel lists {sorted(by_slot)} for Odile, not hair, outfit and held")
+    elif by_slot["outfit"][2] != ["wrong"] or by_slot["held"][2] != ["wrong"] or by_slot["hair"][2] != ["wrong", "set"]:
+        failures.append(f"the buttons on the rows are {[(r[0], r[2]) for r in rows]}: a worn or held item may only be marked wrong")
+    elif (by_slot["outfit"][3], by_slot["held"][3]) != ("Wearing", "Holding"):
+        failures.append(f"the worn and held rows are labelled {by_slot['outfit'][3]!r} and {by_slot['held'][3]!r}")
+    if page.evaluate("document.querySelectorAll('.cn-char').length") != 1:
+        failures.append("the worn and held items are not under the same person as their looks")
+    page.select_option("#cn-slot", "outfit")
+    if not page.is_disabled("#cn-set") or page.is_hidden("#cn-state-hint"):
+        failures.append("'It is this' is available for Wearing (it can only be marked wrong), or the hint is missing")
+    page.select_option("#cn-slot", "hair")
+    if page.is_disabled("#cn-set") or page.is_visible("#cn-state-hint"):
+        failures.append("'It is this' stayed off after going back to Hair")
+    page.click(".cn-row[data-slot='outfit'] button[data-act='wrong']")
+    page.wait_for_function("!document.querySelector(\".cn-row[data-slot='outfit']\")", timeout=5000)
+    if posted != [{"who": "Odile Marsh", "slot": "outfit", "op": "wrong", "value": "red cloak"}]:
+        failures.append(f"Wrong on a worn item sent {posted}")
+    if not page.query_selector(".cn-row[data-slot='held']"):
+        failures.append("marking the outfit wrong dropped the held item from the panel")
+    page.unroute("**/api/saves/*/canon")
+    page.unroute("**/api/saves/*/canon/corrections")
+    close_modal()
+    print("41) the Canon panel lists worn and held items, marks them wrong (never sets them), and keeps them with their person")
 
     browser.close()
 

@@ -17,6 +17,8 @@ promise:
     and a correction added through POST shows at once and reaches the ledger on the reader's next pass; the
     file put back without that line (what the panel's Remove does) releases the value in the view at once and
     in the ledger at the next pass
+ 7) state (D-062): the view lists what is worn and carried; "wearing is not X" marks one wrong, shows at once and reaches the
+    ledger; "outfit = X" is refused by the route (400) and a file with such a line reports it by line
 """
 import json
 import os
@@ -47,7 +49,13 @@ class Stub:
         if "her raven hair" in user:
             claim = dict(entity="Odile Marsh", slot="identity.hair", op="set", value="raven",
                          evidence="her raven hair", confidence="high")
-            return json.dumps({"claims": [claim]})
+            coat = dict(entity="Odile Marsh", slot="state.outfit", op="add", value="grey coat",
+                        evidence="wore a grey coat", confidence="high")
+            return json.dumps({"claims": [claim, coat]})
+        if "wore a grey coat" in user:
+            coat = dict(entity="Odile Marsh", slot="state.outfit", op="add", value="grey coat",
+                        evidence="wore a grey coat", confidence="high")
+            return json.dumps({"claims": [coat]})
         return json.dumps({"claims": []})
 
 
@@ -66,6 +74,7 @@ def test_without_the_shadow():
     assert r.status_code == 200
     v = r.json()
     assert v["shadow"] is False and v["values"] == [] and v["text"] == "" and v["corrections"] == [], v
+    assert v["state"] == [], "the view has no state list even with the shadow off (the panel reads it)"
     r = c.put(f"/api/saves/{slug}/canon/corrections", json={"text": "- Odile: hair = raven\n"}).json()
     assert r["shadow"] is False and [x["who"] for x in r["corrections"]] == ["Odile"]
     print("1. with the shadow off the file can still be viewed, written and checked")
@@ -102,7 +111,9 @@ def test_post(slug, text):
                 {"who": "Od=ile", "slot": "hair", "op": "set", "value": "red"},
                 {"who": "Odile", "slot": "hair", "op": "set", "value": "red -- a note"},
                 {"who": "Odile", "slot": "hair", "op": "set", "value": ""},
-                {"who": "Odile", "slot": "hair", "op": "set", "value": "x" * 81}):
+                {"who": "Odile", "slot": "hair", "op": "set", "value": "x" * 81},
+                {"who": "Odile", "slot": "outfit", "op": "set", "value": "grey coat"},
+                {"who": "Odile", "slot": "holding", "op": "set", "value": "a lamp"}):
         r = c.post(url, json=bad)
         assert r.status_code == 400, (bad, r.status_code)
     assert disk(slug) == before, "a refused correction changed the file"
@@ -172,12 +183,38 @@ def test_with_the_shadow():
         r = c.post(f"/api/saves/{slug}/canon/corrections",
                    json={"who": "Nobody Here", "slot": "eyes", "op": "set", "value": "grey"}).json()
         assert any("Nobody Here" in p["why"] for p in r["problems"]), r["problems"]
+        # 7) state: worn and carried items are listed; marking one wrong shows at once and reaches the ledger
+        v = c.get(f"/api/saves/{slug}/canon").json()
+        worn = [(x["who"], x["slot"], x["value"]) for x in v["state"]]
+        assert ("Odile Marsh", "outfit", "grey coat") in worn, worn
+        r = c.post(f"/api/saves/{slug}/canon/corrections",
+                   json={"who": "Odile Marsh", "slot": "wearing", "op": "wrong", "value": "grey coat"})
+        assert r.status_code == 200, r.text
+        assert not any(x["slot"] == "outfit" for x in r.json()["state"]), "the view still shows the corrected item as worn"
+        assert "- Odile Marsh: outfit is not grey coat" in c.get(f"/api/saves/{slug}/canon").json()["text"]
+        sh.wait()
+        assert sh._store().canon.current("odile", "state.outfit") is None, "the state correction never reached the ledger"
+        # the story says it again: the reader's validator refuses the item the author called wrong
+        eng.store.append_turn("player", "I wait again.")
+        eng.store.append_turn("narrator", "Odile wore a grey coat again, and said nothing.")
+        sh.reconcile()
+        assert sh._store().canon.current("odile", "state.outfit") is None, "the reader put back an item the author called wrong"
+        # the correction line alone would take it off again at the end of the pass, so the END state cannot tell a refusal from
+        # a commit followed by a retraction; the pass's own row can (a refused item writes nothing)
+        rows = [json.loads(x) for x in (sh.dir / "rows.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        assert rows[-1]["reasons"].get("author_refused") == 1 and not rows[-1]["decisions"].get("commit"), rows[-1]
+        refused = c.post(f"/api/saves/{slug}/canon/corrections",
+                         json={"who": "Odile Marsh", "slot": "outfit", "op": "set", "value": "grey coat"})
+        assert refused.status_code == 400 and "wrong" in refused.text, (refused.status_code, refused.text)
+        r = c.put(f"/api/saves/{slug}/canon/corrections", json={"text": "- Odile Marsh: held = a lamp\n"}).json()
+        assert r["corrections"] == [] and "only be marked wrong" in r["problems"][0]["why"], r["problems"]
     finally:
         server.core._cfg.raw.pop("canon", None)
         server.core._engines.clear()
     print("6. with the shadow on, GET shows canon with the corrections applied and whose word each value is; "
           "a POST shows at once and reaches the ledger; removing the line (the panel's Remove) releases the "
           "value at once and in the ledger; an unknown character is reported")
+    print("7. state: the view lists worn items; 'wearing is not X' shows at once and reaches the ledger; '=' on state is refused")
 
 
 try:

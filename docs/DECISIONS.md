@@ -2880,3 +2880,47 @@ With the evidence in the prompt every time, it was right on 16 of 17 hops, again
 **Not run, and what would change this.** The look probe with the sheet stating the looks; llama3.1:8b with the pass off and on a second seed; a third control seed for the follow pass; a second transcript for the reader table (all four are one story). A seed where the pass-off run again misses the holder would be the only thing that moves the follow-pass default.
 
 **Tests.** No engine or probe code changed, so no tests were added. The runs are in the session scratchpad, not in the repo.
+
+## D-062: The author can say a worn or held item is wrong (state corrections, "is not" only)
+
+**Why.** D-028 let the author correct identity (hair, eyes, build, age, marks, accessories) and left state out on purpose: what someone wears or
+holds changes every few turns and is the story's to say. What it left unsolved is the item the reader filed by mistake, a garment another person
+wore or a thing that was only mentioned. It sits on the card and is sent to the Writer until the story happens to change it, and the author had
+no way to take it off. The Canon panel showed identity values only.
+
+**What changed.** `corrections.md` takes two more slots, `outfit` and `held` (also written wearing, worn, clothes, holding, carrying), and only with
+"is not": `- Odile: outfit is not red cloak`, `- Corin: held is not brass key`. A "=" on either is reported with its line and never applied.
+1. **Retraction.** `plan` takes every matching item off the person's list and writes the list that is left as one author record (`state_set` for
+   outfit, `item_moved` for held, `state_cleared` when nothing is left). Several lines about one list are applied together and written once: each line
+   starting from the original list would write back what the line before it took off.
+2. **Refusal.** The validator rejects the item as `author_refused` when the Scribe proposes it again, for that person and that list only.
+3. **Matching is by item.** `validate.same_item`: the words of one phrase are all inside the other ("cloak" takes off "red cloak"). Not by colour:
+   `same_value`, made for hair and eye colours and generous on purpose, calls "grey coat" and "grey scarf" one thing because both say grey. A synonym
+   is a different phrase ("scarlet cloak" is not "red cloak"); the author writes the other line.
+4. **The card** applies the correction itself, as for identity, so the item is not sent on the very next turn. The Canon panel lists each person's
+   worn and held items under their looks (`state_values`), a Wrong button on each, and no Change button; "It is this" waits while Wearing or Holding
+   is chosen.
+
+**Why not "=" for state.** Three reasons that point the same way. State is latest wins and narration may supersede anything (state.py), so an author
+value would be a starting state, not a fact. `plan` remembers nothing and is run after every turn, so a "=" line could not tell a correction from a
+change of clothes and would put the item back after every real change. And what someone wears is already in the author's hands: they can write it
+into the story. "Is not" has none of these problems: it is true once, and stays true.
+
+**What it does not do, and what it costs.**
+- The reader keeps proposing a refused item every time the story mentions it; each proposal is rejected and counted in the pass's row. The end state
+  alone cannot tell a refusal from an accepted item that the correction then retracted at the end of the pass, so the API test reads the row (a
+  mutant that stopped passing the refusals to the validator was missed until it did).
+- If the person really does wear the item later, the line has to be removed: the refusal keeps rejecting it and the correction keeps taking it off.
+  A correction that ends at a turn would be a new format.
+- Removing the line writes nothing and restores nothing: the retraction stays, and the story may say the item again from then on. The release of
+  "=" lines (D-028 call 7) only ever looks at identity slots.
+- Not measured on a real model or a real save; the tests use stub readers.
+
+**What would change it.** Authors who write "is not" lines and then find the same item back through a synonym often enough to want matching by
+meaning; a wish to say "he wears this now" (a one-shot action in the panel that is not kept in the file, not a correction); a correction that ends at
+a turn.
+
+**Tests.** `canon_state_corrections_test.py` (11 promises: the file, the list that is left, matching by item, several lines at once, idempotence, state
+not pinned and per person, the validator, unknown and ambiguous names, `state_values`, the card, removing a line), `canon_api_test.py` 7 (the view,
+the route, the ledger, the refusal in the reader's own pass), smoke case 41 (the panel). 14 + 4 mutants of the engine side and 6 of the panel, all
+caught in the end.

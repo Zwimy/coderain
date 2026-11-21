@@ -10,23 +10,25 @@
 import {$, api, esc, guard, toast} from "./util.js";
 import {closeModal, openModal, promptModal} from "./modal.js";
 
-const SLOTS = ["hair", "eyes", "build", "age", "marks", "accessories"];
-const LABEL = {hair: "Hair", eyes: "Eyes", build: "Build", age: "Age", marks: "Mark", accessories: "Accessory"};
+const SLOTS = ["hair", "eyes", "build", "age", "marks", "accessories", "outfit", "held"];
+const LABEL = {hair: "Hair", eyes: "Eyes", build: "Build", age: "Age", marks: "Mark", accessories: "Accessory",
+               outfit: "Wearing", held: "Holding"};
+// What someone wears or holds now is the story's to say (D-062): an item can be marked wrong, never set.
+const STATE = new Set(["outfit", "held"]);
 const INJECT = {
   off: "Nothing is sent to the writer. The reader only watches.",
   preview: "The card is built every turn but NOT sent. Read it below before turning it on.",
   on: "The card is sent to the writer with every turn.",
 };
 
-// Group the held values by person, keeping the order the server gave (people sorted, slots in order).
-function groups(values) {
-  const out = [];
-  for (const v of values) {
-    let g = out[out.length - 1];
-    if (!g || g.slug !== v.slug) { g = {slug: v.slug, who: v.who, rows: []}; out.push(g); }
-    g.rows.push(v);
+// Group what is held, and what is worn and carried, by person: people sorted by name, and each person's looks before their things.
+function groups(values, state) {
+  const bySlug = new Map();
+  for (const v of [...values, ...(state || [])]) {
+    if (!bySlug.has(v.slug)) bySlug.set(v.slug, {slug: v.slug, who: v.who, rows: []});
+    bySlug.get(v.slug).rows.push(v);
   }
-  return out;
+  return [...bySlug.values()].sort((a, b) => a.who.toLowerCase().localeCompare(b.who.toLowerCase()));
 }
 
 function row(v) {
@@ -40,7 +42,7 @@ function row(v) {
       <span class="cn-meta">${said}since turn ${v.since_turn}</span></span>
     <span class="cn-act">
       <button data-act="wrong" title="This is wrong: remove it and do not accept it again">Wrong</button>
-      <button data-act="set" title="Replace it with the value you give">Change</button>
+      ${STATE.has(v.slot) ? "" : `<button data-act="set" title="Replace it with the value you give">Change</button>`}
     </span>
   </div>`;
 }
@@ -57,8 +59,8 @@ function render(d) {
         <div><b>${d.corrections.length}</b><span>corrections</span></div>
       </div>
       <p class="hint">${esc(INJECT[d.inject] || INJECT.off)}</p>`;
-  const people = groups(d.values);
-  const names = [...new Set(d.values.map(v => v.who))];
+  const people = groups(d.values, d.state);
+  const names = [...new Set([...d.values, ...(d.state || [])].map(v => v.who))];
   const list = d.shadow && people.length
     ? `<input id="cn-filter" type="search" placeholder="Filter by name or value" aria-label="Filter what is held">
        <div id="cn-list">${people.map(g => `<div class="cn-char" data-name="${esc(g.who.toLowerCase())}">
@@ -86,10 +88,12 @@ function render(d) {
     <datalist id="cn-names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
     <div class="row"><button id="cn-set" class="primary">It is this</button>
       <button id="cn-wrong">It is not this</button></div>
+    <p class="hint" id="cn-state-hint" hidden>What someone wears or holds right now is the story's to say, so here you can only
+      say an item is not right.</p>
     ${mine}${bad}
     <details><summary>The file (corrections.md)</summary>
-      <p class="hint">One bullet per line, "- Name: hair = raven" or "- Name: hair is not raven". Anything
-        that is not a bullet is a note.</p>
+      <p class="hint">One bullet per line, "- Name: hair = raven" or "- Name: hair is not raven". Wearing and holding
+        take "is not" only: "- Name: outfit is not red cloak". Anything that is not a bullet is a note.</p>
       <textarea id="cn-text" rows="7" aria-label="corrections.md">${esc(d.text)}</textarea>
       <div class="row" style="margin-top:8px"><button id="cn-save">Save file</button></div></details>
     <details><summary>What the writer is told next (the last card)</summary>
@@ -149,6 +153,13 @@ export async function canonModal(slug) {
     };
     $("#cn-set").addEventListener("click", form("set"));
     $("#cn-wrong").addEventListener("click", form("wrong"));
+    // A worn or held item can only be marked wrong: "It is this" waits while one of those is chosen.
+    const syncSet = () => {
+      const state = STATE.has($("#cn-slot").value);
+      $("#cn-set").disabled = state;
+      $("#cn-state-hint").hidden = !state;
+    };
+    $("#cn-slot").addEventListener("change", syncSet);
     // The fields are not a <form>, so Enter does nothing by itself: make it submit "it is this".
     $("#cn-val").addEventListener("keydown", ev => {
       if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); form("set")(); }

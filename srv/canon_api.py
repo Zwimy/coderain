@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from canon.corrections import FILE, MAX_FILE, MAX_VALUE, MAX_WHO, SLOTS, add_line, describe, slot_word
+from canon.corrections import FILE, MAX_FILE, MAX_VALUE, MAX_WHO, SLOTS, STATE_SLOTS, add_line, describe, slot_word
 
 from .core import _engine
 
@@ -22,7 +22,7 @@ def _view(eng) -> dict:
     if sh is None:
         # Without the shadow nothing reads the story, but the file can still be written and checked;
         # it takes effect when canon.shadow is turned on.
-        return {"shadow": False, "inject": "off", "values": [], "unread": None, "card": "",
+        return {"shadow": False, "inject": "off", "values": [], "state": [], "unread": None, "card": "",
                 **describe(eng.store.read(FILE) or "")}
     return sh.view(eng.store.turns())
 
@@ -60,6 +60,8 @@ def canon_add(slug: str, body: dict):
         raise HTTPException(400, f"slot must be one of {', '.join(SLOTS)}")
     if op not in ("set", "wrong"):
         raise HTTPException(400, "op must be 'set' or 'wrong'")
+    if slot in STATE_SLOTS and op == "set":
+        raise HTTPException(400, "outfit and held can only be marked wrong: what someone wears or holds now is the story's to say")
     if not value or len(value) > MAX_VALUE:
         raise HTTPException(400, f"value must be 1 to {MAX_VALUE} characters")
     if ":" in who or "=" in who:

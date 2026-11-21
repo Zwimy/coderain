@@ -70,7 +70,7 @@ from pathlib import Path
 from canon import Store
 from canon.card import Card, Snapshot, build_card, content_hash, coverage
 from canon.corrections import FILE as CORRECTIONS_FILE
-from canon.corrections import apply_to, describe, held_values, parse as parse_corrections, plan as plan_corrections, refusals
+from canon.corrections import apply_to, describe, held_values, parse as parse_corrections, plan as plan_corrections, refusals, state_values
 from canon.ledger import LedgerCorrupt, LedgerError
 from canon.state import project
 from canon.pipeline import process_turn
@@ -362,7 +362,7 @@ class CanonShadow:
             text = ""
         corr, _ = parse_corrections(text)
         out = {"shadow": True, "inject": self.cfg.get("inject", "off"), **describe(text),
-               "values": [], "unread": None, "card": ""}
+               "values": [], "state": [], "unread": None, "card": ""}
         snap = self._snap or self._load_snapshot()
         if snap is not None:
             canon = project(snap.records)
@@ -370,6 +370,7 @@ class CanonShadow:
             _recs, unresolved = apply_to(canon, corr, turn=last)
             out["problems"] += unresolved
             out["values"] = held_values(canon)
+            out["state"] = state_values(canon)
             if turns is not None:
                 narr = {i: _hash(t["text"]) for i, t in enumerate(turns, 1) if t["role"] == "narrator"}
                 out["unread"] = coverage(snap, narr)[1]
