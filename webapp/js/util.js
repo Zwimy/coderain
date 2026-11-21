@@ -75,6 +75,24 @@ export function chipInput(host, opts = {}) {
           set: list => { values.splice(0, values.length, ...(list || [])); render(); }};
 }
 
+/* Put text on the clipboard. The async API needs a secure context (https or localhost); a story opened by a LAN address is not
+   one, so that case falls back to the old select-and-copy. Throws when neither works, so the caller can say so. */
+export async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.setAttribute("aria-hidden", "true");
+  box.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(box);
+  box.select();
+  const ok = document.execCommand("copy");
+  box.remove();
+  if (!ok) throw new Error("the browser refused to copy");
+}
+
 export async function api(path, opts = {}) {
   const r = await fetch(path, {
     headers: {"Content-Type": "application/json"},

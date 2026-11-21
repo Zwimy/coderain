@@ -1,12 +1,14 @@
 /* The play view: transcript, composer, sheet, book plan, context
    inspector, companion drawer. */
-import {$, api, esc, guard, renderProse, sse, toast, view} from "./util.js";
+import {$, api, copyText, esc, guard, renderProse, sse, toast, view} from "./util.js";
 import {watchLabels} from "./a11y.js";
 import {canonModal} from "./canon.js";
 import {attachFind} from "./find.js";
+import {createTurnMenu} from "./turnmenu.js";
 import {castModal} from "./cast.js";
 import {
   closeModal,
+  confirmModal,
   inlineConfirm,
   modalCard,
   openModal,
@@ -399,6 +401,7 @@ export async function renderPlay(slug) {
     pen.setAttribute("aria-label", role === "player" ? "Edit your action" : "Edit this reply");   // a bare ✎ is read as a pencil, and there is one per turn
     pen.addEventListener("click", () => startEdit(d));   // ST-03
     d.appendChild(pen);
+    d.appendChild(turnMenu.trigger(d));
     paint(d, text);
     transcript.appendChild(d);
     transcript.scrollTop = transcript.scrollHeight;
@@ -432,6 +435,36 @@ export async function renderPlay(slug) {
       paint(d, text); close();
     };
   };
+
+  // The per-turn menu (D-056 item 11). Branching is offered on a reply only: a fork that ends on the player's own action has no
+  // reply to continue from (D-006's snapshots are taken after a reply). Regenerating is offered on the last reply only, because
+  // an earlier one cannot be rewritten without rewriting everything after it.
+  const copyTurn = async d => {
+    try { await copyText(d._raw ?? bodyOf(d).textContent); toast("Copied.", "ok"); }
+    catch (_e) { toast("Couldn't copy. Select the text and copy it by hand."); }
+  };
+  const branchFrom = async d => {
+    const n = [...transcript.querySelectorAll(".turn")].indexOf(d) + 1;
+    if (!await confirmModal("Branch from here?",
+        "Copies the story up to this reply and opens the copy. This story stays as it is.", "Branch")) return;
+    const out = await guard(() => api(`/api/saves/${slug}/branch`, {method: "POST", body: {turn: n}}), "Couldn't branch");
+    if (!out) return;
+    if (out.warnings && out.warnings.length) toast(out.warnings.join("\n"));
+    location.hash = `#play/${out.slug}`;
+  };
+  const turnMenu = createTurnMenu({transcript, itemsFor: d => {
+    const reply = d.classList.contains("narrator");
+    const wait = "Wait for the reply to finish.";
+    const items = [
+      {label: "Edit", run: () => startEdit(d), disabled: busy, why: wait},
+      {label: "Copy text", run: () => copyTurn(d)},
+    ];
+    if (reply) items.push({label: "Branch from here", run: () => branchFrom(d), disabled: busy, why: wait});
+    if (reply && d === lastNarrator()) {
+      items.push({label: "Regenerate this reply", run: () => $("#retry").click(), disabled: busy, why: wait});
+    }
+    return items;
+  }});
 
   // ST-02: swipe control on the last narrator turn
   const renderSwipeBar = () => {
@@ -1016,7 +1049,7 @@ export async function renderPlay(slug) {
     try {
       const out = await api(`/api/saves/${slug}/branch`,
                             {method: "POST", body: {turn: Number(n)}});
-      if (out.warnings.length) toast(out.warnings.join("\n"));
+      if (out.warnings && out.warnings.length) toast(out.warnings.join("\n"));
       location.hash = `#play/${out.slug}`;
     } catch (e) { toast(e.message); }
   });

@@ -199,6 +199,25 @@ mark.find-hit.current { background: var(--player); color: #1a1200; outline: 2px 
 }
 .turn:hover .turn-edit { opacity: .7; }
 .turn-edit:hover { opacity: 1; color: var(--accent); }
+/* the per-turn menu button sits beside the pen; the menu itself is on <body> (nothing may be added to #transcript) */
+.turn-more {
+  position: absolute; top: -2px; right: 46px; opacity: 0;
+  background: none; border: 0; color: var(--dim); font-size: 15px; line-height: 1;
+  padding: 2px 6px; cursor: pointer; transition: opacity .12s;
+}
+.turn:hover .turn-more { opacity: .7; }
+.turn-more:hover { opacity: 1; color: var(--accent); }
+.turn-menu {
+  position: fixed; z-index: 70; min-width: 200px; padding: 4px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .5);
+}
+.turn-menu button {
+  display: block; width: 100%; text-align: left; border: 0; background: none;
+  padding: 8px 12px; border-radius: 6px; font-size: 14px; color: var(--text); cursor: pointer;
+}
+.turn-menu button:hover:not([disabled]), .turn-menu button:focus-visible { background: var(--accent-dim); color: var(--text); outline: none; }
+.turn-menu button[disabled] { opacity: .45; cursor: default; }
 .turn-editor {
   width: 100%; min-height: 90px; margin-top: 4px; font-family: var(--serif);
   font-size: 15px; resize: vertical;
@@ -408,8 +427,8 @@ details.howto p { color: var(--text); line-height: 1.55; }
 
 /* The edit pencil was opacity:0 until hover — invisible on touch, where there
    is no hover at all. Keep it faint but always present. */
-.turn-edit { opacity: .35; }
-.turn:hover .turn-edit, .turn-edit:focus-visible { opacity: 1; }
+.turn-edit, .turn-more { opacity: .35; }
+.turn:hover .turn-edit, .turn-edit:focus-visible, .turn:hover .turn-more, .turn-more:focus-visible { opacity: 1; }
 
 /* WCAG 2.3.3 / 2.2.2: the full-screen rain is auto-updating motion. Honour the
    OS setting; a Settings toggle sets data-motion="off" for everyone else. */

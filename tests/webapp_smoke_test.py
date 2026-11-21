@@ -52,6 +52,9 @@ Asserts, once it can run:
 36) "Export text" downloads the story as readable Markdown (the title, "You:" quotes and the narration, no transcript markers)
 37) find in the story: highlights inside the turns, a count, Enter and Shift+Enter step and wrap, a new turn is searched, typed text
     is literal, Escape closes and returns focus, and the turns and their text nodes are exactly as they were
+38) the per-turn menu: a button at each turn and a touch long press open Edit, Copy text, Branch from here (replies only) and
+    Regenerate (the last reply only); keyboard, focus return, copy and a branch that holds exactly the turns up to that reply,
+    a branch reply with no warnings list does not throw, and the items that change the story wait while a reply is written
 """
 import json
 import os
@@ -1575,6 +1578,196 @@ with sync_playwright() as p:
     if len(errors) != errors_before:
         failures.append(f"find threw: {errors[errors_before:]}")
     print("37) find in the story highlights, counts, steps, searches new turns and leaves the turns untouched")
+
+    # --- D-056 item 11: the per-turn menu ---------------------------------------------------------------------------
+    # 38) Edit, Copy, Branch from here and Regenerate in one menu on a "..." button at each turn, and on a long press of a touch
+    #     screen. The menu is on <body>, not in #transcript (the pen and retry address a turn by its position there).
+    server._engine(slug).store.append_turn("narrator", "She says *hush* and **runs**.")
+    page.evaluate("location.hash = '#library'")                          # leave and come back, so the page reads the new turn
+    page.wait_for_selector(f".card[data-slug='{slug}']", timeout=8000)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    page.wait_for_function("document.querySelectorAll('#transcript .turn').length > 3", timeout=8000)
+    triggers = page.evaluate("""() => [...document.querySelectorAll('#transcript .turn')].map(t => { const b = t.querySelector('.turn-more');
+        return [t.classList.contains('player'), b && b.getAttribute('aria-label'), b && b.getAttribute('aria-haspopup'),
+                b && b.getAttribute('aria-expanded')]; })""")
+    bad = [t for t in triggers if not t[1] or t[2] != "menu" or t[3] != "false"
+           or t[1] != ("More for your action" if t[0] else "More for this reply")]
+    if bad:
+        failures.append(f"turns without a proper menu button: {bad[:3]}")
+    items_js = "[...document.querySelectorAll('.turn-menu [role=menuitem]')].map(b => b.textContent.trim())"
+    focus_js = "document.activeElement && document.activeElement.textContent.trim()"
+    narrators = page.locator("#transcript .turn.narrator")
+    first_reply = narrators.first
+    first_reply.locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    if not page.evaluate("document.querySelector('.turn-menu').parentElement === document.body"):
+        failures.append("the turn menu was put inside the page's own turn list")
+    if page.evaluate(items_js) != ["Edit", "Copy text", "Branch from here"]:
+        failures.append(f"an earlier reply offers {page.evaluate(items_js)}, not Edit, Copy text and Branch from here")
+    if page.evaluate(focus_js) != "Edit" or first_reply.locator(".turn-more").get_attribute("aria-expanded") != "true":
+        failures.append(f"opening the menu did not focus its first item (focus on {page.evaluate(focus_js)!r})")
+    page.keyboard.press("ArrowDown")
+    down = page.evaluate(focus_js)
+    page.keyboard.press("End")
+    end = page.evaluate(focus_js)
+    page.keyboard.press("Home")
+    home = page.evaluate(focus_js)
+    if (down, end, home) != ("Copy text", "Branch from here", "Edit"):
+        failures.append(f"arrow, End and Home keys moved focus to {(down, end, home)}")
+    page.keyboard.press("Escape")
+    if page.locator(".turn-menu").count() or first_reply.locator(".turn-more").get_attribute("aria-expanded") != "false":
+        failures.append("Escape did not close the turn menu")
+    if not page.evaluate("document.activeElement.classList.contains('turn-more')"):
+        failures.append("closing the turn menu with Escape did not return focus to its button")
+    # a player's action: no branch (a fork would end on an action with no reply), no regenerate
+    page.locator("#transcript .turn.player").first.locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    if page.evaluate(items_js) != ["Edit", "Copy text"]:
+        failures.append(f"a player turn offers {page.evaluate(items_js)}, not Edit and Copy text")
+    page.mouse.click(3, 300)                                           # a click anywhere else closes it
+    if page.locator(".turn-menu").count():
+        failures.append("a click outside did not close the turn menu")
+    page.locator("#transcript .turn.player").first.locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    page.keyboard.press("Tab")                                         # Tab leaves the menu: it closes and focus moves on
+    if page.locator(".turn-menu").count():
+        failures.append("Tab did not close the turn menu")
+    # the last reply also offers Regenerate; an earlier one does not
+    narrators.last.locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    if page.evaluate(items_js) != ["Edit", "Copy text", "Branch from here", "Regenerate this reply"]:
+        failures.append(f"the last reply offers {page.evaluate(items_js)}")
+    page.keyboard.press("Escape")
+    # Copy puts the turn's own text on the clipboard and says so
+    page.evaluate("""() => { window.__copied = null; Object.defineProperty(navigator, 'clipboard',
+        {value: {writeText: async t => { window.__copied = t; }}, configurable: true}); }""")
+    want = page.evaluate("[...document.querySelectorAll('#transcript .turn.narrator')].pop()._raw")
+    if want != "She says *hush* and **runs**.":
+        failures.append(f"the last reply's raw text is {want!r}")
+    narrators.last.locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    page.click(".turn-menu button:has-text('Copy text')")
+    page.wait_for_function("window.__copied !== null", timeout=3000)
+    if page.evaluate("window.__copied") != want or not want:
+        failures.append(f"Copy text copied {page.evaluate('window.__copied')!r}, not the turn's own text {want!r} (the markdown, not what is on screen)")
+    if "Copied" not in page.evaluate("(document.querySelector('#toast') || {}).textContent || ''") or page.locator(".turn-menu").count():
+        failures.append("Copy text did not say it copied, or left the menu open")
+    # Edit opens the editor on that turn
+    first_reply.locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    page.click(".turn-menu button:has-text('Edit')")
+    page.wait_for_selector("#transcript .turn-editor", timeout=3000)
+    if page.input_value("#transcript .turn-editor") != page.evaluate("document.querySelector('#transcript .turn.narrator')._raw"):
+        failures.append("Edit from the menu did not open the editor on this turn's text")
+    page.click("#transcript .turn-editbar .cx")
+    # Branch from here forks the story at that reply: the copy holds exactly the turns up to it
+    n_turns = page.evaluate("[...document.querySelectorAll('#transcript .turn')].indexOf(document.querySelectorAll('#transcript .turn.narrator')[1]) + 1")
+    second_reply = narrators.nth(1)
+    second_reply.locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    page.click(".turn-menu button:has-text('Branch from here')")
+    page.wait_for_selector("#cm-yes", timeout=3000)
+    page.click("#cm-yes")
+    page.wait_for_function(f"location.hash.startsWith('#play/') && location.hash !== '#play/{slug}'", timeout=10000)
+    forked = page.evaluate("location.hash.slice(6)")
+    fork_turns = len(c.get(f"/api/saves/{forked}").json()["turns"])
+    if fork_turns != n_turns:
+        failures.append(f"Branch from here made a copy with {fork_turns} turns, not the {n_turns} up to that reply")
+    page.wait_for_selector("#action", timeout=8000)
+    c.delete(f"/api/saves/{forked}")
+    # a menu left open when the reader goes to another page does not follow them there
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_function("document.querySelectorAll('#transcript .turn').length > 3", timeout=8000)
+    page.locator("#transcript .turn.narrator").nth(1).locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_selector(f".card[data-slug='{slug}']", timeout=8000)
+    if page.locator(".turn-menu").count():
+        failures.append("a turn menu stayed on screen after the reader left the story")
+    # a reply without a "warnings" list (the old button read out.warnings.length unguarded and the failure was swallowed into a
+    # toast) must still take the reader to the copy, from either button
+    target = c.post("/api/saves", json={"title": "Branch Target", "mode": "simple", "premise": "x"}).json()["slug"]
+    errors_before = len(errors)
+    page.route("**/api/saves/*/branch", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"slug": target})))
+    for how in ("the Branch button", "the turn menu"):
+        page.evaluate(f"location.hash = '#play/{slug}'")
+        page.wait_for_selector("#action", timeout=8000)
+        page.wait_for_function("document.querySelectorAll('#transcript .turn').length > 3", timeout=8000)
+        if how == "the Branch button":
+            page.click("#branch")
+            page.wait_for_selector("#pm-v", timeout=4000)
+            page.fill("#pm-v", "2")
+            page.click("#pm-yes")
+        else:
+            page.locator("#transcript .turn.narrator").nth(1).locator(".turn-more").click()
+            page.wait_for_selector(".turn-menu", timeout=3000)
+            page.click(".turn-menu button:has-text('Branch from here')")
+            page.wait_for_selector("#cm-yes", timeout=3000)
+            page.click("#cm-yes")
+        try:
+            page.wait_for_function(f"location.hash === '#play/{target}'", timeout=4000)
+        except Exception:  # noqa: BLE001
+            failures.append(f"a branch reply with no warnings list did not open the copy from {how}: "
+                            + repr(page.evaluate("[location.hash, (document.querySelector('#toast') || {}).textContent]")))
+    page.unroute("**/api/saves/*/branch")
+    if len(errors) != errors_before:
+        failures.append(f"a branch reply with no warnings list threw: {errors[errors_before:]}")
+    c.delete(f"/api/saves/{target}")
+    # a long press on a touch screen opens the menu; a short touch, a moving finger and a mouse do not
+    page.evaluate(f"location.hash = '#library'")
+    page.wait_for_selector(f".card[data-slug='{slug}']", timeout=8000)
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    page.wait_for_function("document.querySelectorAll('#transcript .turn').length > 3", timeout=8000)
+    fire_js = """([type, kind, dx]) => { const b = document.querySelectorAll('#transcript .turn.narrator .turn-body')[0];
+        const r = b.getBoundingClientRect();
+        b.dispatchEvent(new PointerEvent(type, {pointerType: kind, bubbles: true, isPrimary: true, pointerId: 9,
+                                                clientX: r.left + 20 + dx, clientY: r.top + 10})); }"""
+    page.evaluate(fire_js, ["pointerdown", "touch", 0])
+    page.wait_for_timeout(900)
+    held_open = page.locator(".turn-menu").count()
+    if held_open != 1:
+        failures.append("a long press on a touch screen did not open the turn menu")
+    page.keyboard.press("Escape")
+    page.evaluate(fire_js, ["pointerdown", "touch", 0])
+    page.wait_for_timeout(200)
+    page.evaluate(fire_js, ["pointerup", "touch", 0])
+    page.wait_for_timeout(700)
+    page.evaluate(fire_js, ["pointerdown", "touch", 0])
+    page.evaluate(fire_js, ["pointermove", "touch", 40])
+    page.wait_for_timeout(800)
+    page.evaluate(fire_js, ["pointerdown", "mouse", 0])
+    page.wait_for_timeout(800)
+    if page.locator(".turn-menu").count():
+        failures.append("a short touch, a moving finger or a held mouse button opened the turn menu")
+    # while a reply is being written, Edit, Branch and Regenerate wait; Copy does not
+    held_turn38 = []
+    page.route("**/api/saves/*/turn", lambda route: held_turn38.append(route))
+
+    def answer_cancel38(route):
+        route.fulfill(status=200, content_type="application/json", body="{}")
+        for h in held_turn38:
+            h.fulfill(status=200, content_type="text/event-stream",
+                      body='data: {"t": "error", "code": "aborted", "text": "You stopped this turn."}\n\n')
+
+    page.route("**/api/saves/*/cancel", answer_cancel38)
+    page.fill("#action", "I wait.")
+    page.keyboard.press("Enter")
+    page.wait_for_function("!document.querySelector('#stop').classList.contains('hidden')", timeout=6000)
+    wait_until_held(page, held_turn38, "turn")
+    page.locator("#transcript .turn.narrator").nth(1).locator(".turn-more").click()
+    page.wait_for_selector(".turn-menu", timeout=3000)
+    state = page.evaluate("[...document.querySelectorAll('.turn-menu [role=menuitem]')].map(b => [b.textContent.trim(), b.disabled])")
+    if state != [["Edit", True], ["Copy text", False], ["Branch from here", True]]:
+        failures.append(f"while a reply is being written the menu is {state}")
+    page.keyboard.press("Escape")
+    page.click("#stop")
+    page.wait_for_selector(".turn-note", timeout=8000)
+    page.unroute("**/api/saves/*/turn")
+    page.unroute("**/api/saves/*/cancel")
+    print("38) the per-turn menu: edit, copy, branch from here, regenerate; keyboard, long press, and waiting while a reply is written")
 
     browser.close()
 
