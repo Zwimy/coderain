@@ -318,7 +318,11 @@ export async function foldReview(slug, opts = {}) {
 export async function renderPlay(slug) {
   const s = await api(`/api/saves/${slug}`);
   s.companions = s.companions || [];        // never deref undefined (play head + Talk)
-  view.innerHTML = `<div id="play">
+  view.innerHTML = `<div id="play" data-view="story">
+    ${s.rpg ? `<div id="view-tabs" role="tablist" aria-label="Story or character sheet">
+      <button role="tab" id="tab-story" aria-selected="true" aria-controls="story-col">Story</button>
+      <button role="tab" id="tab-sheet" aria-selected="false" tabindex="-1" aria-controls="sheet">Sheet</button>
+    </div>` : ""}
     <div id="story-col">
       <div id="play-head">
         <button id="back">← Library</button>
@@ -381,6 +385,30 @@ export async function renderPlay(slug) {
 
   const transcript = $("#transcript");
   attachFind({transcript, bar: $("#find-bar"), button: $("#find-btn")});
+  // Below 900px the story and the character sheet do not fit side by side: the sheet is a tab (above that the tabs are hidden and
+  // both show). The sheet used to be display:none there, so an RPG story on a phone had no way to see its own sheet.
+  const tabs = $("#view-tabs");
+  if (tabs) {
+    const showTab = which => {
+      $("#play").dataset.view = which;
+      for (const b of tabs.querySelectorAll("[role=tab]")) {
+        const on = b.id === `tab-${which}`;
+        b.setAttribute("aria-selected", String(on));
+        b.tabIndex = on ? 0 : -1;
+      }
+    };
+    tabs.addEventListener("click", ev => {
+      const tab = ev.target.closest("[role=tab]");
+      if (tab) showTab(tab.id.replace("tab-", ""));
+    });
+    tabs.addEventListener("keydown", ev => {
+      if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+      ev.preventDefault();
+      const next = $("#play").dataset.view === "story" ? "sheet" : "story";
+      showTab(next);
+      $(`#tab-${next}`).focus();
+    });
+  }
   $("#display-btn").addEventListener("click", displayModal);
   const stage = $("#stageline");
   const evbar = $("#eventbar");

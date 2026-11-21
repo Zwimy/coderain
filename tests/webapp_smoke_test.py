@@ -61,6 +61,11 @@ Asserts, once it can run:
     replaced, is dropped when the author types, is not offered after a failed request, and is not shared between fields
 41) the Canon panel lists what each person wears and holds, under that person, with Wrong on each item and no Change, and
     "It is this" waits while Wearing or Holding is chosen (state corrections, D-062)
+42) the world builder saves its main fields by itself a pause after typing: once for a sentence, never with a blank title, one
+    save at a time, a failure is a line that the next edit retries, an AI answer is saved too, a page that was left saves nothing
+43) the RPG character sheet is a tab below 900px (it was hidden, so unreachable on a phone), side by side above it, and only for a
+    story with mechanics; arrow keys switch tabs and widening the window shows both again
+44) the phone-width pass: every route and every play dialog at 375px has nothing off the right edge and nothing too small to tap
 """
 import json
 import os
@@ -1848,6 +1853,7 @@ with sync_playwright() as p:
     page.evaluate(f"location.hash = '#world/{scen}'")
     page.wait_for_selector("#b-premise", timeout=8000)
     real_premise = page.input_value("#b-premise")
+    real_intro = page.input_value("#b-intro") if page.is_visible("#b-intro") else None
     answers = ["First AI text.", "Second AI text.", "Intro from the AI."]
     served = []
 
@@ -1914,6 +1920,8 @@ with sync_playwright() as p:
         failures.append(f"Undo AI after a seed restored {page.input_value('#b-premise')!r}")
     page.unroute("**/api/assist")
     page.fill("#b-premise", real_premise)                          # leave the world as it was found
+    if real_intro is not None:
+        page.fill("#b-intro", real_intro)
     print("40) the builder's AI assist has a one-level undo per field")
 
     # --- A2: canon builds ---------------------------------------------------------------------------------------------
@@ -1970,6 +1978,267 @@ with sync_playwright() as p:
     page.unroute("**/api/saves/*/canon/corrections")
     close_modal()
     print("41) the Canon panel lists worn and held items, marks them wrong (never sets them), and keeps them with their person")
+
+    # --- D-056 P3 ------------------------------------------------------------------------------------------------------
+    # 42) Item 20: the world builder saves the main fields by itself a pause after the last keystroke. One save at a time, none
+    #     while the title is blank (the route would blank the world's name), a failure is a line that the next edit retries.
+    page.evaluate(f"location.hash = '#world/{scen}'")
+    page.wait_for_selector("#b-premise", timeout=8000)
+    world_before = c.get(f"/api/scenarios/{scen}/full").json()
+    puts, held_put = [], []
+    hold_first = [False]
+
+    def count_put(route):
+        if route.request.method != "PUT":
+            return route.continue_()
+        puts.append(json.loads(route.request.post_data))
+        if hold_first[0] and not held_put:
+            held_put.append(route)                   # answered later by the test
+            return None
+        return route.continue_()
+
+    def disk_premise():
+        return c.get(f"/api/scenarios/{scen}/full").json()["premise"]
+
+    page.route("**/api/scenarios/*/main", count_put)
+    page.fill("#b-premise", "Autosaved premise, typed and left alone.")
+    page.wait_for_timeout(300)
+    if puts:
+        failures.append("the builder saved before the pause after typing")
+    try:
+        page.wait_for_function("document.querySelector('#b-status').textContent === 'Saved'", timeout=6000)
+    except Exception:  # noqa: BLE001
+        failures.append("the builder did not save by itself after typing: " + repr(page.inner_text("#b-status")))
+    if disk_premise() != "Autosaved premise, typed and left alone." or len(puts) != 1:
+        failures.append(f"after the pause the premise on disk is {disk_premise()!r} ({len(puts)} saves, one wanted)")
+    # fast typing is one save, not one a keystroke
+    puts.clear()
+    page.type("#b-premise", " More words follow.", delay=30)
+    for _ in range(60):                               # the status already says Saved: wait for the NEW save to be asked for
+        if puts:
+            break
+        page.wait_for_timeout(100)
+    page.wait_for_function("document.querySelector('#b-status').textContent === 'Saved'", timeout=6000)
+    if len(puts) != 1 or not disk_premise().endswith("More words follow."):
+        failures.append(f"typing a sentence made {len(puts)} saves (one wanted), disk: {disk_premise()!r}")
+    # typing slower than the pause between keystrokes but faster than the pause itself still waits for the END of the typing: the timer
+    # is restarted by every key (a save per pause longer than the delay would otherwise land in the middle of a sentence)
+    puts.clear()
+    page.type("#b-premise", " Slowly now.", delay=300)
+    for _ in range(80):
+        if puts:
+            break
+        page.wait_for_timeout(100)
+    page.wait_for_function("document.querySelector('#b-status').textContent === 'Saved'", timeout=6000)
+    page.wait_for_timeout(1600)
+    if len(puts) != 1 or not disk_premise().endswith("Slowly now."):
+        failures.append(f"slow typing made {len(puts)} saves (one wanted, after the last key), disk: {disk_premise()[-30:]!r}")
+    # a blank title is never saved, and says why
+    puts.clear()
+    page.fill("#b-title", "")
+    page.wait_for_function("document.querySelector('#b-status').textContent.includes('title')", timeout=5000)
+    page.wait_for_timeout(1600)
+    if puts:
+        failures.append("the builder saved a blank title")
+    page.fill("#b-title", world_before["title"])
+    page.wait_for_function("document.querySelector('#b-status').textContent === 'Saved'", timeout=6000)
+    # one save at a time: an edit made while a save is in flight waits for it and then saves again
+    puts.clear()
+    hold_first[0] = True
+    page.fill("#b-premise", "First edit.")
+    wait_until_held(page, held_put, "builder autosave")
+    page.fill("#b-premise", "Second edit, made while the first save is in flight.")
+    page.wait_for_timeout(2200)
+    if len(puts) != 1:
+        failures.append(f"a second save started while the first was in flight ({len(puts)} requests)")
+    hold_first[0] = False
+    held_put[0].continue_()
+    try:
+        page.wait_for_function("document.querySelector('#b-status').textContent === 'Saved'", timeout=6000)
+    except Exception:  # noqa: BLE001
+        failures.append("the builder never finished its saves after the first was released")
+    for _ in range(40):
+        if disk_premise() == "Second edit, made while the first save is in flight.":
+            break
+        page.wait_for_timeout(150)
+    if disk_premise() != "Second edit, made while the first save is in flight.":
+        failures.append(f"the edit made during a save was lost: {disk_premise()!r}")
+    # a failure is a line, and the next edit tries again
+    page.unroute("**/api/scenarios/*/main")
+    page.route("**/api/scenarios/*/main", lambda route: route.fulfill(
+        status=409, content_type="application/json", body='{"detail": "disk full"}') if route.request.method == "PUT" else route.continue_())
+    page.fill("#b-premise", "This save will fail.")
+    try:
+        page.wait_for_function("document.querySelector('#b-status').textContent.startsWith(\"Couldn't save\")", timeout=6000)
+    except Exception:  # noqa: BLE001
+        failures.append("a failed autosave was not reported: " + repr(page.inner_text("#b-status")))
+    page.unroute("**/api/scenarios/*/main")
+    page.fill("#b-premise", "This one goes through.")
+    page.wait_for_function("document.querySelector('#b-status').textContent === 'Saved'", timeout=6000)
+    if disk_premise() != "This one goes through.":
+        failures.append(f"the edit after a failed autosave was not saved: {disk_premise()!r}")
+    # an AI answer sets the value without a key press: it is saved too
+    page.route("**/api/assist", lambda route: route.fulfill(status=200, content_type="application/json", body='{"text": "Written by the AI."}'))
+    page.click("[data-improve='b-premise']")
+    page.wait_for_function("document.querySelector('#b-premise').value === 'Written by the AI.'", timeout=5000)
+    page.wait_for_function("document.querySelector('#b-status').textContent === 'Saved'", timeout=6000)
+    for _ in range(40):
+        if disk_premise() == "Written by the AI.":
+            break
+        page.wait_for_timeout(150)
+    if disk_premise() != "Written by the AI.":
+        failures.append(f"an AI answer was not autosaved: {disk_premise()!r}")
+    page.click("[data-undo-ai='b-premise']")                        # Undo AI sets the value without a key press too
+    for _ in range(40):
+        if disk_premise() == "This one goes through.":
+            break
+        page.wait_for_timeout(150)
+    if disk_premise() != "This one goes through.":
+        failures.append(f"Undo AI was not autosaved: {disk_premise()!r}")
+    page.unroute("**/api/assist")
+    # the pause timer of a page that was left does nothing
+    page.fill("#b-premise", "Typed, then left at once.")
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    after_leaving = []
+    page.route("**/api/scenarios/*/main", lambda route: (after_leaving.append(1), route.continue_())[1])
+    page.wait_for_timeout(2200)
+    page.unroute("**/api/scenarios/*/main")
+    if after_leaving:
+        failures.append("a builder that was left still saved after its pause")
+    if disk_premise() != "Typed, then left at once.":
+        failures.append(f"leaving the builder right after typing lost the text: {disk_premise()!r}")
+    c.put(f"/api/scenarios/{scen}/main", json={k: world_before[k] for k in ("title", "description", "premise", "introduction", "world") if k in world_before})
+    # The pause timer of a builder that was left can fire while ANOTHER world's builder is open. It used to look its fields up by id, so
+    # it read the other world's text and saved it to the world it belonged to (found because the previous case's timer fired in this one).
+    other = c.post("/api/scenarios", json={"title": "Second Smoke World"}).json()["slug"]
+
+    def open_world(slug_, title_):
+        """Open a world's builder and wait until THAT world is on screen (the old builder's boxes are still there until it paints)."""
+        page.evaluate(f"location.hash = '#world/{slug_}'")
+        page.wait_for_function(f"document.querySelector('#b-title') && document.querySelector('#b-title').value === {title_!r}", timeout=8000)
+
+    open_world(other, "Second Smoke World")
+    open_world(scen, world_before["title"])
+    page.fill("#b-premise", "Typed in the first world.")
+    open_world(other, "Second Smoke World")                     # leave within the pause: that page's timer is still running
+    page.wait_for_timeout(2400)
+    if disk_premise() != "Typed in the first world.":
+        failures.append(f"the timer of a builder that was left saved ANOTHER world's text into it, or leaving lost the text: {disk_premise()[:40]!r}")
+    if c.get(f"/api/scenarios/{other}/full").json()["premise"] == "Typed in the first world.":
+        failures.append("the first world's text was saved into the second world")
+    c.put(f"/api/scenarios/{scen}/main", json={k: world_before[k] for k in ("title", "description", "premise", "introduction", "world") if k in world_before})
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    c.delete(f"/api/scenarios/{other}")
+    print("42) the builder saves by itself a pause after typing: once, not while the title is blank, one at a time, a failure is retried")
+
+    # 43) Item 16: the RPG character sheet below 900px. It was display:none there, so a story with mechanics had no way to show its own
+    #     sheet on a phone or a narrow window. Now it is a tab; above 900px both show, side by side, and there are no tabs.
+    rpg_slug = c.post("/api/saves", json={"title": "Sheet Story", "mode": "rpg", "premise": "A ferry town."}).json()["slug"]
+    vis_js = """() => { const v = s => { const e = document.querySelector(s); return !!e && e.offsetParent !== null && e.getBoundingClientRect().width > 0; };
+        return {tabs: v('#view-tabs'), sheet: v('#sheet'), story: v('#story-col'), view: (document.querySelector('#play') || {dataset: {}}).dataset.view,
+                selected: [...document.querySelectorAll('#view-tabs [role=tab]')].filter(b => b.getAttribute('aria-selected') === 'true').map(b => b.id),
+                sheetText: (document.querySelector('#sheet') || {textContent: ''}).textContent.trim().slice(0, 12)}; }"""
+    page.set_viewport_size({"width": 1280, "height": 720})
+    page.evaluate(f"location.hash = '#play/{rpg_slug}'")
+    page.wait_for_selector("#sheet", timeout=8000)
+    wide = page.evaluate(vis_js)
+    if wide["tabs"] or not wide["sheet"] or not wide["story"]:
+        failures.append(f"at 1280px the sheet and the story should show side by side with no tabs: {wide}")
+    no_dashes("the RPG sheet", page.inner_text("#sheet"))              # its section headings had em dashes (the sweep never saw an RPG story)
+    for width in (800, 375):
+        page.set_viewport_size({"width": width, "height": 812})
+        page.wait_for_timeout(200)
+        got = page.evaluate(vis_js)
+        if not got["tabs"] or got["sheet"] or not got["story"] or got["selected"] != ["tab-story"]:
+            failures.append(f"at {width}px the story should show with Story and Sheet tabs: {got}")
+        if page.evaluate("[...document.querySelectorAll('#view-tabs [role=tab]')].map(b => b.tabIndex)") != [0, -1]:
+            failures.append("the tabs are not a roving tab stop (the selected one 0, the other -1)")
+        page.click("#tab-sheet")
+        got = page.evaluate(vis_js)
+        if got["sheet"] is not True or got["story"] or got["selected"] != ["tab-sheet"] or not got["sheetText"].startswith("Character"):
+            failures.append(f"at {width}px the Sheet tab did not show the character sheet: {got}")
+        if page.evaluate("[...document.querySelectorAll('#view-tabs [role=tab]')].map(b => b.tabIndex)") != [-1, 0]:
+            failures.append("after choosing Sheet the tab stop did not move to it")
+        page.keyboard.press("ArrowLeft")
+        got = page.evaluate(vis_js)
+        if not got["story"] or got["sheet"] or got["selected"] != ["tab-story"] or page.evaluate("document.activeElement.id") != "tab-story":
+            failures.append(f"at {width}px an arrow key did not go back to the Story tab with focus: {got}")
+        page.keyboard.press("ArrowRight")
+        page.set_viewport_size({"width": 1280, "height": 720})
+        page.wait_for_timeout(200)
+        got = page.evaluate(vis_js)
+        if got["tabs"] or not got["sheet"] or not got["story"]:
+            failures.append(f"widening the window with the Sheet tab open should show both again: {got}")
+        page.set_viewport_size({"width": width, "height": 812})
+        page.click("#tab-story")
+    # the Talk drawer is a side panel on a tablet and the whole width on a phone
+    page.evaluate("""async (s) => { const m = await import('/js/play.js'); m.talkDrawer(s, ['Mira']); }""", rpg_slug)
+    page.wait_for_selector("#talk-drawer", timeout=4000)
+    drawer_widths = {}
+    for width in (800, 375):
+        page.set_viewport_size({"width": width, "height": 812})
+        page.wait_for_timeout(150)
+        drawer_widths[width] = page.evaluate("Math.round(document.querySelector('#talk-drawer').getBoundingClientRect().width)")
+    page.evaluate("document.getElementById('talk-drawer').remove()")
+    if not (300 <= drawer_widths[800] <= 420) or drawer_widths[375] != 375:
+        failures.append(f"the Talk drawer is {drawer_widths[800]}px at 800px (a side panel, 420 at most) and {drawer_widths[375]}px at 375px (the full width)")
+    small = page.evaluate("[...document.querySelectorAll('#view-tabs button')].filter(b => b.getBoundingClientRect().height < 40).map(b => b.id)")
+    if small:
+        failures.append(f"the tabs are under 40px tall at 375px: {small}")
+    page.evaluate(f"location.hash = '#play/{slug}'")                       # a story without mechanics has no tabs
+    page.wait_for_selector("#action", timeout=8000)
+    page.wait_for_function("!document.querySelector('#view-tabs')", timeout=3000)   # the RPG story's page is still up until this one paints
+    page.set_viewport_size({"width": 800, "height": 812})
+    page.wait_for_timeout(200)
+    if page.evaluate(vis_js)["tabs"] or page.locator("#view-tabs").count():
+        failures.append("a story without mechanics has Story and Sheet tabs")
+    page.set_viewport_size({"width": 1280, "height": 720})
+    print("43) the RPG sheet is a tab below 900px, side by side above it, and only for a story with mechanics")
+
+    # 44) Item 17, the phone-width pass: every route and every dialog at 375px has nothing off the right edge, and what you tap is big
+    #     enough (buttons 40px, fields and the first-run link 32px). The pass found a chapter title box 25px tall and a first-run link 17px tall.
+    pass_js = """(root) => { const vw = innerWidth; const out = {docW: document.documentElement.scrollWidth, vw, over: [], small: []};
+      const rootEl = document.querySelector(root);          // the strip must be INSIDE the page: the page itself may scroll vertically
+      const name = e => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + '.' + String(e.className).slice(0, 20);
+      for (const e of document.querySelectorAll(root + ' *')) {
+        const r = e.getBoundingClientRect();
+        if (r.width === 0 || e.offsetParent === null || e.closest('#transcript') || e.closest('.turn')) continue;
+        // a strip that scrolls sideways on purpose (the Pieces type buttons) keeps its overflow inside itself
+        let strip = false;
+        for (let a = e.parentElement; a && a !== rootEl; a = a.parentElement) { const ox = getComputedStyle(a).overflowX; if ((ox === 'auto' || ox === 'scroll') && a.scrollWidth > a.clientWidth) { strip = true; break; } }
+        if (!strip && r.right > vw + 1 && out.over.length < 6) out.over.push(name(e) + ' right=' + Math.round(r.right));
+      }
+      for (const b of document.querySelectorAll(root + ' button, ' + root + ' select, ' + root + ' input:not([type=hidden]):not([type=checkbox]):not([type=radio]), ' + root + ' #w-skip')) {
+        if (b.offsetParent === null || b.closest('#transcript') || b.closest('.chip-tag') || b.closest('.swipebar') || b.closest('.turn')) continue;
+        const need = b.tagName === 'BUTTON' ? 40 : 32; const h = b.getBoundingClientRect().height;
+        if (h < need && out.small.length < 8) out.small.push(name(b) + ' h=' + Math.round(h)); }
+      return out; }"""
+    page.set_viewport_size({"width": 375, "height": 812})
+    for label, hash_, ready in (("the first-run or library page", "#library", "#view h1, #view h2"), ("Pieces", "#characters", "#lib-types"),
+                                ("Defaults", "#defaults", "#view h1"), ("Settings", "#settings", "#len-seg"),
+                                ("a story", f"#play/{slug}", "#action"), ("an RPG story", f"#play/{rpg_slug}", "#tab-sheet"),
+                                ("the world builder", f"#world/{scen}", "#b-premise")):
+        page.evaluate(f"location.hash = {hash_!r}")
+        page.wait_for_selector(ready, timeout=10000)
+        page.wait_for_timeout(700)
+        got = page.evaluate(f"({pass_js})('#view')")
+        if got["docW"] > got["vw"] or got["over"] or got["small"]:
+            failures.append(f"{label} at 375px: {got}")
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    for btn in ("note-btn", "mem-btn", "ctx-btn", "plan-btn", "canon-btn", "aids-btn", "display-btn"):
+        page.click(f"#{btn}")
+        page.wait_for_selector("#modal-root:not(.hidden) #modal-card h1, #modal-root:not(.hidden) #modal-card h2", timeout=8000)
+        page.wait_for_timeout(300)
+        got = page.evaluate(f"({pass_js})('#modal-card')")
+        card = page.evaluate("(() => { const r = document.querySelector('#modal-card').getBoundingClientRect(); return [r.left, r.right, innerWidth]; })()")
+        if got["over"] or got["small"] or card[0] < 0 or card[1] > card[2]:
+            failures.append(f"the {btn} dialog at 375px: {got} card {card}")
+        close_modal()
+    page.set_viewport_size({"width": 1280, "height": 720})
+    print("44) every route and dialog at 375px has nothing off the right edge and nothing too small to tap")
 
     browser.close()
 

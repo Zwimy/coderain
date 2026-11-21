@@ -416,7 +416,7 @@ def render_sheet_lines(rpg: dict, world: dict | None = None) -> str:
     stats = p.get("stats", {})
     if stats:
         lines.append("")
-        lines.append("— Stats —")
+        lines.append("STATS")
         lines += [f"{k.title():<13}{v:+d}" for k, v in stats.items()]
     gold = ((world or {}).get("player") or {}).get("gold") \
         if isinstance((world or {}).get("player"), dict) else None
@@ -424,27 +424,27 @@ def render_sheet_lines(rpg: dict, world: dict | None = None) -> str:
         lines.append(f"Gold   {gold}")
     if p.get("abilities"):
         lines.append("")
-        lines.append("— Abilities —")
+        lines.append("ABILITIES")
         lines += list(p["abilities"])
     if p.get("titles"):
         lines.append("")
-        lines.append("— Titles —")
+        lines.append("TITLES")
         lines += list(p["titles"])
     if p.get("conditions"):
         lines.append("")
-        lines.append("— Conditions —")
+        lines.append("CONDITIONS")
         lines += list(p["conditions"])
     inv = rpg.get("inventory", {})
     if inv:
         lines.append("")
-        lines.append("— Inventory —")
+        lines.append("INVENTORY")
         lines += [f"{s} ×{it.get('qty', 1)}"
                   + ("  [E]" if it.get("equipped") else "")
                   for s, it in inv.items()]
     comps = rpg.get("companions", {})
     if comps:
         lines.append("")
-        lines.append("— Companions —")
+        lines.append("COMPANIONS")
         for s, c in comps.items():
             lines.append(f"{s}  (trust {c.get('trust', 0)})")
             extra = "/".join(x for x in (c.get("mood"), c.get("disposition")) if x)
@@ -455,17 +455,17 @@ def render_sheet_lines(rpg: dict, world: dict | None = None) -> str:
     active = [s for s, st in (quests or {}).items() if st == "active"]
     if active:
         lines.append("")
-        lines.append("— Quests —")
+        lines.append("QUESTS")
         lines += active
     ens = rpg.get("enemies", {})
     if ens:
         lines.append("")
-        lines.append("— Enemies —")
+        lines.append("ENEMIES")
         lines += [f"{s}  HP {e.get('hp')}/{e.get('hp_max')}" for s, e in ens.items()]
     lc = rpg.get("last_check")
     if isinstance(lc, dict):
         lines.append("")
-        lines.append("— Last check —")
+        lines.append("LAST CHECK")
         who = f"{lc.get('actor')}: " if lc.get("actor") else ""
         lines.append(f"{who}{lc.get('stat')} vs DC{lc.get('dc')}")
         lines.append(f"rolled {lc.get('total')} → "

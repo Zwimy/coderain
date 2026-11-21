@@ -31,6 +31,8 @@ export const KIND_REL = kind => ({
   faction: "factions.md", thread: "threads.md", event: "events.md",
 }[kind] || kind + ".md");
 
+const AUTOSAVE_MS = 1200;            // how long the author pauses before the main fields are saved
+
 export async function renderBuilder(slug, scope = "scenario") {
   const isSave = scope === "save";
   const base = isSave ? `/api/saves/${slug}/world` : `/api/scenarios/${slug}`;
@@ -83,6 +85,7 @@ export async function renderBuilder(slug, scope = "scenario") {
         <input type="checkbox" id="b-improve" style="width:auto">
         Use prompt improver on seeds
       </label>
+      <span id="b-status" class="muted" role="status" aria-live="polite"></span>
       <button class="primary" id="b-save">${isSave ? "Save changes"
         : "Save world"}</button>
       ${isSave ? "" : '<button id="b-tolib" title="copy every character, '
@@ -136,12 +139,15 @@ export async function renderBuilder(slug, scope = "scenario") {
     </div>`}
   </div>`;
 
+  // The fields of THIS page, held now. A lookup by id later finds whatever page is showing then: the pause timer of a builder that was
+  // left can fire while another world's builder is open, and it would have read that page's text and saved it to this world.
+  const fieldEl = {title: $("#b-title"), desc: $("#b-desc"), premise: $("#b-premise"), intro: $("#b-intro"), world: $("#b-world")};
   const mainFields = () => ({
-    title: $("#b-title").value.trim(),
-    description: $("#b-desc") ? $("#b-desc").value.trim() : "",
-    premise: $("#b-premise").value.trim(),
-    ...($("#b-intro") ? {introduction: $("#b-intro").value.trim()} : {}),
-    world: $("#b-world").value.trim(),
+    title: fieldEl.title.value.trim(),
+    description: fieldEl.desc ? fieldEl.desc.value.trim() : "",
+    premise: fieldEl.premise.value.trim(),
+    ...(fieldEl.intro ? {introduction: fieldEl.intro.value.trim()} : {}),
+    world: fieldEl.world.value.trim(),
   });
   let cleanState = JSON.stringify(mainFields());
   const saveMain = async () => {
@@ -150,12 +156,43 @@ export async function renderBuilder(slug, scope = "scenario") {
     cleanState = JSON.stringify(body);          // now matches what's on disk
     return out;
   };
+  // Autosave while typing (D-056 item 20): a pause of AUTOSAVE_MS after the last keystroke saves the main fields, so a closed laptop
+  // or a crashed tab loses seconds, not the whole sitting. One save at a time (an edit made during a save saves again after it),
+  // nothing while the title is blank (the route would blank the world's name), nothing once the page is left, and a failure is a
+  // line next to the Save button that the next edit retries. Leaving the page still saves what is pending (registerDirty below).
+  const status = $("#b-status");
+  let saveTimer = null, saving = false, saveAgain = false;
+  const setStatus = (text, kind = "") => {
+    if (!document.body.contains(status)) return;
+    status.textContent = text;
+    status.dataset.kind = kind;
+  };
+  const autosave = async () => {
+    const title = fieldEl.title;
+    if (!document.body.contains(title)) return;                         // this page was left (another may be showing)
+    if (saving) { saveAgain = true; return; }
+    if (!title.value.trim()) { setStatus("Give it a title and it saves by itself."); return; }
+    if (JSON.stringify(mainFields()) === cleanState) { setStatus("Saved"); return; }    // typed back to what is on disk
+    saving = true;
+    setStatus("Saving…");
+    try {
+      await saveMain();
+      setStatus("Saved");
+    } catch (e) {
+      setStatus(`Couldn't save: ${e.message}`, "error");
+    } finally {
+      saving = false;
+      if (saveAgain) { saveAgain = false; scheduleSave(); }
+    }
+  };
+  const scheduleSave = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(autosave, AUTOSAVE_MS);
+  };
+  for (const el of Object.values(fieldEl)) if (el) el.addEventListener("input", scheduleSave);
   // Navigating away (topbar, browser Back, tab close) no longer loses the text.
-  registerDirty(() => {
-    const el = $("#b-title");
-    return Boolean(el && document.body.contains(el)
-                   && JSON.stringify(mainFields()) !== cleanState);
-  }, saveMain);
+  registerDirty(() => document.body.contains(fieldEl.title)
+                       && JSON.stringify(mainFields()) !== cleanState, saveMain);
 
   $("#back").addEventListener("click", async () => {
     await guard(saveMain, "Couldn't save this world");
@@ -220,6 +257,7 @@ export async function renderBuilder(slug, scope = "scenario") {
         improve: $("#b-improve").checked,
       }});
       ta.value = out.text;
+      scheduleSave();                       // a script sets the value: no input event, so say so
       undoText[id] = before;
       $(`[data-undo-ai="${id}"]`).hidden = false;
     } catch (e) {
@@ -239,6 +277,7 @@ export async function renderBuilder(slug, scope = "scenario") {
     if (!(id in undoText)) return;
     const ta = $("#" + id);
     ta.value = undoText[id];
+    scheduleSave();
     delete undoText[id];
     b.hidden = true;
     ta.focus();

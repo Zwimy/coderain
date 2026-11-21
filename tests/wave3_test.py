@@ -108,8 +108,8 @@ print("4) grants: banked on level-up, gated, applied to state+md, feed skill_mod
 # ---- 5) sheet lines show the new layers ----
 lines = rpg_mod.render_sheet_lines(store.rpg_state(), store.world_state())
 assert "Gold   18" in lines and "iron-sword ×1  [E]" in lines
-assert "— Abilities —" in lines and "Riposte (agility)" in lines
-assert "— Quests —" in lines and "missing-courier" in lines
+assert "ABILITIES" in lines and "Riposte (agility)" in lines
+assert "QUESTS" in lines and "missing-courier" in lines
 print("5) sheet: gold/inventory/abilities/quests rendered")
 
 # ---- 6) companions: npc_state + side-chat out-of-band + digest ----

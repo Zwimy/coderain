@@ -159,6 +159,8 @@ pre.table {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #play-head .clock { color: var(--dim); font-size: 12px; }
 /* find in the story: a row under the header, outside #transcript (nothing may be added to it) */
+#b-status { font-size: 13px; }
+#b-status[data-kind=error] { color: var(--danger); }
 #find-bar { display: flex; align-items: center; gap: 8px; padding: 8px 20px;
             border-bottom: 1px solid var(--line); background: var(--panel); }
 #find-q { flex: 1; min-width: 0; }
@@ -339,10 +341,21 @@ details.howto {
 details.howto summary { color: var(--accent); cursor: pointer; }
 details.howto p { color: var(--text); line-height: 1.55; }
 
+#view-tabs { display: none; }
+#w-skip { display: inline-block; padding: 10px 0; }      /* the first-run way out was 17px tall on a phone */
 @media (max-width: 900px) {
-  #sheet { display: none; }
-  #talk-drawer { width: 100%; }
+  /* the story and the sheet share the width as two tabs (play.js); a drawer is a side panel, not the whole screen, on a tablet */
+  #play { flex-direction: column; }
+  #view-tabs { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  #view-tabs button { flex: 1; }
+  #view-tabs button[aria-selected=true] { background: var(--accent); color: var(--on-accent); }
+  #play > #story-col, #play > #sheet { flex: 1 1 0; min-height: 0; }
+  #sheet { width: auto; border-left: 0; }
+  #play[data-view="story"] #sheet { display: none; }
+  #play[data-view="sheet"] #story-col { display: none; }
+  #talk-drawer { width: min(100%, 420px); }
 }
+@media (max-width: 560px) { #talk-drawer { width: 100%; } }
 
 /* narrow screens: tighter paddings, wrapping headers, no right-edge bleed */
 @media (max-width: 640px) {
@@ -616,7 +629,8 @@ label + .hint { margin-top: 3px; }
    a real height. The small icon buttons inside the transcript keep their size, so the transcript does not grow, and get a
    larger hit area from an invisible pseudo-element instead. */
 @media (max-width: 640px), (pointer: coarse) {
-  #play-head button, #play-actions button, #composer button, #find-bar button, .page button, #modal-card button, #topbar nav a {
+  .ch-title { padding: 7px 0; }            /* the inline chapter title was 25px tall: an edit box a thumb could not hit */
+  #play-head button, #play-actions button, #composer button, #find-bar button, #view-tabs button, .page button, #modal-card button, #topbar nav a {
     min-height: 40px;
   }
   #topbar nav a { display: inline-flex; align-items: center; }

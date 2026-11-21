@@ -37,7 +37,7 @@ assert app.sheet_visible and app.sheet_panel.winfo_manager() == "pack"
 # (pack order pitfall: an expand=True sibling could squeeze it to nothing).
 assert app.sheet_panel.winfo_width() > 80, app.sheet_panel.winfo_width()
 sheet = app._sheet_text.get("1.0", "end")
-assert "HP" in sheet and "— Stats —" in sheet and "Strength" in sheet, sheet
+assert "HP" in sheet and "STATS" in sheet and "Strength" in sheet, sheet
 assert sheet.count("\n") >= 8            # vertical layout, one stat per line
 app._show_sheet()                        # toggle off
 app.update()
