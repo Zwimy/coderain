@@ -35,6 +35,8 @@ are written only to --out.
            which is the shipped default; it changes nothing else in the run
   --tail-ties  turn on `memory: tail_ties` (D-063): the ties and holders of what the action and the last reply name, said again at
            the end of the prompt, after the action. Off by default, which is the shipped default; it changes nothing else in the run
+  --tic-guard  turn on `generation: tic_guard` (D-064): the phrases the last replies keep reusing are said back to the Writer as "say it
+           another way". Off by default, which is the shipped default. The summary's `repeat_share` is the measure to read
   --ask    plain (default): each graph question also asks for a straight answer in one sentence, because a model that narrates
            around the question can neither be scored right nor caught leaking; open: the bare question
   --stub-knowledge  what the OFFLINE writer does with those questions (truthful, leaky, wrong): it exists so a test can show the
@@ -210,8 +212,22 @@ def sheet_attrs(cast_row, graph_on: bool, facts: str) -> dict:
     return attrs
 
 
+def repeat_share(texts: list[str], n: int = 8) -> float:
+    """The mean share of a turn's n-word runs that were already in the turn before it: how much a Writer is feeding on its own last reply
+    (D-055 read it as 103 recurring eight-word runs in one story). 0 is a new turn each time, 1 is the same turn again."""
+    def runs(t: str) -> set[str]:
+        w = re.findall(r"[a-z']+", t.lower())
+        return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
+    shares = []
+    for a, b in zip(texts, texts[1:]):
+        rb = runs(b)
+        if rb:
+            shares.append(len(runs(a) & rb) / len(rb))
+    return round(sum(shares) / len(shares), 4) if shares else 0.0
+
+
 def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False,
-            stub_folds: bool = False, tail_ties: bool = False) -> str:
+            stub_folds: bool = False, tail_ties: bool = False, tic_guard: bool = False) -> str:
     cfg = f"""active_profile: local
 profiles:
   local:
@@ -230,6 +246,7 @@ generation:
   ai_acts_as_player: false
   chapter_outline: false
   lore_check: false
+  tic_guard: {"true" if tic_guard else "false"}
 memory:
   short_term_turns: {window}
   medium_fold_after: {10_000 if stub and not stub_folds else 12}
@@ -270,7 +287,7 @@ def run_play(args, home: Path) -> int:
     model = "stub-writer" if stub else args.model
     (home / "config.yaml").write_text(
         _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links), bool(args.stub_folds),
-                bool(args.tail_ties)),
+                bool(args.tail_ties), bool(args.tic_guard)),
         encoding="utf-8")
 
     from coderain import fate
@@ -344,6 +361,7 @@ def run_play(args, home: Path) -> int:
                     row["seen"], row["seen_memory"] = gp.evidence_flags(mv["gid"], writer_msgs or [])
                     row["linked"] = gp.linked_lines(writer_msgs)
                     row["tail_ties"] = gp.tail_line(writer_msgs)
+                    row["tic_line"] = gp.tic_message(writer_msgs)
             rows.append(row)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
@@ -357,6 +375,8 @@ def run_play(args, home: Path) -> int:
                "words_mean": round(sum(r["words"] for r in rows) / max(1, len(rows)), 1),
                "secs_mean": round(sum(r["secs"] for r in rows) / max(1, len(rows)), 2),
                "wall_secs": round(time.time() - t_all, 1),
+               "tic_guard": bool(args.tic_guard),
+               "repeat_share": repeat_share([r["text"] for r in rows if r.get("text")]),
                "model_calls": dict(writer.calls) if writer is not None else None,
                "health_rows": len(store.health(200))}
     if graph_on:

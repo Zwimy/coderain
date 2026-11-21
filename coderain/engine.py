@@ -29,6 +29,7 @@ from .llm import LLM
 from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore, safe_output_regex
 from .tailties import tail_ties
+from .tics import find_tics, tic_line
 from .planner import ChapterPlanner
 from .summarizer import Summarizer
 
@@ -251,6 +252,8 @@ class Engine:
         self.follow_links = config.memory.get("follow_links") is True
         # The ties line at the tail of the prompt (D-063): off until a measured run says it helps.
         self.tail_ties = config.memory.get("tail_ties") is True
+        # Say back the phrases the Writer keeps reusing (D-064): off until a measured run says it helps.
+        self.tic_guard = config.generation.get("tic_guard") is True
         # Open-core seam: premium modules resolve through coderain.features —
         # None when a module is trimmed from the build, and every use below
         # degrades gracefully (core must run fully without them).
@@ -370,6 +373,19 @@ class Engine:
             return tail_ties(self.store, action + "\n" + reply, len(self.store.turns()))
         except Exception as e:  # noqa: BLE001 — a line must never cost a turn
             self.store.log_degraded("tail-ties", f"no ties line this turn: {type(e).__name__}: {e}")
+            return ""
+
+    def _tic_guard(self) -> str:
+        """The tic line for the turn about to be written (D-064), or "". Off unless `generation: {tic_guard: true}`. It reads only the
+        stored narrator turns, so a retry builds the same line (invariant 5), and a failure is reported once and means no line."""
+        if not self.tic_guard:
+            return ""
+        try:
+            replies = [t["text"] for t in self.store.turns() if t["role"] == "narrator"]
+            names = [n for rel in self.store.gated_registries() for e in self.store.entries(rel) for n in (e.title, *e.aliases)]
+            return tic_line(find_tics(replies, names))
+        except Exception as e:  # noqa: BLE001 — a style note must never cost a turn
+            self.store.log_degraded("tic-guard", f"no tic line this turn: {type(e).__name__}: {e}")
             return ""
 
     def _messages(self, history, player_input):
@@ -1084,6 +1100,10 @@ class Engine:
         ties = self._tail_ties(messages)
         if ties:
             messages = [*messages, {"role": "system", "content": ties}]
+        # The tic line (D-064, off unless generation.tic_guard): phrases the last replies keep reusing, said back as "another way".
+        tics = self._tic_guard()
+        if tics:
+            messages = [*messages, {"role": "system", "content": tics}]
         chapter = (_chapter_directive(self.store)
                    if self.cfg.generation.get("chapter_outline", True) else "")
         # Fate (D-045, off unless the save turns it on): one hidden steering line for an action turn. BEFORE the

@@ -191,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--tail-ties", action="store_true",
                     help="memory: tail_ties on (D-063): the ties and holders of what the action and the last reply name, said again "
                          "at the end of the prompt")
+    pl.add_argument("--tic-guard", action="store_true",
+                    help="generation: tic_guard on (D-064): the phrases the last replies keep reusing are said back to the Writer")
     pl.add_argument("--ask", choices=["plain", "open"], default="plain",
                     help="plain: each graph question also asks for a straight one-sentence answer; open: the bare question")
     pl.add_argument("--stub-knowledge", choices=["truthful", "leaky", "wrong"], default="truthful",

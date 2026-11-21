@@ -237,6 +237,16 @@ def tail_line(messages) -> str:
     return ""
 
 
+def tic_message(messages) -> str:
+    """The tic line (D-064) the engine put in the Writer's prompt, or "". Recorded in a probe's row like the ties line."""
+    from coderain.tics import HEAD
+    for m in messages or []:
+        body = str(m.get("content", ""))
+        if m.get("role") == "system" and body.startswith(HEAD):
+            return body
+    return ""
+
+
 def evidence_flags(gid: str, messages) -> tuple[bool, bool]:
     """(seen anywhere in what the Writer received, seen in memory's part of it). The question itself is never evidence."""
     everything, memory = split_prompt(messages)
@@ -323,6 +333,7 @@ def summarize(rows) -> dict:
     # A question whose Writer call could not be found has evidence flags that mean nothing (they read False); say how many,
     # so a run with a broken prompt capture cannot pass for a run with no evidence.
     out["prompt_missing"] = sum(1 for r in marked if r.get("prompt_found") is False)
+    out["tic_rows"] = sum(1 for r in marked if r.get("tic_line"))              # questions whose prompt carried the tic line (D-064)
     out["tail_ties_rows"] = sum(1 for r in marked if r.get("tail_ties"))        # questions whose prompt carried the ties line (D-063)
     if marked:
         hop = [r for r in marked if r["sub"] in ("relation", "possession", "twohop")]

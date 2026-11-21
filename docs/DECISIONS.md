@@ -2959,3 +2959,40 @@ ties); no gain, or a loss of prose quality (a Writer that now recites ties) woul
 **Tests.** `tail_ties_test.py` (10 promises, including the engine: off for anything but a real true, the position, never stored, a failure costs no turn,
 the echo filter), `soak_graph_probe_test.py` 5 (the flag, the row and the summary). 18 + 6 mutants broken in a copy of the repo, all caught in the end
 (two first slipped through: an item held by itself was unchecked, and a mutant that was equivalent until the check it duplicated got a test of its own).
+
+## D-064: A tic guard: the phrases the Writer keeps reusing, found by counting and said back (built, off, not measured)
+
+**Why.** A small local Writer feeds on its own recent replies: they are the longest thing in its prompt, so what it wrote last turn is what it writes
+this turn. D-055 counted 103 recurring eight-word runs in one 80-turn story, and D-034 saw the reply length grow the same way. The cure that costs no
+extra model call is a list: find the phrases that open in several of the last replies and say them back as "another way". Finding them is plain
+counting.
+
+**What it is.** `generation: {tic_guard: true}` (off, and only a literal true). `coderain/tics.py` reads the last 8 narrator replies and returns the
+phrases (three to six words) that occur in at least 3 different replies. The engine puts one system message after the card and the ties line and
+before the chapter directive (so the chapter goal is still last):
+
+    Style note, not part of the story: these phrases keep turning up in the recent replies. Say them another way, or leave them out: "her breath hitched in her throat".
+
+Rules, each pinned by a test: the phrase must recur across DIFFERENT replies (five times in one reply is not a tic); it needs two content words
+("but it was not that it was" is grammar, "in the middle of the" has one: a noun inside grammar), and the words of any character's or place's name
+never count as content (a name should recur); only the longest version is kept, and pieces that overlap are joined into the run they came from (a
+recurring eight-word sentence is one phrase, not three six-word pieces that slide along it); at most 5, the most widespread first; nothing longer
+than 60 characters (a longer run is cut back to its opening, which still recurs); only narrator replies are read, never the player's own repeated
+action. It depends only on the stored turns, so a retry builds the same line; a failure is reported once (`tic-guard`) and means no line. It is a
+system message, so the echo filter drops a copy of it at the start of a reply.
+
+**Measuring it.** `python -m soak play --tic-guard` turns it on; the summary's `repeat_share` (new, for every run) is the mean share of a turn's
+eight-word runs that were already in the turn before: 0 is a new turn each time, 1 the same turn again. The comparison is `repeat_share` with and
+without the flag on the same seeds, then read the prose, because a Writer told to avoid a phrase can swap it for a worse one. Graph rows record the
+line (`tic_line`) and the summary counts them (`tic_rows`), as for the ties line.
+
+**Not measured, and what would change it.** Nothing here has been run on a model. A measured fall in `repeat_share` that does not cost the prose
+would make it worth recommending; no fall, or a Writer that now recites the list or reaches for stranger phrases, would remove it. A story that
+needs a refrain (a catchphrase on purpose) would call for a way to exempt a phrase.
+
+**Not built.** Voice anchors (a short sample of each character's own speech, to keep them sounding like themselves): they need to know WHO said a
+quoted line, and attribution through a pronoun is the failure D-024 exists to stop. That wants a labelled sample before any code.
+
+**Tests.** `tics_test.py` (9 promises, including the engine and the echo filter), `soak_graph_probe_test.py` 5 (the flag, the repeat measure, the
+row). 22 mutants broken in a copy of the repo, 21 caught and one equivalent (the early return for fewer than three replies: no phrase can occur in
+three replies without them, so the later check covers it; it stays as a short cut).

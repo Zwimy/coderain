@@ -262,6 +262,14 @@ def test_a_truthful_run():
     assert s_t["tail_ties"] is True and s_t["graph"]["tail_ties_rows"] > 0, s_t["graph"]["tail_ties_rows"]
     assert all(r["tail_ties"].startswith("Facts in play") for r in asked_t if r["tail_ties"]), "a row recorded something that is not the line"
     assert [r["action"] for r in asked_t] == [r["action"] for r in rows_f if r["kind"] == "graph"], "the flag changed the questions"
+    # `--tic-guard` (D-064): the summary says so and reports how much each turn repeats the one before; with the flag the Writer's prompt
+    # carries the tic line once the stub's recurring phrases have been seen in three replies, and without it none does
+    assert s["tic_guard"] is False and 0.0 < s["repeat_share"] <= 1.0 and s["graph"]["tic_rows"] == 0, s["repeat_share"]
+    assert not any(r.get("tic_line") for r in rows), "a run without --tic-guard had the tic line in a prompt"
+    rows_g, s_g = play("--probe-set", "graph", "--turns", "60", "--tic-guard")
+    assert s_g["tic_guard"] is True and s_g["graph"]["tic_rows"] > 0, (s_g["tic_guard"], s_g["graph"]["tic_rows"])
+    assert all(r["tic_line"].startswith("Style note") for r in rows_g if r.get("tic_line")), "a row recorded something that is not the line"
+    assert [r["action"] for r in rows_g if r["kind"] == "graph"] == [r["action"] for r in rows_f if r["kind"] == "graph"], "the flag changed the questions"
     rows_open, s_open = play("--probe-set", "graph", "--turns", "20", "--ask", "open")
     assert s_open["ask"] == "open" and not any(r["action"].endswith(gp.PLAIN) for r in rows_open if r["kind"] == "graph")
     assert all(r["verdict"] in ("held", "clean") for r in rows_open if r["kind"] == "graph"), "the offline writer answers either wording"
