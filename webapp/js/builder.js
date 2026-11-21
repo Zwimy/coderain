@@ -43,6 +43,7 @@ export async function renderBuilder(slug, scope = "scenario") {
         <span style="flex:1"></span>
         <button class="mini" data-seed="${id}">✨ Seed from idea</button>
         <button class="mini" data-improve="${id}">Improve with AI</button>
+        <button class="mini" data-undo-ai="${id}" aria-label="Undo the AI text in ${esc(label)}" hidden>Undo AI</button>
       </div>
       <textarea id="${id}" rows="${rows}"
         placeholder="${esc(ph)}">${esc(val)}</textarea>
@@ -183,6 +184,9 @@ export async function renderBuilder(slug, scope = "scenario") {
 
   const FIELD_KIND = {"b-premise": "premise", "b-intro": "introduction",
                       "b-world": "world"};
+  // One level of undo per field (the piece form has its own): the text the last AI answer replaced. It is dropped when the author
+  // types into the field (Undo would throw their own words away with the AI's) and when it is used; a second answer replaces it.
+  const undoText = {};
   const assist = async (id, mode) => {
     const ta = $("#" + id);
     let text = ta.value.trim();
@@ -202,6 +206,7 @@ export async function renderBuilder(slug, scope = "scenario") {
     // to disk (mainFields), so a placeholder put in the value was saved over the author's own premise whenever they left
     // the page while the model was still working. The request is the only thing that may replace the text, and only when
     // it succeeds.
+    const before = ta.value;                // what a good answer will replace, kept for Undo AI
     ta.disabled = true;
     ta.setAttribute("aria-busy", "true");
     const status = document.createElement("div");
@@ -215,6 +220,8 @@ export async function renderBuilder(slug, scope = "scenario") {
         improve: $("#b-improve").checked,
       }});
       ta.value = out.text;
+      undoText[id] = before;
+      $(`[data-undo-ai="${id}"]`).hidden = false;
     } catch (e) {
       toast(e.message);
     } finally {
@@ -227,6 +234,22 @@ export async function renderBuilder(slug, scope = "scenario") {
     "click", () => assist(b.dataset.seed, "seed")));
   view.querySelectorAll("[data-improve]").forEach(b => b.addEventListener(
     "click", () => assist(b.dataset.improve, "improve")));
+  view.querySelectorAll("[data-undo-ai]").forEach(b => b.addEventListener("click", () => {
+    const id = b.dataset.undoAi;
+    if (!(id in undoText)) return;
+    const ta = $("#" + id);
+    ta.value = undoText[id];
+    delete undoText[id];
+    b.hidden = true;
+    ta.focus();
+  }));
+  for (const id of Object.keys(FIELD_KIND)) {
+    const ta = $("#" + id);
+    if (ta) ta.addEventListener("input", () => {
+      delete undoText[id];
+      $(`[data-undo-ai="${id}"]`).hidden = true;
+    });
+  }
 
   // World vocabulary for the chip autocompletes: every card (title+slug) and
   // every trait already used anywhere in this world.

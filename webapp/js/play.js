@@ -5,6 +5,7 @@ import {watchLabels} from "./a11y.js";
 import {canonModal} from "./canon.js";
 import {attachFind} from "./find.js";
 import {createTurnMenu} from "./turnmenu.js";
+import {displayModal} from "./display.js";
 import {castModal} from "./cast.js";
 import {
   closeModal,
@@ -340,6 +341,7 @@ export async function renderPlay(slug) {
                  : "no companions yet"}">Talk</button>
         <button id="find-btn" aria-expanded="false" aria-controls="find-bar"
           title="find a word in this story">Find</button>
+        <button id="display-btn" aria-label="Display settings" title="text size and background rain">Aa</button>
       </div>
       <!-- Outside #transcript on purpose: the pen and retry address a turn by its position in it, so nothing may be added there. -->
       <div id="find-bar" role="search" aria-label="Find in the story" hidden>
@@ -379,6 +381,7 @@ export async function renderPlay(slug) {
 
   const transcript = $("#transcript");
   attachFind({transcript, bar: $("#find-bar"), button: $("#find-btn")});
+  $("#display-btn").addEventListener("click", displayModal);
   const stage = $("#stageline");
   const evbar = $("#eventbar");
   let swipe = s.swipes || {count: 1, idx: 0};      // ST-02 state for the last narrator turn (the server knows which is showing)

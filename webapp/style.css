@@ -173,9 +173,9 @@ mark.find-hit.current { background: var(--player); color: #1a1200; outline: 2px 
         /* one long word, URL or path used to make the turn 1,211px wide on a 375px screen, cut off at the edge */
         overflow-wrap: anywhere; }
 .card, #modal-card { overflow-wrap: anywhere; }
-.turn.narrator { font-family: var(--serif); font-size: 16.5px;
+.turn.narrator { font-family: var(--serif); font-size: calc(16.5px * var(--story-scale, 1));
                  white-space: pre-wrap; }
-.turn.player { color: var(--player); font-style: italic;
+.turn.player { color: var(--player); font-style: italic; font-size: calc(15px * var(--story-scale, 1));
                white-space: pre-wrap; }
 .turn { position: relative; }
 .turn.player .turn-body::before { content: "› "; color: var(--accent); }

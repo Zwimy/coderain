@@ -4,6 +4,7 @@
    nothing here touches the global scope. */
 import {esc, view} from "./util.js";
 import {watchLabels} from "./a11y.js";
+import {applyDisplay} from "./display.js";
 import {modalCard} from "./modal.js";
 import {
   checkReady,
@@ -103,5 +104,6 @@ export async function render() {
 const skip = document.querySelector(".skip-link");
 if (skip) skip.addEventListener("click", ev => { ev.preventDefault(); view.focus(); });
 watchLabels(view, modalCard);
+applyDisplay();            // the reader's text size, before the first page paints
 setBrainline();
 render();

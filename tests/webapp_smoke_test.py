@@ -55,6 +55,10 @@ Asserts, once it can run:
 38) the per-turn menu: a button at each turn and a touch long press open Edit, Copy text, Branch from here (replies only) and
     Regenerate (the last reply only); keyboard, focus return, copy and a branch that holds exactly the turns up to that reply,
     a branch reply with no warnings list does not throw, and the items that change the story wait while a reply is written
+39) display settings from the Play page: text size (applied at once, remembered, medium for a value that is not ours) and the rain
+    switch; closing the dialog never asks to discard anything
+40) the builder's Improve with AI and Seed from idea each have a one-level Undo AI per field: it restores what the last answer
+    replaced, is dropped when the author types, is not offered after a failed request, and is not shared between fields
 """
 import json
 import os
@@ -1731,17 +1735,22 @@ with sync_playwright() as p:
     if held_open != 1:
         failures.append("a long press on a touch screen did not open the turn menu")
     page.keyboard.press("Escape")
+    # each of these must leave NO menu (checked one at a time: the next press would close a menu the one before had opened)
     page.evaluate(fire_js, ["pointerdown", "touch", 0])
     page.wait_for_timeout(200)
     page.evaluate(fire_js, ["pointerup", "touch", 0])
     page.wait_for_timeout(700)
+    if page.locator(".turn-menu").count():
+        failures.append("a short touch opened the turn menu")
     page.evaluate(fire_js, ["pointerdown", "touch", 0])
     page.evaluate(fire_js, ["pointermove", "touch", 40])
     page.wait_for_timeout(800)
+    if page.locator(".turn-menu").count():
+        failures.append("a finger that moved while held opened the turn menu")
     page.evaluate(fire_js, ["pointerdown", "mouse", 0])
     page.wait_for_timeout(800)
     if page.locator(".turn-menu").count():
-        failures.append("a short touch, a moving finger or a held mouse button opened the turn menu")
+        failures.append("a held mouse button opened the turn menu")
     # while a reply is being written, Edit, Branch and Regenerate wait; Copy does not
     held_turn38 = []
     page.route("**/api/saves/*/turn", lambda route: held_turn38.append(route))
@@ -1768,6 +1777,142 @@ with sync_playwright() as p:
     page.unroute("**/api/saves/*/turn")
     page.unroute("**/api/saves/*/cancel")
     print("38) the per-turn menu: edit, copy, branch from here, regenerate; keyboard, long press, and waiting while a reply is written")
+
+    # --- D-056 item 12: display settings reachable from Play --------------------------------------------------------
+    # 39) Text size (new) and the background rain (which could only be reached from Settings) in a dialog on the Play page.
+    #     Both are kept in this browser, apply at once, and closing the dialog never asks to discard anything.
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_selector(f".card[data-slug='{slug}']", timeout=8000)
+    page.evaluate("localStorage.removeItem('coderain_font')")
+    page.evaluate(f"location.hash = '#play/{slug}'")
+    page.wait_for_selector("#action", timeout=8000)
+    page.wait_for_function("document.querySelectorAll('#transcript .turn.narrator').length > 0", timeout=8000)
+    size_js = "parseFloat(getComputedStyle(document.querySelector('#transcript .turn.narrator')).fontSize)"
+    player_size_js = "parseFloat(getComputedStyle(document.querySelector('#transcript .turn.player')).fontSize)"
+    base = page.evaluate(size_js)
+    player_base = page.evaluate(player_size_js)
+    if page.get_attribute("#display-btn", "aria-label") != "Display settings":
+        failures.append("the Display button has no name")
+    page.click("#display-btn")
+    page.wait_for_selector("#dp-size", timeout=3000)
+    state = page.evaluate("""() => ({on: [...document.querySelectorAll('#dp-size button')].filter(b => b.classList.contains('on')).map(b => b.dataset.size),
+        rain: document.querySelector('#dp-rain').checked, rainOn: window.rainOn()})""")
+    if state["on"] != ["medium"] or state["rain"] != state["rainOn"]:
+        failures.append(f"the Display dialog opens showing {state}")
+    page.click("#dp-size button[data-size='large']")
+    grown = page.evaluate(size_js)
+    if not grown > base * 1.1 or not page.evaluate(player_size_js) > player_base * 1.1:
+        failures.append(f"Large did not make the story text bigger (replies {base}px -> {grown}px, your actions {player_base}px -> {page.evaluate(player_size_js)}px)")
+    if page.evaluate("localStorage.getItem('coderain_font')") != "large":
+        failures.append("the text size was not remembered in this browser")
+    if page.evaluate("document.querySelector('#dp-size button.on').dataset.size") != "large":
+        failures.append("the dialog does not show the size just chosen")
+    page.click("#dp-size button[data-size='small']")
+    if not page.evaluate(size_js) < base * 0.95:
+        failures.append("Small did not make the story text smaller")
+    page.click("#dp-size button[data-size='large']")
+    # the rain switch is the same one Settings has
+    was_on = page.evaluate("window.rainOn()")
+    page.click("#dp-rain")
+    if page.evaluate("window.rainOn()") == was_on or page.evaluate("localStorage.getItem('coderain_motion')") != ("off" if was_on else "on"):
+        failures.append("the rain switch in the Display dialog did not change the background")
+    page.click("#dp-rain")
+    # nothing to discard: Escape closes at once, with no question
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#modal-root.hidden", state="attached", timeout=3000)
+    if page.locator("#modal-ask").count():
+        failures.append("closing the Display dialog asked about discarding changes")
+    page.click("#display-btn")
+    page.wait_for_selector("#dp-done", timeout=3000)
+    page.click("#dp-done")
+    page.wait_for_selector("#modal-root.hidden", state="attached", timeout=3000)
+    # kept across a reload, applied before the page paints; a stored value that is not ours means medium
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector("#action", timeout=8000)
+    page.wait_for_function("document.querySelectorAll('#transcript .turn.narrator').length > 0", timeout=8000)
+    if not page.evaluate(size_js) > base * 1.1:
+        failures.append("the text size did not survive a reload")
+    page.evaluate("localStorage.setItem('coderain_font', 'banana')")
+    page.evaluate("async () => { const m = await import('/js/display.js'); m.applyDisplay(); }")
+    if abs(page.evaluate(size_js) - base) > 0.5:
+        failures.append("a stored size that is not one of ours did not mean medium")
+    page.evaluate("localStorage.removeItem('coderain_font')")
+    page.evaluate("async () => { const m = await import('/js/display.js'); m.applyDisplay(); }")
+    print("39) display settings: text size and the rain switch from the Play page, remembered, nothing to discard")
+
+    # --- D-056 item 13: one level of undo for the builder's AI assist ------------------------------------------------
+    # 40) "Improve with AI" and "Seed from idea" replaced a field's text with no way back. Undo AI restores what the last answer
+    #     replaced, one level per field; typing into the field drops it (it would throw the author's own words away).
+    page.evaluate(f"location.hash = '#world/{scen}'")
+    page.wait_for_selector("#b-premise", timeout=8000)
+    real_premise = page.input_value("#b-premise")
+    answers = ["First AI text.", "Second AI text.", "Intro from the AI."]
+    served = []
+
+    def serve_answer(route):
+        served.append(1)
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"text": answers[len(served) - 1]}))
+
+    page.route("**/api/assist", serve_answer)
+    undo_sel = "[data-undo-ai='b-premise']"
+    if page.is_visible(undo_sel):
+        failures.append("Undo AI is showing before any AI answer")
+    page.fill("#b-premise", "My own premise.")
+    page.click("[data-improve='b-premise']")
+    page.wait_for_function("document.querySelector('#b-premise').value === 'First AI text.'", timeout=5000)
+    if not page.is_visible(undo_sel):
+        failures.append("Undo AI did not appear after an AI answer")
+    if not page.get_attribute(undo_sel, "aria-label") or "Premise" not in page.get_attribute(undo_sel, "aria-label"):
+        failures.append(f"Undo AI is not named for its field: {page.get_attribute(undo_sel, 'aria-label')!r}")
+    page.click(undo_sel)
+    if page.input_value("#b-premise") != "My own premise." or page.is_visible(undo_sel):
+        failures.append(f"Undo AI did not restore the author's text and go away: {page.input_value('#b-premise')!r}")
+    # one level: two answers in a row, Undo goes back to the FIRST answer, not to the author's own text
+    page.click("[data-improve='b-premise']")
+    page.wait_for_function("document.querySelector('#b-premise').value === 'Second AI text.'", timeout=5000)
+    page.click(undo_sel)
+    if page.input_value("#b-premise") != "My own premise.":
+        failures.append(f"Undo AI after the second answer restored {page.input_value('#b-premise')!r}")
+    # the fields do not share an undo: an answer in another field leaves the premise's alone
+    if page.is_visible("#b-intro"):
+        page.fill("#b-intro", "My own opening.")
+        page.click("[data-improve='b-intro']")
+        page.wait_for_function("document.querySelector('#b-intro').value === 'Intro from the AI.'", timeout=5000)
+        if page.is_visible(undo_sel):
+            failures.append("an answer for the introduction showed the premise's Undo AI")
+        page.click("[data-undo-ai='b-intro']")
+        if page.input_value("#b-intro") != "My own opening.":
+            failures.append(f"the introduction's Undo AI restored {page.input_value('#b-intro')!r}")
+    page.unroute("**/api/assist")
+    # typing into the field after an answer drops the undo (nothing of the author's may be thrown away by it)
+    page.route("**/api/assist", lambda route: route.fulfill(status=200, content_type="application/json", body='{"text": "Another AI text."}'))
+    page.click("[data-improve='b-premise']")
+    page.wait_for_function("document.querySelector('#b-premise').value === 'Another AI text.'", timeout=5000)
+    page.type("#b-premise", " And my edit.")
+    if page.is_visible(undo_sel):
+        failures.append("Undo AI stayed after the author typed into the field")
+    # a failed answer changes nothing and offers nothing to undo
+    page.unroute("**/api/assist")
+    page.fill("#b-premise", "Kept premise.")
+    page.route("**/api/assist", lambda route: route.fulfill(status=400, content_type="application/json", body='{"detail": "no model"}'))
+    page.click("[data-improve='b-premise']")
+    page.wait_for_function("!document.querySelector('#b-premise').disabled", timeout=5000)
+    if page.input_value("#b-premise") != "Kept premise." or page.is_visible(undo_sel):
+        failures.append("a failed AI request changed the field or offered an undo")
+    # "Seed from idea" is undoable too
+    page.unroute("**/api/assist")
+    page.route("**/api/assist", lambda route: route.fulfill(status=200, content_type="application/json", body='{"text": "Seeded text."}'))
+    page.click("[data-seed='b-premise']")
+    page.wait_for_selector("#pm-v", timeout=4000)
+    page.fill("#pm-v", "a grim ferryman")
+    page.click("#pm-yes")
+    page.wait_for_function("document.querySelector('#b-premise').value === 'Seeded text.'", timeout=5000)
+    page.click(undo_sel)
+    if page.input_value("#b-premise") != "Kept premise.":
+        failures.append(f"Undo AI after a seed restored {page.input_value('#b-premise')!r}")
+    page.unroute("**/api/assist")
+    page.fill("#b-premise", real_premise)                          # leave the world as it was found
+    print("40) the builder's AI assist has a one-level undo per field")
 
     browser.close()
 
