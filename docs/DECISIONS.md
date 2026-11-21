@@ -2432,6 +2432,37 @@ Left: 6 (Retry keeps what it replaces, then Stop for swipe-generate) and everyth
   a provider whose model list needs a different path or header than `<base>/models` (then the test reports "no model list" and the first
   turn remains the real check).
 
+**Progress, 2026-11-21: items 6 (D-057), 9 to 14 are built.** Left: P3, items 15 to 20. Each item below has smoke cases that were checked by
+breaking the fix in a copy of the repo (100 or so mutants in all, every one caught in the end; the few that slipped through, and one that was
+equivalent, are named).
+- 9, the accessibility remainder. The audit was run in a real browser first: segmented buttons carried no pressed state (the "on" class is now
+  mirrored into `aria-pressed` by `a11y.js`, including when a view flips the class in place), focus fell to `<body>` on every route change (it
+  now goes to the new page's heading, only on a change of route and only when nothing holds it, so an open dialog keeps its focus), a toast's kind
+  was a border colour (a glyph for the eye and a word for the ear now), a pencil on every turn was a bare glyph, as were the draft button, the
+  plan row buttons, a chip's remove button and the memory textarea (named; the plan buttons carry the chapter number), and the Talk drawer, built
+  on `<body>` outside everything `a11y.js` watched, had no names and would never get any (it names itself and is watched). One defect was not on
+  the list: an AI answer for a piece form could land in a DIFFERENT piece. The model answers later; by then the dialog can be closed and another
+  piece's form opened into the same host with the same element ids, and the answer was written into it and its buttons reset. The answer is now
+  dropped, the reader is told, and the buttons it touches are the ones held when the request started.
+- 10, a readable export and find in the story. `coderain/readable.py` and `GET /api/saves/{slug}/readable` give the stored turns as Markdown (the
+  title, "You:" quotes, the narration), not the transcript with its marker comments; "Export text" is on the story card, and the zip stays the
+  backup that imports again. `webapp/js/find.js`: highlights are `<mark>` elements inside `.turn-body` only and nothing is added to or removed
+  from `#transcript`, because the pen and retry address a turn by its position there; closing merges the text nodes back; a search runs again
+  when turns come or go; typed text is literal. A match is found inside one run of text, so a phrase that crosses a bold or italic edge is not.
+- 11, the per-turn menu (`webapp/js/turnmenu.js`): Edit, Copy text, Branch from here and Regenerate on a "..." button and a touch long press.
+  Branch is offered on replies only (a fork that ends on the player's own action has no reply to continue from, D-006) and Regenerate on the last
+  reply only. Edit, Branch and Regenerate wait while a reply is being written. Copy takes the turn's own markdown. The branch route's reply was
+  read as `out.warnings.length` with no guard in the old Branch button (the failure was swallowed into a toast) and is guarded in both places.
+- 12, a Display dialog on the Play page (`webapp/js/display.js`): the text size (new) and the rain switch (reachable only from Settings before).
+  Both belong to the browser, apply at once and have no Save, so closing never asks to discard anything.
+- 13, Undo AI for the world builder's premise, introduction and world fields: one level per field, dropped when the author types into the field
+  (it would throw their own words away with the AI's), when it is used, and never offered after a failed request.
+- Found on the way: coming back to a story whose turn was still generating released Send before the transcript was repainted from the store, so
+  for one request Send was live over a half-finished exchange. The order is now repaint, then release (commit 1c4b37b); case 29 had been failing
+  about one run in ten on it. The mutation runs that exposed what a test could not see: a stale `watchLabels` first paint, a seed button reset
+  by another form's answer, a find that marked the version bar, and two long-press cancels (a lifting and a moving finger) that were checked
+  together, so one open menu hid the other's failure.
+
 ## D-057 — Retry keeps what it replaces, and a failed or stopped retry puts the exchange back
 
 **What was wrong.** A retry deleted the last exchange first and regenerated second. A model error, the Stop button or an empty reply ended
