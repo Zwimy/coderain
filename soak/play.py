@@ -10,10 +10,16 @@ turn plus a summary.
                         [--sheets full|role] [--window 4] [--budget 5000] [--probe-every 8] [--canon off|card]
                         [--probe-set look|graph|all] [--graph-every 4] [--ask plain|open] [--facts stated|none]
                         [--stub-knowledge truthful|leaky|wrong]
+                        [--provider ollama|openrouter] [--allow-paid] [--max-requests 900]
 
   --stub   an offline writer (deterministic prose, no model, no network): what the tests and a dry run use
   --model  a local Ollama model on this machine. It must already be running: this never starts it, and a host that is
            not this machine is refused (the invented story is the only text sent, but a habit of refusing is cheap)
+  --provider openrouter (D-068): a hosted model instead, FREE ones only (the name must end in :free unless --allow-paid). The key is
+           read from the OPENROUTER_API_KEY environment variable, never an argument and never written to the run's config. Requests are
+           spaced (3.2 s), a busy or refused one is retried after a wait, every attempt counts against --max-requests, and the run
+           stops cleanly between turns when too few are left for one more (a free model has a daily cap). The summary says how many
+           requests it used and whether it stopped early (soak/hosted.py)
   --fate   the save's fate setting (D-045). off: the model is never asked; preview: asked and recorded, the Writer is
            sent nothing; on: it steers
   --sheets full: each character sheet states hair and eyes (the truth probes are scored against);
@@ -54,6 +60,7 @@ import urllib.request
 from pathlib import Path
 
 from soak import graph_probe as gp
+from soak import hosted
 
 PREMISE = ("Brinewick is a tidal town on a saltmarsh, reached only by the ferry. Rain comes off the sea most evenings. "
            "You arrive as a stranger carrying a sealed letter for someone in town. The people you meet are Ottoline Pike, "
@@ -227,15 +234,16 @@ def repeat_share(texts: list[str], n: int = 8) -> float:
 
 
 def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False,
-            stub_folds: bool = False, tail_ties: bool = False, tic_guard: bool = False) -> str:
-    cfg = f"""active_profile: local
+            stub_folds: bool = False, tail_ties: bool = False, tic_guard: bool = False, provider: str = "ollama") -> str:
+    profile = hosted.profile_lines(model) if provider == "openrouter" else f"""active_profile: local
 profiles:
   local:
     base_url: http://localhost:11434/v1
     model: {model}
     api_key_env: OLLAMA_API_KEY
     context_tokens: 16384
-generation:
+"""
+    cfg = profile + f"""generation:
   temperature: 0.9
   top_p: 0.95
   max_tokens: 700
@@ -282,12 +290,18 @@ def run_play(args, home: Path) -> int:
     stub = bool(args.stub) or not args.model
     if args.canon == "card" and stub:
         raise SystemExit("--canon card needs --model: the reader that builds the card is a model")
-    if not stub:
+    provider = getattr(args, "provider", "ollama")
+    pacer = None
+    if provider == "openrouter":
+        hosted.check_model(args.model, bool(getattr(args, "allow_paid", False)))
+        hosted.require_key()
+        pacer = hosted.Pacer(max_requests=int(getattr(args, "max_requests", 900)))
+    elif not stub:
         _require_local(args.host)
     model = "stub-writer" if stub else args.model
     (home / "config.yaml").write_text(
         _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links), bool(args.stub_folds),
-                bool(args.tail_ties), bool(args.tic_guard)),
+                bool(args.tail_ties), bool(args.tic_guard), provider),
         encoding="utf-8")
 
     from coderain import fate
@@ -316,6 +330,7 @@ def run_play(args, home: Path) -> int:
     store.set_rpg_state(rpg)
     if args.fate != "off":
         fate.set_settings(store, args.fate, True)
+    undo_pacing = hosted.install(pacer) if pacer is not None else None
     eng = Engine(load_config(), store)
     writer = StubWriter(args.sheets, args.stub_knowledge, folds=bool(args.stub_folds)) if stub else None
     if writer is not None:
@@ -337,12 +352,22 @@ def run_play(args, home: Path) -> int:
     player = ScriptedPlayer(args.seed, args.probe_every, probe_set, graph_every, ask)
     rows, verdicts = [], {"held": 0, "drift": 0, "none": 0}
     t_all = time.time()
+    stopped = None
     with (out / "turns.jsonl").open("w", encoding="utf-8") as f:
         for i in range(1, args.turns + 1):
+            # A hosted free model has a daily cap, so the run stops between turns with what it has instead of dying inside one.
+            if pacer is not None and pacer.left() < hosted.MIN_TURN_REQUESTS:
+                stopped = f"request budget spent after {len(rows)} turns"
+                break
             mv = player.act(i)
             t0 = time.time()
             calls_before = len(sent)
             text = "".join(eng.turn(mv["action"]))
+            if pacer is not None and pacer.failed:
+                # The provider refused for good (the pool stayed busy through every retry, or a daily cap): the text is an error
+                # message, not narration, so this turn is not recorded and the run ends with what it has.
+                stopped = f"the provider failed at turn {i} ({pacer.last_error}); that turn is not recorded"
+                break
             # The Writer's call is picked out BEFORE the fold, which makes model calls of its own (see writer_call).
             writer_msgs = gp.writer_call(sent[calls_before:], mv["action"])
             events = eng.maybe_fold()
@@ -378,7 +403,10 @@ def run_play(args, home: Path) -> int:
                "tic_guard": bool(args.tic_guard),
                "repeat_share": repeat_share([r["text"] for r in rows if r.get("text")]),
                "model_calls": dict(writer.calls) if writer is not None else None,
-               "health_rows": len(store.health(200))}
+               "health_rows": len(store.health(200)),
+               "provider": provider, "requests": pacer.count if pacer is not None else None, "stopped": stopped}
+    if undo_pacing is not None:
+        undo_pacing()
     if graph_on:
         summary["probe_set"], summary["ask"], summary["facts"] = probe_set, ask, args.facts
         summary["follow_links"] = bool(args.follow_links)

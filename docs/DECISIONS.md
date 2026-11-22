@@ -3163,3 +3163,42 @@ Writer does, since a model that follows the prompt better is the one more likely
 
 **What this closes in the plan.** Part C's first item is done. Both flags stay off by default and no documentation recommends turning either
 on. The pronoun-attribution item was already measured and built behind a switch in D-035 (94% of 36 answers right, `identity_via_pronoun`, off).
+
+
+## D-068: The play soak on a hosted free model (`--provider openrouter`), with its limits enforced in code
+
+**Why.** Every long-story measurement so far ran on a 4B or an 8B model on this machine. D-055 asks whether a larger Writer is immune to what a
+4B one does (the loop under fate steering), and the plan's Phase 7 asks for a long story at three model tiers. A hosted tier is the only way to
+see a model several times the size, and the OpenRouter `:free` models cost nothing, but a free pool is shared, rate-limited and capped per
+day, and a key given for a free test must not be able to spend. So the limits are in the code, not in a promise.
+
+**What it is.** `soak/hosted.py` and `python -m soak play --provider openrouter --model <id>:free`.
+- The model must end in `:free` (`--allow-paid` is the explicit way round); no model is refused.
+- The key is read from `OPENROUTER_API_KEY` by name. It is never an argument, never written to the run's config (which holds the variable's
+  name and the OpenRouter address), and no message the module raises can contain it.
+- Every chat request of the engine (the Writer, the folds, the canon reader and the direct calls) goes through the OpenAI SDK's own
+  `chat.completions.create`; the soak wraps that one function, so nothing in the engine changed. Requests are spaced 3.2 s apart (18.75 a
+  minute, under the 20 a minute cap), a busy pool (429), a provider fault (5xx) and a dropped connection are retried after 5, 10, 20, 40, 60, 60
+  and 60 seconds, and a bad request, a bad key and a missing model (400 to 404) are not. A daily cap ("per-day" in the provider's message) is
+  not retried either: waiting does not lift it.
+- Every attempt counts against `--max-requests` (default 900). Before each turn the run stops cleanly if fewer than 12 are left (a turn is the
+  Writer's call, sometimes a fold and the canon reader's pass).
+- A request that fails for good (the retries are spent, or it is not worth retrying) stops the run AT that turn and the turn is not recorded.
+  A free pool can stay saturated for many minutes, and the engine would write its error message into the story as if it were narration, which
+  corrupts every row after it. The summary says why it stopped (`stopped`) and how many requests it used (`requests`).
+- Local runs are unchanged byte for byte (the config text is pinned by a test) and the summary now carries `provider`, `requests` and `stopped`.
+
+**What it does not do.** The pacing counts attempts it makes itself; the SDK's own two silent retries inside one call are not counted, so the
+budget slightly undercounts against the provider. It does not know the account's daily allowance (the key-status call does not report it), so
+`--max-requests` is the guard, and a provider that has already spent the day's allowance stops the run on the first request. A reasoning model
+(Nemotron 3 Ultra, the free model that was answering when this was built) spends tokens thinking before it writes; the engine's prose call
+already gives a reasoning model headroom (`prose_tokens`), and a four-turn trial wrote usable prose in one request a turn. The corpus
+harness (`soak scribe`) already supported OpenRouter and is unchanged.
+
+**What was seen on the day.** Gemma 4 31B and 26B answered 429 ("temporarily rate-limited upstream") to every request for the first hour, and
+Ling 3.2 Flash too; Nemotron 3 Ultra and Flint answered. A hosted corpus run against Gemma 4 31B spent 95 seconds of retries on each of five
+passages and failed all of them before it was stopped, which is the reason a run now stops at the first failure for good instead of grinding on.
+
+**Tests.** `soak_hosted_test.py` (7 groups, offline, a fake clock and a canary standing in for the key: the model guard, the key by name, the
+pacer, the retry rules and undo, the configs, the command line including the budget boundary, and the stop at a failed turn). 31 mutants
+broken in a copy of the repo, all went red.

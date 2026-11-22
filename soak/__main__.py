@@ -170,8 +170,14 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--turns", type=int, default=30)
     pl.add_argument("--seed", type=int, default=5)
     pl.add_argument("--stub", action="store_true", help="an offline writer: no model, no network")
-    pl.add_argument("--model", default=None, help="a local Ollama model (omit with --stub)")
+    pl.add_argument("--model", default=None, help="a local Ollama model (omit with --stub); with --provider openrouter, a ':free' model id")
     pl.add_argument("--host", default="http://localhost:11434", help="must be this machine")
+    pl.add_argument("--provider", choices=["ollama", "openrouter"], default="ollama",
+                    help="ollama: a model on this machine. openrouter (D-068): a hosted FREE model; the key is read from OPENROUTER_API_KEY")
+    pl.add_argument("--allow-paid", action="store_true", help="openrouter: allow a model that is not ':free' (refused by default)")
+    pl.add_argument("--max-requests", type=int, default=900,
+                    help="openrouter: stop between turns when fewer than a turn's worth of requests are left of this many (free models "
+                         "have a daily cap)")
     pl.add_argument("--fate", choices=["off", "preview", "on"], default="off", help="the save's fate setting (D-045)")
     pl.add_argument("--sheets", choices=["full", "role"], default="full")
     pl.add_argument("--canon", choices=["off", "card"], default="off")
