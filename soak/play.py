@@ -362,15 +362,24 @@ def run_play(args, home: Path) -> int:
             mv = player.act(i)
             t0 = time.time()
             calls_before = len(sent)
-            text = "".join(eng.turn(mv["action"]))
-            if pacer is not None and pacer.failed:
-                # The provider refused for good (the pool stayed busy through every retry, or a daily cap): the text is an error
-                # message, not narration, so this turn is not recorded and the run ends with what it has.
+            try:
+                text = "".join(eng.turn(mv["action"]))
+                failed = pacer is not None and pacer.failed
+                if not failed:
+                    # The Writer's call is picked out BEFORE the fold, which makes model calls of its own (see writer_call).
+                    writer_msgs = gp.writer_call(sent[calls_before:], mv["action"])
+                    events = eng.maybe_fold()
+                    failed = pacer is not None and pacer.failed
+            except Exception:  # noqa: BLE001 - swallowed ONLY when the provider is what failed; a bug of ours still stops the run loudly
+                if pacer is None or not pacer.failed:
+                    raise
+                failed = True
+            if failed:
+                # The provider refused for good (the pool stayed busy through every retry, or a daily cap). The engine raises the
+                # error, or writes its message into the story as if it were narration; either way this turn is not recorded and the
+                # run ends with what it has, and the summary is still written.
                 stopped = f"the provider failed at turn {i} ({pacer.last_error}); that turn is not recorded"
                 break
-            # The Writer's call is picked out BEFORE the fold, which makes model calls of its own (see writer_call).
-            writer_msgs = gp.writer_call(sent[calls_before:], mv["action"])
-            events = eng.maybe_fold()
             secs = round(time.time() - t0, 2)
             rec = next((r for r in reversed(fate.read(store)) if r["n"] == len(store.turns()) - 1), None)
             row = {"i": i, **mv, "secs": secs, "text": text, "events": events, "words": len(text.split()),

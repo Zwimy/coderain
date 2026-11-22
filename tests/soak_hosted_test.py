@@ -156,6 +156,9 @@ def test_retry():
     res, calls, counted, slept, _ = run_with([Busy(429)])                    # always busy
     assert res[0] == "raised" and isinstance(res[1], Busy), res
     assert calls == 4 and counted == 4 and slept == [1, 2, 3], (calls, counted, slept)       # three waits, four attempts, then it gives up
+    # the default patience: a shared free pool was measured refusing every request for more than four minutes (Particle-1, and the first
+    # version of the waits, 255 s in all, ended a real run at turn 34)
+    assert sum(hosted.RETRY_WAITS) >= 600, f"the retry patience is only {sum(hosted.RETRY_WAITS)} s"
     print("4. busy, fault and dropped connection are retried with the waits; 400 to 404 and our own errors are not; it gives up and raises; undo restores")
 
 
@@ -244,19 +247,18 @@ def test_failed_for_good():
 
 
 DRIVER = """
-import sys
+import os, sys
 from soak import hosted
+import soak.play as sp
+MODE = os.environ["FAIL_MODE"]
+state = {"streams": 0, "failed": False}
 class Flaky(hosted.Pacer):
-    # fails for good from the fourth time the loop asks how many requests are left: the fourth turn's provider call 'failed'
-    def __init__(self, *a, **k):
-        super().__init__(*a, **k)
-        self.asked = 0
+    # the pacer's verdict is whatever the driver says: the provider failed for good, or it did not
     def left(self):
-        self.asked += 1
         return 100
     @property
     def failed(self):
-        return self.asked >= 4
+        return state["failed"]
     @failed.setter
     def failed(self, v):
         pass
@@ -267,24 +269,50 @@ class Flaky(hosted.Pacer):
     def last_error(self, v):
         pass
 hosted.Pacer = Flaky
+real = sp.StubWriter.stream
+def stream(self, messages, **k):
+    state["streams"] += 1
+    if state["streams"] == 4:                      # the Writer's call of the fourth turn
+        if MODE == "signal":
+            state["failed"] = True                 # the engine turned the error into text; the pacer knows the provider failed
+        elif MODE == "raise":
+            state["failed"] = True
+            raise RuntimeError("provider down")    # the engine raised it; the pacer knows the provider failed
+        elif MODE == "bug":
+            raise RuntimeError("a bug of ours")    # raised, but the provider did not fail
+    return real(self, messages, **k)
+sp.StubWriter.stream = stream
 from soak.__main__ import main
 sys.exit(main(sys.argv[1:]))
 """
 
 
-def test_run_stops_at_the_failed_turn():
-    out = Path(tempfile.mkdtemp(prefix="cr-hosted-fail-"))
-    env = dict(os.environ, **{hosted.KEY_ENV: CANARY, "PYTHONIOENCODING": "utf-8"})
+def drive(mode):
+    out = Path(tempfile.mkdtemp(prefix=f"cr-hosted-{mode}-"))
+    env = dict(os.environ, **{hosted.KEY_ENV: CANARY, "PYTHONIOENCODING": "utf-8", "FAIL_MODE": mode})
     r = subprocess.run([sys.executable, "-c", DRIVER, "play", "--out", str(out), "--stub", "--provider", "openrouter", "--model", "x/y:free",
                         "--turns", "10"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=ROOT, timeout=300)
-    assert r.returncode == 0, (r.stdout + r.stderr)[-400:]
-    s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
-    assert s["turns"] == 3, f"the failed turn was recorded or the run went on: {s['turns']}"
-    assert s["stopped"] == "the provider failed at turn 4 (status 429); that turn is not recorded", s["stopped"]
-    rows = [json.loads(x) for x in (out / "turns.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
-    assert len(rows) == 3 and [x["i"] for x in rows] == [1, 2, 3], [x["i"] for x in rows]
-    print("7b. a run whose provider fails stops at that turn, does not record it, and says why")
+    return r.returncode, (r.stdout or "") + (r.stderr or ""), out
 
+
+def test_run_stops_at_the_failed_turn():
+    want = "the provider failed at turn 4 (status 429); that turn is not recorded"
+    # the provider failed for good, shown as error text in the story (signal) or as an exception out of the engine's turn (raise: this is
+    # what a real run did, and the first version of this test missed it because it only simulated the first)
+    for mode in ("signal", "raise"):
+        code, text, out = drive(mode)
+        assert code == 0, (mode, text[-400:])
+        s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+        assert s["turns"] == 3, f"{mode}: the failed turn was recorded or the run went on: {s['turns']}"
+        assert s["stopped"] == want, (mode, s["stopped"])
+        rows = [json.loads(x) for x in (out / "turns.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        assert [x["i"] for x in rows] == [1, 2, 3], (mode, [x["i"] for x in rows])
+    # a bug of ours is NOT the provider's failure: it must stop the run loudly, not be swallowed into a tidy summary
+    code, text, out = drive("bug")
+    assert code != 0 and "a bug of ours" in text, (code, text[-300:])
+    assert not (out / "summary.json").exists(), "a bug was turned into a normal-looking summary"
+    print("7b. a provider that fails for good (as text or as an exception) stops the run at that turn, unrecorded, with a summary and a reason; "
+          "a bug of ours still stops it loudly")
 
 test_model_guard()
 test_key_by_name()

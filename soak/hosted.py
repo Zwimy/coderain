@@ -29,9 +29,10 @@ FREE_INTERVAL = 3.2
 # A turn is the Writer's call, sometimes a fold (several calls) and the canon reader's pass. Below this many requests left the run stops
 # before starting another turn.
 MIN_TURN_REQUESTS = 12
-# Seconds to wait after a refused or busy request, one entry per retry (so eight attempts). A free model's pool is shared and is often
-# busy for a minute at a time.
-RETRY_WAITS = (5, 10, 20, 40, 60, 60, 60)
+# Seconds to wait after a refused or busy request, one entry per retry (so ten attempts and about 17 minutes in all). A free model's pool is
+# shared and was measured busy for far longer than a minute at a time (Particle-1 refused every request for more than four minutes, and the
+# first version of this list gave up after 255 seconds and ended a run at turn 34).
+RETRY_WAITS = (5, 10, 20, 40, 60, 120, 180, 300, 300)
 _CONNECTION_ERRORS = ("APIConnectionError", "APITimeoutError", "ConnectError", "ReadTimeout", "ConnectTimeout")
 
 

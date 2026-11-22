@@ -3185,7 +3185,12 @@ day, and a key given for a free test must not be able to spend. So the limits ar
   Writer's call, sometimes a fold and the canon reader's pass).
 - A request that fails for good (the retries are spent, or it is not worth retrying) stops the run AT that turn and the turn is not recorded.
   A free pool can stay saturated for many minutes, and the engine would write its error message into the story as if it were narration, which
-  corrupts every row after it. The summary says why it stopped (`stopped`) and how many requests it used (`requests`).
+  corrupts every row after it. The summary says why it stopped (`stopped`) and how many requests it used (`requests`). The provider's failure
+  reaches the play loop as an EXCEPTION out of the engine's turn, not as text (the first version only handled the text and a real run died on
+  it at turn 34, with no summary), so the loop catches it, and only when the pacer says the provider failed: a bug of ours still stops the
+  run loudly.
+- The waits between retries total about 17 minutes (5, 10, 20, 40, 60, 120, 180, 300, 300 s). The first list gave up after 255 s, and
+  Particle-1 refused every request for longer than that.
 - Local runs are unchanged byte for byte (the config text is pinned by a test) and the summary now carries `provider`, `requests` and `stopped`.
 
 **What it does not do.** The pacing counts attempts it makes itself; the SDK's own two silent retries inside one call are not counted, so the
@@ -3195,10 +3200,13 @@ budget slightly undercounts against the provider. It does not know the account's
 already gives a reasoning model headroom (`prose_tokens`), and a four-turn trial wrote usable prose in one request a turn. The corpus
 harness (`soak scribe`) already supported OpenRouter and is unchanged.
 
-**What was seen on the day.** Gemma 4 31B and 26B answered 429 ("temporarily rate-limited upstream") to every request for the first hour, and
+**What was seen on the day.** A first hosted run on Nemotron 3 Ultra (550B total, reasoning) wrote sound prose for 80 turns and then
+fell apart: from turn 81 the narrator had the player drowning in every scene and by turn 85 wrote in capitals, with no recovery in the next 20
+turns, so the run was stopped at 105 turns. That is a finding about that model under this engine's squeezed memory, not about a Writer in general.
+Gemma 4 31B and 26B answered 429 ("temporarily rate-limited upstream") to every request for the first hour, and
 Ling 3.2 Flash too; Nemotron 3 Ultra and Flint answered. A hosted corpus run against Gemma 4 31B spent 95 seconds of retries on each of five
 passages and failed all of them before it was stopped, which is the reason a run now stops at the first failure for good instead of grinding on.
 
 **Tests.** `soak_hosted_test.py` (7 groups, offline, a fake clock and a canary standing in for the key: the model guard, the key by name, the
-pacer, the retry rules and undo, the configs, the command line including the budget boundary, and the stop at a failed turn). 31 mutants
-broken in a copy of the repo, all went red.
+pacer, the retry rules and undo, the configs, the command line including the budget boundary, and the stop at a failed turn whether the provider
+fails as text or as an exception, with a bug of ours still stopping the run). 36 mutants broken in a copy of the repo, all went red.
