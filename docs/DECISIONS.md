@@ -1793,7 +1793,7 @@ one story, one model, one run. If a reader ever returns far fewer claims on such
 density-ranked sample against a control, claims per passage beside the status) is the test; its script lives in the session notes,
 not in the repo, because the lexicon and the story must not.
 
-## D-044 — Accessories are a slot of their own (built and tested; the model measurement is pending)
+## D-044 — Accessories are a slot of their own (built and tested; measured in D-069: the default stays off)
 
 **Why.** Nothing in the slot list could hold a ring, a pair of hairpins or a string of beads. The real-story gate lost two of its
 controls that way (hairpins on one character, jade beads on another), and a later soak showed the cost: the reader's only way to
@@ -3210,3 +3210,75 @@ passages and failed all of them before it was stopped, which is the reason a run
 **Tests.** `soak_hosted_test.py` (7 groups, offline, a fake clock and a canary standing in for the key: the model guard, the key by name, the
 pacer, the retry rules and undo, the configs, the command line including the budget boundary, and the stop at a failed turn whether the provider
 fails as text or as an exception, with a bug of ours still stopping the run). 36 mutants broken in a copy of the repo, all went red.
+
+
+## D-069: Measured 2026-11-22/23: the card over 1,000 turns, the accessory slot, Gemma 4 with stated looks, and a hosted tier
+
+**Setting.** The invented ferry-town story of D-046, memory squeezed (window 4, budget 5000), the author's sheets state each character's hair and eyes
+(`--sheets full`), a look probe every 8 turns ("I study X's hair"), seed 5, `python -m soak play`, one run per condition. A probe is `held` when the
+narration names the sheet's colour, `drift` when it names another, `none` when it names none.
+
+**1. The canon card over 1,000 turns (gemma3:4b as Writer, Scene State Card off against on).** 125 probes each.
+
+| turns | card off: held / drift / none | card on: held / drift / none |
+|---|---|---|
+| 1-100 | 2 / 6 / 4 | 10 / 1 / 1 |
+| 101-200 | 1 / 2 / 10 | 13 / 0 / 0 |
+| 201-300 | 1 / 4 / 7 | 8 / 1 / 3 |
+| 301-400 | 0 / 7 / 6 | 11 / 2 / 0 |
+| 401-500 | 1 / 8 / 3 | 11 / 1 / 0 |
+| 501-600 | 1 / 7 / 5 | 11 / 0 / 2 |
+| 601-700 | 2 / 1 / 9 | 12 / 0 / 0 |
+| 701-800 | 2 / 7 / 4 | 13 / 0 / 0 |
+| 801-900 | 0 / 5 / 7 | 9 / 3 / 0 |
+| 901-1000 | 1 / 5 / 7 | 13 / 0 / 0 |
+| all | 11 / 52 / 62 | 111 / 8 / 6 |
+
+Of the probes that named a colour, 11 of 63 were right without the card (17%) and 111 of 119 with it (93%). With it the Writer named a colour on 119
+of 125 probes, without it on 63. The card shows no decay across the 1,000 turns (no block below 9 of 12). This is the first long test of the whole
+redesign (the first long soak, D-029, found the card did not help; the fixes since then are what changed that). Cost: 46 s a turn against 25.5, and
+12.9 hours against 7.1 for the run; 179 health rows against 56 (not broken down; the extra calls are the reader's).
+
+**What it does not show.** One seed and one story. A probe asks about a character's looks at the moment the card injects them, which is the card's best
+case. The looks were stated by the author: when the story has to supply them the reader captured about a third (D-034, not re-measured here). Ties,
+state, outfit and everything else the ledger holds were not measured. And the stories themselves degraded in BOTH runs. Replies grew to 1,000 words
+and more, and the share of 8-word runs that repeat an earlier one, by 100 turns, was 0.02, 0.08, 0.38, 0.17, 0.69, 0.77, 0.74, 0.57, 0.64, 0.62
+without the card and 0.31, 0.80, 0.81, 0.83, 0.76, 0.73, 0.72, 0.75, 0.73, 0.25 with it (0.47 and 0.67 over the run). The card run looped from about
+turn 100, the baseline from about turn 200 to 450; with one realisation each, which loops first is not established. What is established is that a 4B
+Writer with this memory writes mostly repeated narration after a few hundred turns, with or without the card, that the card keeps the looks right
+through it, and that nothing built so far addresses the repetition (the tic guard of D-064 did not, D-067). That is the open problem for a long story.
+
+**2. The accessory slot (D-044): the default stays off.** The corpus runs are deterministic (a repeat of each was identical), so one run each is
+enough, and the differences below are the prompt's, not noise. Validated slices, off then on:
+
+| | gemma3:4b | llama3.1:8b |
+|---|---|---|
+| accessory slice, found of 6 | 0 then 5 (1 false positive) | 0 then 1 (1 false positive) |
+| legacy slice recall | 0.77 then 0.69 | 0.73 then 0.69 |
+| multi-character recall | 0.86 then 0.57 | 0.71 then 0.71 (precision 0.83 then 0.71) |
+| state precision / recall | 0.83 then 0.71 / 0.62 | 0.83 / 0.62 then 0.80 / 0.50 |
+| look-alike traps, raw false positives | 18 then 10 | 5 then 8 |
+
+D-044's own condition was that the legacy slice must not drop. It drops on both readers, and the slot works only on gemma3:4b. So the gate stays and
+nothing recommends turning it on. The idea that might separate the two effects is asking about ornaments in a call of their own, so the other slots'
+prompt is untouched; not built. A hosted reader (Gemma 4 31B) was meant to be measured and could not be, see 4.
+
+**3. Gemma 4 E4B (the heretic quant) with the sheets stating the looks, no card.** 120 turns, 15 probes: held 11, drift 0, none 4, 23.5 s a turn,
+275 words a turn, repeat share 0.0, no health rows. The same first 120 turns of the gemma3:4b runs above: card off 2 / 6 / 7, card on 13 / 1 / 1. So
+on this measure Gemma 4 without a card is close to gemma3:4b with one. D-061 found Gemma 4 the lowest-yield reader and silent on colours under role
+sheets (nothing stated); that was the reader's job on sheets without colours, and this is the Writer's job with them. One seed, 15 probes; a second seed of
+each (gemma3:4b and Gemma 4, seed 6) was queued and cancelled by the pause. It is a lead, not a recommendation.
+
+**4. A hosted tier (OpenRouter free models, D-068).** Nemotron 3 Ultra (550B total, reasoning) wrote sound prose for 80 turns, then had the player drowning
+in every scene and wrote in capitals from turn 85 with no recovery; stopped at 105 turns. Gemma 4 31B and 26B, Ling and ERNIE answered 429 ("temporarily
+rate-limited upstream") all day, so the tier I wanted most was not measured. Particle-1 (size not published): card off 300 turns, 587 requests, held 7 /
+drift 10 / none 20; card on 197 turns, 355 requests, 2 / 5 / 17, then the provider answered 429 through every retry and the run stopped cleanly with its
+summary (the new handling worked as built). Particle names a colour on 17 of 37 probes without the card and 7 of 24 with it, a literary style that
+avoids saying it, so these runs say nothing about the card, and the soak does not record the prompt, so whether the card reached a hosted reader's output
+is unverified. The hosted tier is, so far, a negative result about free-pool availability and one model's style, not about the engine.
+
+**Not run (cancelled by the pause).** llama3.1:8b on the graph probe (seed 5), fate on and off on llama3.1:8b (D-055 still asks whether a larger Writer
+loops), the second seeds in 3, and a hosted accessory corpus run.
+
+**What would change this.** The card result: a second seed, the story-supplied (`--sheets role`) condition at length, and a Writer that does not loop.
+The accessory call: a separate-call design that leaves the legacy slice alone. Gemma 4 as a default Writer: the second seed, and a card-on run.
