@@ -3327,3 +3327,25 @@ awkward, because text already shown cannot be taken back. Dropping the copied re
 Sampling penalties: the engine already passes `frequency_penalty` and `presence_penalty`, but whether the provider's penalty window reaches back to the
 previous reply is not known, so it may not touch cross-turn copying. A second seed of gemma3:4b with the card on and off at 200 turns, to see whether the
 card brings the loop forward. A player that varies what it does.
+
+**Follow-up (2026-11-24): is it the model? Gemma 4 E4B with the card on, 300 turns.** The same story, seed, sheets, scripted player, squeezed memory
+(window 4, budget 5000) and card as the gemma3:4b run, with Gemma 4 E4B (the heretic quant) as the Writer and as the card's reader.
+
+| | gemma3:4b, card on (its first 300 turns) | Gemma 4 E4B, card on |
+|---|---|---|
+| look probes held / drift / none | 31 / 2 / 4 | 24 / 1 / 12 |
+| of those that named a colour, right | 31 of 33 (94%) | 24 of 25 (96%) |
+| words a turn, per 50 turns | 236, 596, 968, 1,198, 1,146, 1,068 | 293, 304, 298, 296, 306, 320 |
+| share of a reply copied from the previous one, per 50 turns | 0.06, 0.56, 0.76, 0.82, 0.83, 0.79 | 0.00 in every block |
+| 8-word runs repeated anywhere, per 50 turns | 0.06, 0.57, 0.78, 0.82, 0.83, 0.79 | 0.00 (whole run 0.0) |
+| seconds a turn | 43.7 | 38.7 |
+
+Gemma 4 did not copy at all and its replies stayed at about 300 words for 300 turns, while gemma3:4b was copying more than half of its previous reply by turn 100.
+It holds the looks as well (96% of the colours it named, against 94%) but names a colour less often (12 of 37 probes without one, against 4 of 37), a
+difference of style and not of consistency. The cost per turn is about the same. So in this setup the repetition is fixed by the Writer, not by an
+engine change, and an engine-level echo guard stays an option only for people who keep gemma3:4b.
+
+What this does not show: one seed and one story; 300 turns (gemma3:4b with the card OFF was clean for its first 250, so this is a fair test of the
+card-on case that looped by turn 50 and a short one for a longer horizon); Gemma 4 without the card at length was not run; the quant is a
+community "heretic" (uncensored) variant, and the stock Gemma 4 E4B instruct was not measured (it is not installed; pulling it needs your OK); the scripted
+player is a harsher test than a person. Before the README's recommended Writer changes: the stock model, a second seed, and ideally 1,000 turns.
