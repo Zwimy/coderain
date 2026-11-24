@@ -95,6 +95,18 @@ brother", "who carries the key") more faithfully in our probe (16 of 17 question
 right against 11 to 13 for `gemma3:4b`; one story, one run) and takes about a
 minute a turn on the same card. If you can wait, it is worth trying.
 
+**Gemma 4 E4B** (`ollama pull hf.co/mradermacher/gemma-4-E4B-it-heretic-GGUF:Q4_K_M`,
+about 5.5 GB, about 25 seconds a turn on the same card) is the model we now test
+with. In long-story tests on an invented story (300 to 1,000 turns, a scripted
+player) it kept its replies near 300 words and did not copy its own previous
+reply, while `gemma3:4b` began copying its previous reply somewhere between turn
+50 and turn 250 and ended up repeating itself in replies of a thousand words.
+Gemma 4 E4B was weaker than `gemma3:4b` at using relationship facts (5 to 8 of 12
+"who is her brother" questions right against 9 to 10) and repeated a secret it
+was holding more readily. These are one or two runs each, and we tested a
+community quantisation of the model, not Google's own release. The numbers are in
+`docs/DECISIONS.md` (D-069 to D-071).
+
 ### Optional: the memory reader
 
 A small local model can read each turn and keep a ledger of who looks like what and
