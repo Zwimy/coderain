@@ -3367,3 +3367,50 @@ temperature did not fix them for several users; E4B's only report is a chat-temp
 Mistral Nemo in other settings. The best-evidenced mitigation is the DRY sampler (a 2026 preprint: 47% fewer loops on small models); whether Ollama
 exposes it is unknown. Repetition penalties are weaker evidence, and trimming duplicated replies out of the history is plausible and untested. Watch
 item: repeat the copy-share measurement (`copy_share`, per 50 turns) whenever the Writer model or the Ollama version changes.
+
+
+## D-071: Gemma 4 E4B as the working Writer: the card still helps, ties are weaker than gemma3:4b, and fate does not loop (measured 2026-11-24)
+
+**Setting.** Gemma 4 E4B (the heretic quant) as the Writer and as the card's reader, the soak story and scripted player of D-046, memory squeezed (window 4,
+budget 5000), seed 5 unless said, one run per condition. Decided with the owner: Gemma 4 E4B is the model to keep working with (the stock model, a second seed
+and a 1,000-turn run were skipped).
+
+**1. The card, off against on (300 turns, sheets state the looks, a look probe every 8 turns).**
+
+| | card off | card on |
+|---|---|---|
+| held / drift / none | 13 / 2 / 22 | 24 / 1 / 12 |
+| right, of the colours it named | 13 of 15 (87%) | 24 of 25 (96%) |
+| probes that named a colour | 15 of 37 | 25 of 37 |
+| seconds a turn | 26.7 | 38.7 |
+| copying of the previous reply, words a turn | 0.00 in every block, about 300 | 0.00 in every block, about 300 |
+
+The card still helps on Gemma 4, mostly by making it say the colour (68% of probes against 41%); what it says is right either way (2 wrong against 1, small
+counts). It costs about 45% more time a turn. Neither run copies or grows.
+
+**2. The relationship and secrets probe (ties, possessions, two-hop questions, who-knows-what; 120 turns, seeds 5 and 6, no flags), against gemma3:4b's
+baselines of D-067 on the same seeds.**
+
+| | Gemma 4, seed 5 / seed 6 | gemma3:4b, seed 5 / seed 6 |
+|---|---|---|
+| one-hop answers right | 8 / 5 of 12 | 9 / 10 of 12 |
+| two-hop answers right | 1 / 1 of 5 | 3 / 4 of 5 |
+| right, with the evidence in memory's part of the prompt | 9 of 15 and 6 of 16 | 12 of 17 and 13 of 16 |
+| the told secret recalled | 2 / 2 of 5 | 0 / 1 of 5 |
+| a secret said by someone not told (leak) | 1 / 2 of 5 | 0 / 0 of 5 |
+
+The evidence was in the prompt for both models (relation 5 of 6, 6 of 6; possession 6 of 6 each), so this is faithfulness, not retrieval. Gemma 4 E4B uses the
+facts it is given less well than gemma3:4b and says a secret it holds more freely: it recalls the secret more (4 of 10 against 1 of 10) and leaks it more
+(3 of 10 against 0 of 10). That is the other side of the copying trade: gemma3:4b loops but follows relationship facts better. The two seeds agree; 10 or
+5 probes a condition make it a direction, not a proof. The flags that bring facts to the end of the prompt (tail ties D-063, follow links D-059; both off)
+were measured on gemma3:4b only, and Gemma 4 is where they might matter. Not run.
+
+**3. Fate (D-055's open question: is a larger Writer immune?), 80 turns, seed 5.** Off: words by third 301, 314, 335, 27.9 s a turn. On: 270, 280, 274,
+25.8 s a turn, 73 fate rolls (surprise 29, natural and quiet 29, setback 6, windfall 4, windfall quiet 4, setback quiet 1). Neither run has an 8-word run in
+three or more turns or two turns that share an opening. On gemma3:4b steering lengthened replies 1.4 to 1.9 times and two of four steered runs collapsed into a
+loop (D-055); on Gemma 4 E4B, in one run of 80 turns, it neither lengthens nor loops (the steered replies are about 14% shorter). Fate stays off by default and
+the caution of D-055 stands for gemma3:4b; one run at 80 turns does not make fate safe on Gemma 4.
+
+**What this means.** Gemma 4 E4B does not copy, keeps the looks with the card, and takes fate in its stride, and it is weaker than gemma3:4b at using
+ties and at keeping a secret. Not measured: Gemma 4 with tail ties or follow links, story-supplied looks, the stock (not heretic) model, a second seed, and a
+1,000-turn run.
