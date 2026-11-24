@@ -3349,3 +3349,21 @@ What this does not show: one seed and one story; 300 turns (gemma3:4b with the c
 card-on case that looped by turn 50 and a short one for a longer horizon); Gemma 4 without the card at length was not run; the quant is a
 community "heretic" (uncensored) variant, and the stock Gemma 4 E4B instruct was not measured (it is not installed; pulling it needs your OK); the scripted
 player is a harsher test than a person. Before the README's recommended Writer changes: the stock model, a second seed, and ideally 1,000 turns.
+
+**Two cheap checks (2026-11-24).**
+- *Does the engine put the previous reply in the Writer's prompt twice?* No. The soak story was played for 30 turns through the real engine with an
+  offline writer whose every reply carries a unique marker. In the prompt for the last reply each earlier reply appears exactly once, as an assistant
+  message, and never in a system block or a tail directive (card off; the card was not part of this audit). With the soak's window of 4 the Writer sees
+  the last two exchanges verbatim plus a 6,000-character system block, so its own last reply is most of the story text it has.
+- *Do repetition penalties reach the model on this Ollama?* Yes. This install bundles llama-server. `frequency_penalty` and `presence_penalty` through the
+  OpenAI-compatible endpoint the engine uses, and `repeat_penalty`, `repeat_last_n`, frequency and presence through the native endpoint, all change
+  gemma3:4b's output at a fixed seed, and they change it earlier than the baseline's own run-to-run drift (two identical baseline calls diverged late). A
+  reported bug of the older Ollama runner, which ignored penalties, does not apply here. The probe prompt did not provoke copying (0.00 at baseline),
+  so this does not show whether a penalty reduces the loop; that would take a soak arm.
+
+**What others report (a research agent's survey; I have not checked its sources).** No source was found for this symptom in Gemma 3 4B or Gemma 4 E4B in
+long chats, so the difference above is, as far as that search goes, new evidence. Adjacent reports: loops on Gemma 4 12B, 26B and 31B (penalties and
+temperature did not fix them for several users; E4B's only report is a chat-template problem in multi-turn tool use), and repetition on Llama, Qwen and
+Mistral Nemo in other settings. The best-evidenced mitigation is the DRY sampler (a 2026 preprint: 47% fewer loops on small models); whether Ollama
+exposes it is unknown. Repetition penalties are weaker evidence, and trimming duplicated replies out of the history is plausible and untested. Watch
+item: repeat the copy-share measurement (`copy_share`, per 50 turns) whenever the Writer model or the Ollama version changes.
