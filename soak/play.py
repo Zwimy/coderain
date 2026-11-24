@@ -11,7 +11,13 @@ turn plus a summary.
                         [--probe-set look|graph|all] [--graph-every 4] [--ask plain|open] [--facts stated|none]
                         [--stub-knowledge truthful|leaky|wrong]
                         [--provider ollama|openrouter] [--allow-paid] [--max-requests 900]
+                        [--response-length short|medium|long] [--max-tokens 700] [--no-reasoning-headroom]
 
+  --response-length, --max-tokens, --no-reasoning-headroom (D-070): the reply-length experiment. A long soak showed replies growing past 1,000
+           words and repeating themselves, and the engine's own length control turned out to cap nothing: `prose_tokens` adds 3,000 tokens of
+           headroom for a reasoning model to every prose call. --response-length short is the existing setting that adds a "keep it short"
+           directive; --max-tokens sets the medium budget; --no-reasoning-headroom drops the +3,000 for this run only, so the budget is a real
+           cap for a model that does not reason. The summary records the cap the Writer actually had (`prose_cap_tokens`)
   --stub   an offline writer (deterministic prose, no model, no network): what the tests and a dry run use
   --model  a local Ollama model on this machine. It must already be running: this never starts it, and a host that is
            not this machine is refused (the invented story is the only text sent, but a habit of refusing is cheap)
@@ -234,7 +240,8 @@ def repeat_share(texts: list[str], n: int = 8) -> float:
 
 
 def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False,
-            stub_folds: bool = False, tail_ties: bool = False, tic_guard: bool = False, provider: str = "ollama") -> str:
+            stub_folds: bool = False, tail_ties: bool = False, tic_guard: bool = False, provider: str = "ollama",
+            response_length: str = "medium", max_tokens: int = 700) -> str:
     profile = hosted.profile_lines(model) if provider == "openrouter" else f"""active_profile: local
 profiles:
   local:
@@ -246,11 +253,11 @@ profiles:
     cfg = profile + f"""generation:
   temperature: 0.9
   top_p: 0.95
-  max_tokens: 700
+  max_tokens: {max_tokens}
   think: false
   use_memory_tool: false
   trinity_brain: false
-  response_length: medium
+  response_length: {response_length}
   ai_acts_as_player: false
   chapter_outline: false
   lore_check: false
@@ -301,11 +308,15 @@ def run_play(args, home: Path) -> int:
     model = "stub-writer" if stub else args.model
     (home / "config.yaml").write_text(
         _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links), bool(args.stub_folds),
-                bool(args.tail_ties), bool(args.tic_guard), provider),
+                bool(args.tail_ties), bool(args.tic_guard), provider,
+                getattr(args, "response_length", "medium"), int(getattr(args, "reply_max_tokens", 700))),
         encoding="utf-8")
 
     from coderain import fate
+    from coderain import config as coderain_config
     from coderain.config import load_config
+    if getattr(args, "no_reasoning_headroom", False):
+        coderain_config.REASONING_HEADROOM = 0      # this process only: the reply budget is then a real cap for a model that does not reason
     from coderain.engine import Engine
     from coderain.memory import Entry, Library
 
@@ -413,7 +424,9 @@ def run_play(args, home: Path) -> int:
                "repeat_share": repeat_share([r["text"] for r in rows if r.get("text")]),
                "model_calls": dict(writer.calls) if writer is not None else None,
                "health_rows": len(store.health(200)),
-               "provider": provider, "requests": pacer.count if pacer is not None else None, "stopped": stopped}
+               "provider": provider, "requests": pacer.count if pacer is not None else None, "stopped": stopped,
+               "response_length": getattr(args, "response_length", "medium"),
+               "prose_cap_tokens": coderain_config.prose_tokens(eng.cfg.generation)}
     if undo_pacing is not None:
         undo_pacing()
     if graph_on:

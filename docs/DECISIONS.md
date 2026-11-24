@@ -3282,3 +3282,48 @@ loops), the second seeds in 3, and a hosted accessory corpus run.
 
 **What would change this.** The card result: a second seed, the story-supplied (`--sheets role`) condition at length, and a Writer that does not loop.
 The accessory call: a separate-call design that leaves the legacy slice alone. Gemma 4 as a default Writer: the second seed, and a card-on run.
+
+
+## D-070: A length cap does not stop the loop: the failure is copying the previous reply, and in these runs it is gemma3:4b's (measured 2026-11-24)
+
+**Why.** The 1,000-turn soak of D-069 ended with both stories degraded: replies grown past 1,000 words and most 8-word runs repeating an earlier
+one. The working guess was that reply length is uncapped and a small model feeds on its own long history, so a cap would stop it. Reading the engine
+showed the guess was at least half right: the engine's length control caps nothing. `config.prose_tokens` is `reply_tokens + REASONING_HEADROOM`
+(3,000), added to every prose call so that a reasoning model has room to think, so the soak's `max_tokens: 700` meant 3,700, `short` meant 4,200 and
+`long` 7,096. The only thing that holds a reply short today is the optional `LENGTH: keep it short, 1-2 short paragraphs` directive of
+`response_length: short`.
+
+**What was built.** Soak options only (the engine is unchanged): `--response-length short|medium|long`, `--max-tokens N` (at least 64) and
+`--no-reasoning-headroom`, which drops the +3,000 for that process so the budget is a real cap for a model that does not reason. The summary records
+the budget the Writer actually had (`prose_cap_tokens`). The defaults change nothing (the config text is pinned). `soak_reply_cap_test.py`, 4 groups,
+7 mutants broken in a copy of the repo, all red.
+
+**The experiment.** The card-on story of D-069 (gemma3:4b, sheets stating the looks, window 4, budget 5000, seed 5), which looped from about turn 100.
+Both arms were stopped early because they had shown what they could.
+
+| arm | what happened |
+|---|---|
+| `response_length: short` (stopped at turn 58) | replies held at 113 to 260 words for 28 turns, then ran away: 364, 360, 448, 536, 740, 892, 883, 1,135 ... 900 to 1,300 words by turn 37 to 58. The last two replies open with the same sentence. The directive lost to the story's own history |
+| a real cap, 450 tokens, no headroom (stopped at turn 98) | length stayed bounded (236 words a turn for turns 1-50, 274 for 51-98), but by turn 60 to 70 the Writer repeated the previous reply almost word for word ("The rain continues to batter the customs shed. Bram Halloran continues to examine the wooden box ..."), and in the last 40 turns 80 to 100% of a reply's 8-word runs came from the reply before. Two replies were empty (turns 13, 14) and the cap cuts replies mid-sentence |
+
+**What it shows.** Runaway length is a symptom of copying, not its cause: each reply is the previous reply plus a little, so it grows until something
+caps it, and a cap leaves the copying. The failure is the Writer reproducing its own previous reply. The mean share of a reply's 8-word runs that
+came from the reply before it, per 50 turns:
+- gemma3:4b, card off, 1,000 turns: 0.01, 0.04, 0.09, 0.08, 0.30, 0.45, 0.16, 0.17, 0.63, 0.76, 0.79, 0.75, 0.75, 0.73, 0.55, 0.60, 0.61, 0.67, 0.59, 0.65
+- gemma3:4b, card on, 1,000 turns: 0.06, 0.57, 0.76, 0.82, 0.82, 0.80, 0.82, 0.85, 0.74, 0.78, 0.76, 0.70, 0.73, 0.71, 0.77, 0.74, 0.79, 0.65, 0.18, 0.30
+- Gemma 4 E4B, 120 turns (D-069): 0.0, 0.0, 0.0. Particle-1, 300 turns: six zeros.
+So under the identical scripted player and squeezed memory, gemma3:4b copies its previous reply for hundreds of turns and the other two models, in
+the turns they were given, do not at all. Gemma 4's horizon is short (gemma3:4b with the card off was also clean for its first 200 turns), Particle-1's
+is longer and clean. With the card on gemma3:4b started copying around turn 50 to 100 against about 250 with it off, one realisation each, so whether
+the card brings the loop forward is not established.
+
+**Why it matters.** gemma3:4b is the shipped default Writer. The card keeps its facts right (D-069) in a story that, in this soak, is a dead loop
+after a hundred turns. The soak's player has a small set of action templates, so it is a harsher test than a person who varies what they do, and these
+runs show the failure mode, not how often it happens in real play. That is the thing to measure before building anything.
+
+**Not tried (in the order I would try them).** A different Writer: Gemma 4 E4B with the card on for 300 turns or more is the direct test of whether the
+fix is the model. An echo guard in the engine (a reply that copies the previous reply is detected and regenerated or trimmed); streaming makes this
+awkward, because text already shown cannot be taken back. Dropping the copied replies from the verbatim window so the model stops seeing its loop.
+Sampling penalties: the engine already passes `frequency_penalty` and `presence_penalty`, but whether the provider's penalty window reaches back to the
+previous reply is not known, so it may not touch cross-turn copying. A second seed of gemma3:4b with the card on and off at 200 turns, to see whether the
+card brings the loop forward. A player that varies what it does.

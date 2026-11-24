@@ -174,6 +174,15 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--host", default="http://localhost:11434", help="must be this machine")
     pl.add_argument("--provider", choices=["ollama", "openrouter"], default="ollama",
                     help="ollama: a model on this machine. openrouter (D-068): a hosted FREE model; the key is read from OPENROUTER_API_KEY")
+    pl.add_argument("--response-length", choices=["short", "medium", "long"], default="medium",
+                    help="generation.response_length (D-070): short adds the 'keep it short, 1-2 paragraphs' directive, long asks for 4-6; "
+                         "medium (the soak's old setting) adds none")
+    pl.add_argument("--max-tokens", dest="reply_max_tokens", type=int, default=700,
+                    help="generation.max_tokens, the medium setting's reply budget (default 700). NB: the engine adds 3,000 tokens of "
+                         "reasoning headroom to every prose call, so by itself this caps nothing (see --no-reasoning-headroom)")
+    pl.add_argument("--no-reasoning-headroom", action="store_true",
+                    help="experiment (D-070): drop the engine's +3,000 token reasoning headroom for this run, so --max-tokens is a real "
+                         "cap for a model that does not reason. Only the soak does this; the engine is unchanged")
     pl.add_argument("--allow-paid", action="store_true", help="openrouter: allow a model that is not ':free' (refused by default)")
     pl.add_argument("--max-requests", type=int, default=900,
                     help="openrouter: stop between turns when fewer than a turn's worth of requests are left of this many (free models "
@@ -218,6 +227,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "play":
         if args.turns < 1:
             ap.error("--turns must be at least 1")
+        if args.reply_max_tokens < 64:
+            ap.error("--max-tokens must be at least 64 (a reply budget smaller than a sentence is a mistake)")
         try:
             home = isolated_home("soakplay-")           # before anything imports coderain
         except UnsafeHome as exc:
