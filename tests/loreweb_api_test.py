@@ -7,7 +7,8 @@
  4) bad requests: an unknown entry, an entry to itself, a note over the limit, an unknown kind, a connection that is not there, too many ties
  5) a write is refused (409) while a turn is generating
  6) a world (scenario) has the same routes
- 7) the settings switches read and write memory.follow_links and memory.tail_ties as real booleans, and only a real true is on
+ 7) the settings switches read and write memory.follow_links and memory.tail_ties as real booleans; both read as on until turned
+    off (D-078), unticking them sticks, and only a written true is on
 """
 import os
 import sys
@@ -164,8 +165,14 @@ def test_world():
 
 
 def test_settings():
+    assert not {"follow_links", "tail_ties"} & set(core._cfg.memory), core._cfg.memory
+    got = c.get("/api/settings").json()["memory"]                          # not in the config: on (D-078)
+    assert got["follow_links"] is True and got["tail_ties"] is True, got
+    r = c.put("/api/settings", json={"mode": "local", "memory": {"follow_links": False, "tail_ties": False}})
+    assert r.status_code == 200, r.text
+    assert core._cfg.memory["follow_links"] is False and core._cfg.memory["tail_ties"] is False, core._cfg.memory
     got = c.get("/api/settings").json()["memory"]
-    assert got["follow_links"] is False and got["tail_ties"] is False, got
+    assert got["follow_links"] is False and got["tail_ties"] is False, "unticking them did not stick: " + str(got)
     r = c.put("/api/settings", json={"mode": "local", "memory": {"follow_links": True, "tail_ties": True}})
     assert r.status_code == 200, r.text
     assert core._cfg.memory["follow_links"] is True and core._cfg.memory["tail_ties"] is True
@@ -175,7 +182,8 @@ def test_settings():
     assert core._cfg.memory["follow_links"] is False and core._cfg.memory["tail_ties"] is False, core._cfg.memory
     c.put("/api/settings", json={"mode": "local", "memory": {"short_term_turns": 12}})
     assert core._cfg.memory["follow_links"] is False, "a save without the switches changed them"
-    print("7. the two switches read and write real booleans, only a real true is on, and a save without them leaves them")
+    print("7. the two switches are on until turned off, read and write real booleans, only a written true is on, and a save "
+          "without them leaves them")
 
 
 test_get()

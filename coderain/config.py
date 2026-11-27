@@ -274,6 +274,12 @@ def history_block(config) -> int:
     return 0 if n <= 1 else min(n, 60)
 
 
+def facts_switch(memory: dict | None, key: str) -> bool:
+    """`memory.follow_links` and `memory.tail_ties`: on unless the config says otherwise (D-078). A key that IS written is on only
+    for a real true, so a hand-typed "false" or 0 never turns one on. The engine and the Settings page both ask here."""
+    return (memory or {}).get(key, True) is True
+
+
 def history_budget(config) -> int:
     """Token ceiling for the verbatim turns. 'auto' = half the memory budget."""
     mem = getattr(config, "memory", None) or {}

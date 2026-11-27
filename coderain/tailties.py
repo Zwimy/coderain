@@ -8,8 +8,8 @@ Those live in the story's own files: a character's `relationships:` line and an 
 
 This builds ONE short system message from those files for the things the player's action and the last reply name, plus one hop
 (an item to its holder, then the holder's ties), and the engine appends it right after the card. Since D-074 the facts come from
-the lore web, so a tie or holder is said whichever of its two ends was named, and `links:` count too. Off unless
-`memory: {tail_ties: true}`: measured on a model only together with follow_links, and before the web (D-073).
+the lore web, so a tie or holder is said whichever of its two ends was named, and `links:` count too. On unless
+`memory: {tail_ties: false}` (D-078): measured on a model only together with follow_links (D-073).
 
 Rules it keeps, because they were paid for elsewhere in the engine:
   * A hidden entry (a secret), one whose `chance` is 0, one whose `delay` has not passed and one whose `triggers_not` is in the text

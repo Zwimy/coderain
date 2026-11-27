@@ -26,9 +26,10 @@ keep it going — but everything is here, forever, for everyone.
   arc; optional semantic (vector) recall — all rebuildable from the Markdown.
   Summaries can be written in the background, after you already have the reply.
 - **A lore web.** Who holds what, who is tied to whom and which entries link to
-  each other form one web you can see and edit ("Lore web..."). Optionally, when
-  something comes into play the writer is also told about what is connected to
-  it, in either direction, without ever giving away a secret.
+  each other form one web you can see and edit ("Lore web..."). When something
+  comes into play the writer is also told about what is connected to it, in either
+  direction, and the key facts are said again next to your action. Entries marked
+  secret are never brought in this way. Both can be turned off in Settings.
 - **Search of the story's own words.** Optionally, each turn finds passages from
   far back that match what you are doing and quotes them to the writer, so an
   exact line said long ago can come back. It runs locally in SQLite, by keyword,

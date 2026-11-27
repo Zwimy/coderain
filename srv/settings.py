@@ -13,6 +13,7 @@ from coderain import __version__
 from coderain import features
 from coderain import models as models_mod
 from coderain.config import ROOT as DATA_ROOT
+from coderain.config import facts_switch
 from coderain.config import read_env
 from coderain.config import save_yaml
 from coderain.config import write_env
@@ -337,8 +338,8 @@ def get_settings():
         # the memory depth/budget could not be tuned from the main UI at all.
         "memory": {
             # the engine reads these two as on only for a real true (D-059, D-063), so that is what the switches show
-            "follow_links": core._cfg.memory.get("follow_links") is True,
-            "tail_ties": core._cfg.memory.get("tail_ties") is True,
+            "follow_links": facts_switch(core._cfg.memory, "follow_links"),
+            "tail_ties": facts_switch(core._cfg.memory, "tail_ties"),
             "story_search": core._cfg.memory.get("story_search") is True,
             "background_folds": core._cfg.memory.get("background_folds") is True,
             "short_term_turns": core._cfg.memory.get("short_term_turns", 12),

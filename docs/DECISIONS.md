@@ -3746,3 +3746,26 @@ is written.
 for the next turn before starting.
 
 Tests: `tests/background_fold_test.py` (10 cases, the server ones with a summary call held open on purpose); 22 breaks tried in copies, all turned it red.
+
+
+## D-078: The two facts switches are on by default; keeping a told secret is left to the writer's rule (owner's call, 2026-11-27)
+
+**Decided by the owner,** who accepts the leak risk and relies on the Writer following the instruction that a character who is not supposed to know
+something does not bring it up.
+
+**What changes.** `memory.follow_links` (D-059, D-074) and `memory.tail_ties` (D-063) are on when the config does not mention them
+(`config.facts_switch`, which the engine and the Settings page share). A key that is written is on only for a real true, as before. A config saved with a
+box unticked stays off. Story search (D-075) and background summaries (D-077) stay off.
+
+**What guards a secret.** An entry marked hidden is never followed or repeated (D-059, D-063): that part is code. A fact told inside the story is guarded
+only by the rule "What characters know" in the default writer rules (shipped since rules version 8). That rule was in the Writer's prompt in every measured
+run, with the switches off and on, so the leak counts of D-073 already include it: over both measurements 6 of 20 off and 9 of 20 on, Gemma 4 E4B (the
+heretic quant). So relying on the rule means accepting counts like these: this model breaks it some of the time. A `writer-rules.md` edited to drop
+that section has no guard.
+
+**The soak** still sets both off unless `--follow-links` or `--tail-ties` is given, so earlier runs stay comparable.
+
+**What would change this.** A story that turns on who knows what, where characters keep saying things they were never told: untick the two boxes. A longer
+probe showing leaks clearly higher with them on, with the model in use.
+
+Tests: `link_follow_test` 14, `tail_ties_test` 9 and `loreweb_api_test` 7.

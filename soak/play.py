@@ -47,10 +47,10 @@ are written only to --out.
            winning a turn they share.
   --facts  stated (default): the ties and possessions above are written into the story. none: nothing is, and the same questions are
            asked, so what the Writer gets right is the guessing baseline
-  --follow-links  turn on `memory: follow_links` (D-059): an activated item leads to its holder, a person to their ties. Off by default,
-           which is the shipped default; it changes nothing else in the run
+  --follow-links  turn on `memory: follow_links` (D-059): an activated item leads to its holder, a person to their ties. The soak leaves it
+           off unless asked, though the app ships with it on (D-078); it changes nothing else in the run
   --tail-ties  turn on `memory: tail_ties` (D-063): the ties and holders of what the action and the last reply name, said again at
-           the end of the prompt, after the action. Off by default, which is the shipped default; it changes nothing else in the run
+           the end of the prompt, after the action. The soak leaves it off unless asked, though the app ships with it on (D-078)
   --tic-guard  turn on `generation: tic_guard` (D-064): the phrases the last replies keep reusing are said back to the Writer as "say it
            another way". Off by default, which is the shipped default. The summary's `repeat_share` is the measure to read
   --ask    plain (default): each graph question also asks for a straight answer in one sentence, because a model that narrates

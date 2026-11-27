@@ -3,8 +3,9 @@
 What broke. Name-keyed activation finds an entry only when the story names it. "Who is the sister of the person
 who carries the brass lamp key" names the key, so the key's entry reached the prompt, and the answer sat one link
 away in the holder's `relationships:` line, which never did: in a measured 120-turn story two-hop evidence was in the
-Writer's prompt 0 of 10 times, so the question could only be answered by luck. The pass is off by default
-(`memory: {follow_links: true}`) until a measured run says it helps.
+Writer's prompt 0 of 10 times, so the question could only be answered by luck. The pass was off until it was
+measured (D-073) and is on by default since D-078; `memory: {follow_links: false}` turns it off. `assemble()` itself
+still takes it as an argument that defaults to off.
 
   1. off: no Linked section and no holder in the prompt (the baseline that the pass has to beat)
   2. an item's `holder:` is followed: the holder's line is in the prompt, with its ties and the other person's name
@@ -20,7 +21,8 @@ Writer's prompt 0 of 10 times, so the question could only be answered by luck. T
  11. the lore budget holds: followed lines are dropped before they push anything else out, and pinned stays in
  12. a [[reference]] or `links:` to a followed entry does not make a second, one-line copy of it
  13. the same story and the same turn follow the same links (a retry reproduces, invariant 5)
- 14. the engine reads `memory.follow_links` as on only for the real value true, and passes it to assemble
+ 14. the engine reads `memory.follow_links` as on when the config does not mention it, and, written, only for a real
+     true; it passes the value to assemble
  15. a followed line is one line, bounded, ties first
 """
 import os
@@ -289,13 +291,16 @@ def test_the_engine_switch():
     from coderain.config import load_config
     from coderain.engine import Engine
     seen = []
-    for value, want in (("true", True), ('"true"', False), ('"false"', False), ("false", False), (None, False)):
+    # None = the config has no memory block at all; "absent" = a memory block that does not mention the switch. Both mean on
+    # (D-078). A switch that IS written is on only for a real true, "" (a key with nothing after it) included.
+    for value, want in (("true", True), (None, True), ("absent", True), ('"true"', False), ('"false"', False), ("false", False),
+                        ("1", False), ("", False)):
         home = Path(tempfile.mkdtemp(prefix="cr-follow-eng-"))
         cfg = home / "config.yaml"
+        memory = {None: "", "absent": "memory:\n  short_term_turns: auto\n"}.get(value, f"memory:\n  follow_links: {value}\n")
         cfg.write_text(
             "active_profile: local\nprofiles:\n  local:\n    base_url: http://localhost:9/v1\n    model: stub\n"
-            "    api_key_env: OLLAMA_API_KEY\n    context_tokens: 16384\n"
-            + ("memory:\n  follow_links: " + value + "\n" if value is not None else ""), encoding="utf-8")
+            "    api_key_env: OLLAMA_API_KEY\n    context_tokens: 16384\n" + memory, encoding="utf-8")
         store = Library(home).store(Library(home).create_story("Eng", "x"))
         eng = Engine(load_config(cfg), store)
         got = []
@@ -306,7 +311,7 @@ def test_the_engine_switch():
         eng._messages([], "hello")
         assert eng.follow_links is want and got == [want], (value, eng.follow_links, got)
         seen.append(value)
-    print("14. only a real true turns the pass on, and the engine hands it to assemble:", seen)
+    print("14. on when the config does not mention it; written, only a real true is on; the engine hands it to assemble:", seen)
 
 
 def test_the_line():

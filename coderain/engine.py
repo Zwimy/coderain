@@ -26,7 +26,7 @@ from .config import Config, context_budget
 # Imported by NAME, not via the module alias above: inside Engine.__init__ the
 # parameter `config` shadows the module, so config.history_budget resolves to the
 # Config object and raises.
-from .config import HISTORY_FLOOR_TURNS, history_block, history_budget, short_term_turns
+from .config import HISTORY_FLOOR_TURNS, facts_switch, history_block, history_budget, short_term_turns
 from .llm import LLM
 from .llm import stage as llm_stage
 from .memory import Entry, MemoryStore, SCENE_STATE_HEAD, context_with_scene, echo_line_sets, insert_static, safe_output_regex
@@ -253,9 +253,9 @@ class Engine:
         # The cache layout cuts the history only at multiples of this many messages (0 = slide freely); see config.history_block.
         self.history_block = history_block(config)
         self.scenes_tail = 4
-        # Follow one hop from what activated (an item's holder, a person's ties): off until a measured run says it
-        # helps (D-059). `is True`, so a hand-written "false" string is not read as on.
-        self.follow_links = config.memory.get("follow_links") is True
+        # Follow one hop from what activated (an item's holder, a person's ties; D-059). On unless the config says otherwise
+        # (D-078).
+        self.follow_links = facts_switch(config.memory, "follow_links")
         # Fold memory after the reply is handed over, while the next turn may already run (D-077). The web server runs it; every
         # other front end folds inline as before. `fold_events` collects what background folds did, for the next reply's events.
         self.background_folds = config.memory.get("background_folds") is True
@@ -263,8 +263,8 @@ class Engine:
         # Search the story's own words for what the action is about, before the history window (D-075). Off until asked for, `is True` as above.
         self.story_search = config.memory.get("story_search") is True
         self._searcher = None
-        # The ties line at the tail of the prompt (D-063): off until a measured run says it helps.
-        self.tail_ties = config.memory.get("tail_ties") is True
+        # The ties line at the tail of the prompt (D-063): on unless the config says otherwise (D-078).
+        self.tail_ties = facts_switch(config.memory, "tail_ties")
         # Say back the phrases the Writer keeps reusing (D-064): off until a measured run says it helps.
         self.tic_guard = config.generation.get("tic_guard") is True
         # Open-core seam: premium modules resolve through coderain.features —
@@ -374,7 +374,7 @@ class Engine:
         return card.text if mode == "on" else ""
 
     def _tail_ties(self, messages=()) -> str:
-        """The ties line for the turn about to be written (D-063), or "". Off unless `memory: {tail_ties: true}`. It is built
+        """The ties line for the turn about to be written (D-063), or "". On unless the config turns it off (D-078). It is built
         from the player's action and the last reply, so a retry builds the same line (invariant 5), and a failure is
         reported once and means no line: a turn is never broken by it."""
         if not self.tail_ties:

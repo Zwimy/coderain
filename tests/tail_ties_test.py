@@ -4,7 +4,8 @@ What broke. With the evidence already in the Writer's prompt, a 4B model answere
 wrongly about a third of the time: the facts sit in the middle of a long system message, far from the question. The canon card
 is the one thing the engine already puts after the player's action, but it is built from the canon ledger, which has looks and
 clothes and no ties or possessions. This is one short system message built from the story's own files (`relationships:` and
-`holder:`), right after the card. Off unless `memory: {tail_ties: true}`; it has not been measured on a model, which is why.
+`holder:`), right after the card. It was off until it was measured (D-073) and is on by default since D-078;
+`memory: {tail_ties: false}` turns it off.
 
  1) nothing named, nothing said: an empty string, not a header over no facts
  2) an item named by the action brings its holder, and the holder's ties (the two-hop question), each fact once
@@ -14,8 +15,9 @@ clothes and no ties or possessions. This is one short system message built from 
  6) a holder or a tie that names nobody, and a tie to oneself, are left out, never guessed
  7) bounded: at most MAX_FACTS facts and MAX_LINE characters, the later facts dropped whole
  8) deterministic: the same files and text give the same line (a retry reproduces, invariant 5), and a word boundary is kept
- 9) the engine: off by default and for anything but a real true; on, the line is one system message after the player's action,
-    before the chapter directive, never stored in the transcript, and a failure in it is reported and costs no turn
+ 9) the engine: on when the config does not mention it, off for anything written but a real true; on, the line is one system
+    message after the player's action, before the chapter directive, never stored in the transcript, and a failure in it is
+    reported and costs no turn
 10) the model copying the line into its reply has it dropped by the echo filter, like the card
 """
 import os
@@ -214,10 +216,13 @@ def ties_messages(msgs):
 
 
 def test_the_engine():
-    for value in (None, False, "true", "yes", 1, [], 0):
-        store, eng = engine(**({} if value is None else {"tail_ties": value}))
+    for value in (False, None, "true", "yes", 1, [], 0):                  # written, and not a real true: off
+        store, eng = engine(tail_ties=value)
         list(eng.turn("I ask who carries the brass lamp key."))
         assert eng.tail_ties is False and not ties_messages(eng.llm.msgs), f"tail_ties={value!r} turned it on"
+    store, eng = engine()                                                  # not mentioned: on (D-078)
+    list(eng.turn("I ask who carries the brass lamp key."))
+    assert eng.tail_ties is True and len(ties_messages(eng.llm.msgs)) == 1, "a config that does not mention it left it off"
     store, eng = engine(tail_ties=True)
     list(eng.turn("I ask who carries the brass lamp key."))
     msgs = eng.llm.msgs
@@ -250,8 +255,8 @@ def test_the_engine():
         assert [h for h in store.health(20) if h["stage"] == "tail-ties"], "the failure was not reported"
     finally:
         eng_mod.tail_ties = real
-    print("9. off by default and for anything but a real true; on, one system message after the action and before the chapter "
-          "directive, never stored; a failure costs no turn")
+    print("9. on when not mentioned, off for anything written but a real true; on, one system message after the action and "
+          "before the chapter directive, never stored; a failure costs no turn")
 
 
 def test_echo_filter():

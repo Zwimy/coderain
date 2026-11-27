@@ -205,12 +205,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="with --stub: let the offline run fold, and send the fold's model calls through the same stream() a real "
                          "run uses; for tests of the probe's prompt capture")
     pl.add_argument("--follow-links", action="store_true",
-                    help="memory: follow_links on (D-059): an activated item leads to its holder, a person to their ties")
+                    help="memory: follow_links on (D-059): an activated item leads to its holder, a person to their ties. The app "
+                         "ships with it on (D-078); the soak leaves it off unless asked, so earlier runs stay comparable")
     pl.add_argument("--story-search", action="store_true",
                     help="memory: story_search on (D-075): passages from before the history window that match the action are quoted")
     pl.add_argument("--tail-ties", action="store_true",
                     help="memory: tail_ties on (D-063): the ties and holders of what the action and the last reply name, said again "
-                         "at the end of the prompt")
+                         "at the end of the prompt. The app ships with it on (D-078); the soak leaves it off unless asked")
     pl.add_argument("--tic-guard", action="store_true",
                     help="generation: tic_guard on (D-064): the phrases the last replies keep reusing are said back to the Writer")
     pl.add_argument("--ask", choices=["plain", "open"], default="plain",
