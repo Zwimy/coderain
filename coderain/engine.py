@@ -1319,6 +1319,9 @@ class Engine:
             # Filter in EVERY mode (see the tool path above): never leak a
             # ```rpg block, and keep the world/lore delta channel open.
             stream = sidecar_mod.filter_sidecar(stream, hidden)
+            # The label the sidecar instruction puts over its examples, left at the end of the reply (D-080).
+            labels: list[str] = []
+            stream = sidecar_mod.filter_status_label(stream, labels)
             # Then drop any context scaffolding the model copied back at the top
             # of its reply. The sections memory put in the prompt are context; the
             # tail system messages are the directives we append ourselves (see
@@ -1337,6 +1340,11 @@ class Engine:
                               f"model copied back into its prose: "
                               f"{echoed[0]!r:.60}")
             narration = "".join(chunks).strip()
+            if any("{" in gone for gone in labels):
+                # The bare label is frequent and costs nothing, so it is not logged. A block written without its fence loses
+                # its changes, as it did when it reached the reader, so that is said.
+                self.store.log_degraded("writer", "the model wrote its status block without the ```rpg fence; it was kept out "
+                                                  "of the reply and its changes were not applied")
             if hidden:
                 sidecar = sidecar_mod.parse_sidecar("".join(hidden))
                 if not narration:

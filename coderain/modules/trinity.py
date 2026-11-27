@@ -31,6 +31,7 @@ import time
 
 from . import rpg as rpg_mod
 from .. import validator as validator_mod
+from ..sidecar import filter_status_label
 from ..llm import LLM, emit_json_ex, extract_json
 from ..streaming import filter_context_echo
 from ..llm import stage as llm_stage
@@ -366,6 +367,9 @@ class TrinityBrain:
         # transcript.md, where it poisons every later context window and the
         # summarizer. The comment above already claimed this happened.
         stream = rpg_mod.filter_sidecar(raw, hidden)
+        # The quad Writer is never given the sidecar instruction, but a story played in single-brain mode can carry its label
+        # in the history it copies from (D-080).
+        stream = filter_status_label(stream, [])
         # …and drop echoed context scaffolding, exactly like the single-brain
         # path. The quad Writer sees the same `## Time` block, so it has the same
         # opportunity to copy it back into the prose.

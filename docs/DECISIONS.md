@@ -3796,3 +3796,29 @@ with new ones. A failure the owner meets in play that no check sees: add a check
 
 Tests: `tests/soak_check_test.py`: an offline writer that passes every check and one that fails every check, each scorer's edge cases, the comparison's
 thresholds, the refusals, and a model that cannot be called.
+
+
+## D-080: The status block's label, copied into replies, is removed in code (found by the first real model check, 2026-11-27)
+
+**Found.** The first real run of D-079 flagged two Gemma 4 replies ending "Nothing changed:". That is the label the world-sidecar instruction puts over
+its empty example block. Reading every saved reply of the long runs (6,931): it ended 2,288 of 3,100 gemma3:4b replies and 1,421 of 2,814 Gemma 4 E4B
+replies (the heretic quant); llama3.1:8b and the hosted models never wrote it. The reader saw it, the transcript kept it, and the next turns saw it in the
+history, which teaches the model to write it again. Of 3,765 replies with the words at the start of a line: 3,584 the label alone as the last line, 164 the
+label and then the block's JSON without the ```rpg fence (so raw JSON reached the reader), 17 the label and then the model's own editing note. No probe
+had ever scored the shown text for this, which is why months of soaks did not report it.
+
+**Decided.** Remove it in code (`sidecar.drop_status_label` and its streaming form), only at the very end of a reply: the label alone on its line, or with
+the block's JSON under it. A full stop instead of the colon, a sentence that starts with the words, and a label followed by more text are left alone, so
+prose cannot be cut (the 17 editing notes therefore still reach the reader). Both writer paths stream through the filter; whole-reply paths go through
+`strip_sidecar`. The prompt's history drops it from stored replies, so a story saved with it stops teaching it; transcripts on disk are not rewritten.
+
+**Not changed: the instruction.** Its wording is what got small models to send the block at all (see the comment above `WORLD_SIDECAR`), and a rewording
+would need the compliance measured again. The test reads the labels out of the instruction, so a reworded label that the filter would miss fails it.
+
+**A block written without its fence is still not applied,** as before; the health log now says so. Applying it would be a change to what the model's
+output can do to a story, and needs its own look.
+
+Run over all 6,931 saved replies: 3,748 cleaned, the streamed and the whole-reply cut agree on every one, nothing but the label and what hangs under it
+was removed, and the 17 editing notes are what remains.
+
+Tests: `tests/status_label_test.py`.

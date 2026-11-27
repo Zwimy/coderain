@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import templates
 from .macros import expand_macros, has_volatile_macro
+from .sidecar import drop_status_label
 
 # Registry files whose entries are recall-gated by alias/name match.
 GATED_REGISTRIES = [
@@ -2540,8 +2541,11 @@ class MemoryStore:
 
         messages = [{"role": "system", "content": system}]
         for t in a.history:
-            messages.append({"role": "user" if t["role"] == "player" else "assistant",
-                             "content": t["text"]})
+            player = t["role"] == "player"
+            # A reply stored with the leftover status label (stories played before D-080) would teach the model to write it
+            # again. The transcript itself is left as it is.
+            said = t["text"] if player else (drop_status_label(t["text"])[0] or t["text"])
+            messages.append({"role": "user" if player else "assistant", "content": said})
         messages.append({"role": "user", "content": a.player_input})
         return messages
 

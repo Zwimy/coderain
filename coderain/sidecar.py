@@ -122,7 +122,77 @@ def strip_sidecar(text: str) -> tuple[str, dict | None]:
     sidecar = parse_sidecar(text)
     idx = find_marker(text)
     visible = text[:idx] if idx != -1 else text
-    return visible.rstrip(), sidecar
+    return drop_status_label(visible.rstrip())[0], sidecar
+
+
+# --- the status label small models copy -------------------------------------------------------------------------------------
+# The world-sidecar instruction (templates.WORLD_SIDECAR) puts a label over each of its two example blocks, "Nothing changed:"
+# and "Something changed ...:". Small models copy the label into the reply, above the block they send or instead of it. In the
+# long test runs it ended 74% of gemma3:4b's replies and half of Gemma 4 E4B's: the reader saw it, the transcript kept it, and
+# each kept one taught the model to do it again. The instruction stays as it is (its wording is what got small models to send
+# the block at all); the label is removed here instead (D-080).
+#
+# Removed only at the very END of a reply, when the label is alone on its line, or when the block's own JSON follows it without
+# the ```rpg fence (a few replies did that, and showed the reader raw JSON). "Nothing changed." with a full stop, a sentence that
+# starts with the words, and a label with more story after it are all left alone.
+_LABEL_WORDS = ("nothing changed", "something changed")
+_LABEL = (r"[ \t>*_#]*(?:nothing|something) changed(?:[ \t]*[—–-][^:\n]{0,80})?[ \t*_]*:[ \t*_]*")
+_BLOCK_JSON = r"(?:```\w*[ \t]*\s*)?\{\s*\"(?:deltas|v|check)\""
+_TRAILING_LABEL = re.compile(r"(?:\A|(?<=\n))" + _LABEL + r"(?:\s*\Z|\s*" + _BLOCK_JSON + r".*\Z)", re.IGNORECASE | re.DOTALL)
+# What may still turn into the match above while a reply is arriving: the label (so far), then only space and perhaps a block.
+_STILL_POSSIBLE = re.compile(r"(?:[ \t]*(?:[—–-][^:\n]{0,80})?)?[ \t*_]*(?::[ \t*_]*(?:\s*(?:`{1,3}\w*[ \t]*\s*)?(?:\{.*)?)?)?",
+                             re.DOTALL)
+_LINE_DONE = re.compile(r"(?:[ \t]*(?:[—–-][^:\n]{0,80})?)?[ \t*_]*:[ \t*_]*\n\s*")     # a label line that has ended
+
+
+def drop_status_label(text: str) -> tuple[str, str]:
+    """(`text` without a leftover status label at its end, what was removed or "")."""
+    kept, gone = text, ""
+    while True:                                   # a model that wrote it twice loses both
+        m = _TRAILING_LABEL.search(kept)
+        if m is None:
+            return kept, gone
+        gone = kept[m.start():] + gone
+        kept = kept[:m.start()].rstrip()
+
+
+def _could_become_label(rest: str) -> bool:
+    """Could `rest`, text from the start of a line, still turn out to be the label (and nothing but its block) at the reply's end?"""
+    text = rest.lstrip(" \t>*_#")
+    low = text.lower()
+    for words in _LABEL_WORDS:
+        if words.startswith(low):                 # the words are still arriving (or only decoration so far)
+            return True
+        if low.startswith(words):
+            after = text[len(words):]
+            if _STILL_POSSIBLE.fullmatch(after):
+                return True
+            done = _LINE_DONE.match(after)        # a second label under the first: both may go
+            return bool(done) and _could_become_label(after[done.end():])
+    return False
+
+
+def filter_status_label(chunks, removed: list[str]):
+    """Stream prose, holding back any line that may be a leftover status label until what follows shows whether it is. At the
+    end a real one is dropped (and put in `removed`); anything else held is released unchanged."""
+    held, at_line_start = "", True
+    for piece in chunks:
+        if not piece:
+            continue
+        held += piece
+        starts = ([0] if at_line_start else []) + [i + 1 for i, ch in enumerate(held) if ch == "\n"]
+        cut = next((p for p in starts if p < len(held) and _could_become_label(held[p:])), len(held))
+        out, held = held[:cut], held[cut:]
+        if out:
+            at_line_start = out.endswith("\n")
+            yield out
+    if held:
+        # `held` begins at a line start, so it is read as the tail of a reply.
+        kept, gone = drop_status_label(held)
+        if gone:
+            removed.append(gone)
+        if kept:
+            yield kept
 
 
 def _partial_tail(buffer: str, tag: str) -> int:
