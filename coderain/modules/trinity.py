@@ -35,6 +35,7 @@ from ..llm import LLM, emit_json_ex, extract_json
 from ..streaming import (filter_context_echo, prompt_line_set,
                          system_line_set)
 from ..llm import stage as llm_stage
+from ..memory import SCENE_STATE_HEAD, context_with_scene
 
 DIRECTOR_SYS = """\
 You are the LOGIC AGENT (director) of an interactive story. Given the story context
@@ -183,10 +184,27 @@ class TrinityBrain:
         into the memory context). Falls back to the full blob if the marker is
         absent (a stub/hand-built message set)."""
         content = messages[0]["content"] if messages else ""
+        history = list(messages[1:])
         i = content.find("\n# STORY & MEMORY CONTEXT")
+        # The cache layout (D-072) puts the RPG rules BEFORE the context and the clock, the location and the live character sheet in a
+        # system message just before the action. The Director needs all three, so they are put back together here, from the exact text the
+        # engine wrote, and that message is kept out of the history slice below (which the card and the other tail notes would crowd).
+        scene = ""
+        for m in history:
+            if m.get("role") == "system" and str(m.get("content") or "").startswith(SCENE_STATE_HEAD):
+                scene = str(m["content"])[len(SCENE_STATE_HEAD):]
+                history.remove(m)
+                break
+        rpg = ""
         if i != -1:
+            block = "# RPG MODULE (mechanics ON)\n\n" + self.store.read("rpg-rules.md").strip()
+            if block in content[:i]:
+                rpg = block
             content = content[i:].lstrip("\n")
-        history = messages[1:]
+        if rpg:
+            content = rpg + "\n\n" + content
+        if scene:
+            content = content + "\n\n" + scene
         if len(history) > self.director_history:
             # Keep the recent tail — the last element is always the player's
             # current action, so slicing the tail never drops it.
@@ -234,7 +252,7 @@ class TrinityBrain:
     # --- optional Lore-keeper LLM pass ---
     def _keep_lore(self, messages, plan: dict) -> tuple[dict, str | None]:
         payload = ("DIRECTOR'S PLAN:\n" + _plan_text(plan)
-                   + "\n\nSTORY CONTEXT:\n" + messages[0]["content"]
+                   + "\n\nSTORY CONTEXT:\n" + context_with_scene(messages)
                    + "\n\nPLAYER ACTION:\n" + _tail_user(messages))
         convo = [{"role": "system", "content": LOREKEEPER_SYS},
                  {"role": "user", "content": payload}]

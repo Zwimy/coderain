@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import templates
-from .macros import expand_macros
+from .macros import expand_macros, has_volatile_macro
 
 # Registry files whose entries are recall-gated by alias/name match.
 GATED_REGISTRIES = [
@@ -701,6 +701,63 @@ def _world_defaults(data: dict) -> dict:
     return data
 
 
+# --- the cache layout (D-072) ---------------------------------------------------------------------------------------------------
+# A provider's prompt cache, and a local server's KV cache, reuse the longest EXACT prefix of the previous request. So the prompt is laid
+# out from what never changes to what changes every turn: the writer rules, the other static blocks (RPG rules, style directives, the
+# world-update format), and the story and memory sections that change only when an author edits or a fold lands, in one system message;
+# then the recent history, which only grows between cuts (`Engine.history_window`); then ONE system message with everything this turn
+# brings in (the clock and location, anything built from a clock or random macro, the people, places and things the action activates,
+# the live character sheet); then the player's action.
+CONTEXT_MARK = "\n\n# STORY & MEMORY CONTEXT\n\n"
+SCENE_STATE_HEAD = "# CURRENT SCENE STATE (this turn)\n\n"
+
+
+def context_with_scene(messages: list[dict]) -> str:
+    """The system message and the per-turn scene state as ONE text: everything memory put in the prompt. The side calls (the continuity
+    check, the lore-keeper, fate) read the story context as a single block, and the soak's probes ask what memory showed the Writer; in the
+    cache layout the clock, the location, the activated entries and the live character sheet sit in their own message before the action
+    (D-072), so they are put back after the context here. Anything else (a legacy prompt, a hand-built one) is unchanged."""
+    if not messages:
+        return ""
+    text = str(messages[0].get("content") or "")
+    for m in messages[1:]:
+        c = str(m.get("content") or "")
+        if m.get("role") == "system" and c.startswith(SCENE_STATE_HEAD):
+            text += "\n\n" + c[len(SCENE_STATE_HEAD):]
+    return text
+
+
+def insert_static(content: str, block: str) -> str:
+    """Put a static block in the cacheable top of a system message: just before the story-and-memory context, after the static blocks
+    already there. A system message with no context (a hand-built one) just gets the block at its end, as it always did."""
+    block = block.strip("\n")
+    i = content.find(CONTEXT_MARK)
+    if i == -1:
+        return content + "\n\n" + block
+    return content[:i] + "\n\n" + block + content[i:]
+
+
+# Titles of the sections `_gather_sections` and its sisters make, by how often they change.
+_STATIC_TITLES = frozenset({"Premise", "World", "You"})
+_SLOW_TITLES = frozenset({"Open threads", "Story so far (arc)", "Established facts (timeless truths)", "Story structure (chapter plan)",
+                          "Recent scenes", "Timeline (shorthand; recall a [T..] range for detail)", "Known canon events"})
+_PER_TURN_TITLES = ("Linked to what is in play", "Related past scenes", "Referenced (by name)", "Recalled (semantically related)",
+                    "Companion side-chat", "Story beat")
+
+
+def _stability_rank(title: str, priority: int) -> int:
+    """0: written by the author and rarely edited. 1: changes when a fold or an edit lands (the arc, the scenes, the timeline, the
+    always-on lore). 2: changes with what the player just said or with the pacing (activated lore, references, recalled scenes); these
+    leave the system message for the per-turn message below the history."""
+    if title in _STATIC_TITLES:
+        return 0
+    if title.startswith(_PER_TURN_TITLES):
+        return 2
+    if title in _SLOW_TITLES:
+        return 1
+    return 1 if priority == 0 else 2                # lore: always-on entries are slow, activated ones follow the action
+
+
 @dataclass
 class _Assembly:
     """Working state threaded through the four stages of assemble().
@@ -734,6 +791,8 @@ class _Assembly:
     ref_slugs: list = field(default_factory=list)
     follow_links: bool = False      # follow holders and ties from what activated (settings: memory.follow_links)
     followed: set = field(default_factory=set)   # slugs the follow pass rendered, so later stages do not repeat them
+    layout: str = "legacy"          # "cache" orders the sections by stability and sets the per-turn ones aside in `volatile` (D-072)
+    volatile: str = ""              # the per-turn sections (the clock and location, clock or random macros), expanded; "" in the legacy layout
 
 
 class MemoryStore:
@@ -1938,21 +1997,31 @@ class MemoryStore:
     def assemble(self, history: list[dict], player_input: str,
                  scenes_tail: int = 4, budget_tokens: int = 8000,
                  retriever=None, follow_links: bool = False) -> list[dict]:
-        """Build the per-turn message list for the narrator.
+        """Build the per-turn message list for the narrator (the legacy layout: everything in the system message).
 
         Four stages, in order, each owning one phase and handing the rest along
         in an `_Assembly` (see below): read the story's own files, activate the
         lorebook against what was just said, surface anything named but not yet
         activated, then fit it all into the budget.
         """
+        return self.assemble_parts(history, player_input, scenes_tail, budget_tokens, retriever, follow_links)[0]
+
+    def assemble_parts(self, history: list[dict], player_input: str,
+                       scenes_tail: int = 4, budget_tokens: int = 8000,
+                       retriever=None, follow_links: bool = False,
+                       layout: str = "legacy") -> tuple[list[dict], str]:
+        """`assemble`, and the per-turn text the cache layout (D-072) sets aside: (messages, volatile). In the legacy layout `volatile` is
+        always "". The caller puts it in a system message just before the player's action."""
         a = _Assembly(history=history, player_input=player_input,
                       scenes_tail=scenes_tail, budget_tokens=budget_tokens,
                       retriever=retriever, idx=self.index(),
-                      follow_links=bool(follow_links))
+                      follow_links=bool(follow_links),
+                      layout="cache" if layout == "cache" else "legacy")
         self._gather_sections(a)
         self._activate_lore(a)
         self._resolve_references(a)
-        return self._pack_budget(a)
+        messages = self._pack_budget(a)
+        return messages, a.volatile
 
     # --- assemble stage 1: the story's own files ---------------------------
     def _gather_sections(self, a: "_Assembly") -> None:
@@ -2390,21 +2459,32 @@ class MemoryStore:
             if keep > 0:
                 kept.append((pos, head + body[:keep] + mark))
             break
-        chosen = [seg for _pos, seg in sorted(kept)]
+        vchosen: list[str] = []
+        if a.layout == "cache":
+            # D-072: stable first. What changes every turn is set aside for the message that sits between the history and the action:
+            # the clock and location, anything built from a clock or random macro, and everything the action itself brings in
+            # (the people, places and things it activates, the entries linked to them, related and recalled scenes: rank 2). What
+            # stays in the system message is ordered by how often it changes, the authored order breaking ties.
+            vol_pos = {p for p, (_pr, ttl, body) in enumerate(sections) if ttl == "Time" or has_volatile_macro(body)}
+            rank = lambda k: _stability_rank(sections[k[0]][1], sections[k[0]][0])      # noqa: E731
+            main = sorted((k for k in kept if k[0] not in vol_pos and rank(k) < 2), key=lambda k: (rank(k), k[0]))
+            chosen = [seg for _pos, seg in main]
+            vchosen = [seg for _pos, seg in sorted(k for k in kept if k[0] in vol_pos)]
+            vchosen += [seg for _pos, seg in sorted(k for k in kept if k[0] not in vol_pos and rank(k) == 2)]
+        else:
+            chosen = [seg for _pos, seg in sorted(kept)]
 
         system = a.writer_rules
+        # ST-20: one macro pass over the authored context ({{user}}, {{roll::2d6}}, {{random::a::b}}, {{day}}, {{clock}}). Seeded by
+        # (seed, turn) so a retry of the same turn expands identically.
+        tm = self.world_state().get("time")
+        macro_args = dict(player=(player[0].title if player else "you"), clock=clock,
+                          day=(str(tm.get("day", "")) if isinstance(tm, dict) else ""), seed=seed, turn=a.turn_index)
         if chosen:
-            # ST-20: one macro pass over the whole authored context ({{user}},
-            # {{roll::2d6}}, {{random::a::b}}, {{day}}, {{clock}}). Seeded by
-            # (seed, turn) so a retry of the same turn expands identically.
-            tm = self.world_state().get("time")
-            ctx = expand_macros(
-                "\n\n".join(chosen),
-                player=(player[0].title if player else "you"),
-                clock=clock,
-                day=(str(tm.get("day", "")) if isinstance(tm, dict) else ""),
-                seed=seed, turn=a.turn_index)
-            system += "\n\n# STORY & MEMORY CONTEXT\n\n" + ctx
+            ctx = expand_macros("\n\n".join(chosen), **macro_args)
+            system += CONTEXT_MARK.rstrip("\n") + "\n\n" + ctx
+        if vchosen:
+            a.volatile = expand_macros("\n\n".join(vchosen), **macro_args)
 
         messages = [{"role": "system", "content": system}]
         for t in a.history:

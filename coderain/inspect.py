@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 
 from .config import context_budget
+from .memory import SCENE_STATE_HEAD
 
 # Section headings assemble() writes. An ENTRY heading carries a {#slug} and
 # belongs to the section above it, so it is not a split point.
@@ -59,7 +60,13 @@ def context_report(eng, cfg) -> dict:
     # the prompt, which is the one thing it exists to prevent.
     hist = eng.history_window()
     msgs = eng._messages(hist, "(preview of the next turn)")
-    sys_txt = msgs[0]["content"]
+    # With the cache layout the clock, the location and the live character sheet ride a system message after the
+    # action (D-072). They are still context the model reads, so their sections are listed and counted with the
+    # system text, but that message is not history and must not inflate the history count.
+    scene = [str(m["content"])[len(SCENE_STATE_HEAD):] for m in msgs[1:]
+             if str(m.get("content", "")).startswith(SCENE_STATE_HEAD)]
+    msgs = [msgs[0]] + [m for m in msgs[1:] if not str(m.get("content", "")).startswith(SCENE_STATE_HEAD)]
+    sys_txt = msgs[0]["content"] + "".join("\n\n" + s for s in scene)
     parts = _SECTION_RE.split(sys_txt)
     preamble, sections = parts[0], []
     for i in range(1, len(parts) - 1, 2):

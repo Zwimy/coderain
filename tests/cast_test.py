@@ -204,6 +204,7 @@ def test_the_writer_is_given_them():
     """8. End to end: the fields reach the prompt the Writer is sent, for a character who is in play, and for the
     protagonist, and not for one who is not."""
     from coderain.engine import Engine
+    from coderain.memory import context_with_scene
     slug = new_save("Cast 6")
     store = store_for(slug)
     add(store, "odile", "Odile Marsh", 4, "The courier.", ["The Courier"])
@@ -215,10 +216,12 @@ def test_the_writer_is_given_them():
     store.append_turn("narrator", "Odile Marsh looked up from the rope.")
     eng = Engine(load_config(), store)
     msgs = eng._messages(eng.history_window(), "I ask Odile Marsh about the crossing.")
-    system = msgs[0]["content"]
-    assert "strengths: fast with a knife" in system and "goals: clear her brother's name" in system, "a character in play"
-    assert "personality: a stoic who keeps promises" in system, "the protagonist is always in context"
-    assert "takes small bribes" not in system, "a character who is not in play costs the prompt nothing"
+    # In the cache layout (D-072) the protagonist is in the system message (it does not change with the action), and a character
+    # the action brings into play is in the scene-state message below the history. "In the prompt" means either; absent means both.
+    memory_part = context_with_scene(msgs)
+    assert "strengths: fast with a knife" in memory_part and "goals: clear her brother's name" in memory_part, "a character in play"
+    assert "personality: a stoic who keeps promises" in msgs[0]["content"], "the protagonist is always in context"
+    assert all("takes small bribes" not in m["content"] for m in msgs), "a character who is not in play costs the prompt nothing"
     print("8. the strengths and goals of a character in play, and the protagonist's personality, are in the Writer's prompt")
 
 

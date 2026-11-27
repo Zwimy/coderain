@@ -25,6 +25,25 @@ import re
 _MACRO = re.compile(r"\{\{\s*([a-zA-Z_]+)\s*(?:::\s*([^{}]*?))?\s*\}\}")
 _DICE = re.compile(r"^(\d*)d(\d+)$", re.IGNORECASE)
 
+# The macros whose value changes from one turn to the next: {{day}} and {{clock}}/{{time}} follow the in-world clock, {{random}} and
+# {{roll}} are seeded off the turn. A section that uses one is volatile (D-072): the cache layout moves it to the tail of the prompt,
+# so it cannot invalidate the cached top. {{user}} and {{player}} never change.
+VOLATILE_MACROS = frozenset({"day", "clock", "time", "random", "roll"})
+
+
+def has_volatile_macro(text: str) -> bool:
+    """True when `text` holds a macro whose expansion changes between turns."""
+    if not text or "{{" not in text:
+        return False
+    for m in _MACRO.finditer(text):
+        name = m.group(1).lower()
+        if name in ("random", "roll"):
+            if m.group(2) is not None:          # expand_macros leaves a bare {{roll}} alone
+                return True
+        elif name in VOLATILE_MACROS:
+            return True
+    return False
+
 
 def _roll(spec: str, rng: random.Random) -> str:
     spec = spec.strip()

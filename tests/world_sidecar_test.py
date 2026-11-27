@@ -28,7 +28,7 @@ os.environ["CODERAIN_HOME"] = HOME
 
 from coderain.config import load_config  # noqa: E402
 from coderain.engine import Engine  # noqa: E402
-from coderain.memory import Library  # noqa: E402
+from coderain.memory import Library, context_with_scene  # noqa: E402
 
 lib = Library(os.path.join(HOME, "lib"))
 
@@ -103,10 +103,12 @@ print("   resolve_location matches known places, None otherwise")
 # ---- 2) current location force-activates next turn --------------------------
 class CaptureStub:
     def __init__(self):
-        self.sys = None
+        self.memory = None
 
     def stream(self, messages, **k):
-        self.sys = messages[0]["content"]
+        # Memory's part of the prompt: where you are changes as you move, so in the cache layout (D-072) the place's entry rides the
+        # scene-state message below the history, not the system message.
+        self.memory = context_with_scene(messages)
         yield "You wait, watching the door."
 
 
@@ -115,7 +117,7 @@ engine.llm = cap
 # The action mentions nothing about the tavern — the only reason its entry can be
 # in context is the force-activation of the place the player is IN.
 "".join(engine.turn("keep still and think"))
-assert TAVERN_BODY in cap.sys, \
+assert TAVERN_BODY in cap.memory, \
     "the current location's entry was not force-activated into context"
 print("2) the place you're in stays in context (force-activated) even unmentioned")
 

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from coderain.config import load_config
 from coderain.engine import Engine
+from coderain.memory import context_with_scene
 from soak.facts import names_of, present_in
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ class PromptProbe:
         the entity, so another character's scar is not this character's scar.
         """
         msgs = self.messages(player_input)
-        system = msgs[0]["content"] if msgs else ""
+        system = context_with_scene(msgs)           # memory's part: the system message and, in the cache layout (D-072), the scene state
         everything = "\n\n".join(m["content"] for m in msgs)
         return {"system": present_in(system, names, slug, patterns),
                 "any": present_in(everything, names, slug, patterns)}

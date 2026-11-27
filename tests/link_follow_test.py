@@ -295,8 +295,10 @@ def test_the_engine_switch():
         store = Library(home).store(Library(home).create_story("Eng", "x"))
         eng = Engine(load_config(cfg), store)
         got = []
-        real = store.assemble
-        store.assemble = lambda *a, **k: (got.append(k.get("follow_links")), real(*a, **k))[1]
+        # The engine calls assemble_parts (assemble is its first return value, kept for callers that want only the messages),
+        # so that is the seam where the flag has to arrive (D-072).
+        real = store.assemble_parts
+        store.assemble_parts = lambda *a, **k: (got.append(k.get("follow_links")), real(*a, **k))[1]
         eng._messages([], "hello")
         assert eng.follow_links is want and got == [want], (value, eng.follow_links, got)
         seen.append(value)

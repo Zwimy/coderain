@@ -30,7 +30,7 @@ os.environ["CODERAIN_HOME"] = str(WORK)
 
 from coderain.config import load_config              # noqa: E402
 from coderain.engine import Engine                    # noqa: E402
-from coderain.memory import Library                   # noqa: E402
+from coderain.memory import SCENE_STATE_HEAD, Library  # noqa: E402
 from coderain.planner import ChapterPlanner           # noqa: E402
 
 lib = Library(WORK / "lib")
@@ -77,7 +77,10 @@ def test_directive_is_last():
     assert msgs[-1]["role"] == "system", [m["role"] for m in msgs[-3:]]
     assert "THIS CHAPTER" in msgs[-1]["content"], msgs[-1]["content"][:120]
     # and it sits AFTER the player's action, not before it
-    assert msgs[-2]["role"] == "user" and "keep walking" in msgs[-2]["content"]
+    # The scene-state message (clock, location, live sheet) sits between the history and the action (D-072;
+    # the order is pinned in prompt_layout_test). The directive still comes after the action and nothing follows it.
+    rest = [m for m in msgs if not m["content"].startswith(SCENE_STATE_HEAD)]
+    assert rest[-2]["role"] == "user" and "keep walking" in rest[-2]["content"]
     print("1. the chapter directive is the last message, after the action")
 
 

@@ -40,7 +40,7 @@ from canon.scribe import Scribe                                           # noqa
 from coderain.canon_shadow import _lock_for, settings                     # noqa: E402
 from coderain.config import load_config                                   # noqa: E402
 from coderain.engine import Engine                                        # noqa: E402
-from coderain.memory import Entry, Library                                # noqa: E402
+from coderain.memory import SCENE_STATE_HEAD, Entry, Library               # noqa: E402
 from coderain.planner import ChapterPlanner                               # noqa: E402
 
 lib = Library(WORK / "lib")
@@ -200,7 +200,10 @@ def test_on_sends_it_in_the_right_place():
         assert msgs[-1]["role"] == "system" and "THIS CHAPTER" in msgs[-1]["content"], \
             "the chapter goal must stay the last thing read"
         assert msgs[-2]["content"] == card, "the card sits right before the chapter directive"
-        assert msgs[-3]["role"] == "user" and "look around" in msgs[-3]["content"], \
+        # The scene-state message (clock, location, live sheet) sits between the history and the action (D-072).
+        # It is its own thing, pinned in prompt_layout_test; what matters here is that the card follows the action.
+        rest = [m for m in msgs if not m["content"].startswith(SCENE_STATE_HEAD)]
+        assert rest[-3]["role"] == "user" and "look around" in rest[-3]["content"], \
             "and after the player's action"
         last = (Path(store.dir) / "canon" / "card-last.txt").read_text(encoding="utf-8")
         assert last.startswith("Turn 6, mode on. Sent."), last[:40]

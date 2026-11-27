@@ -26,10 +26,10 @@ from .config import Config, context_budget
 # Imported by NAME, not via the module alias above: inside Engine.__init__ the
 # parameter `config` shadows the module, so config.history_budget resolves to the
 # Config object and raises.
-from .config import HISTORY_FLOOR_TURNS, history_budget, short_term_turns
+from .config import HISTORY_FLOOR_TURNS, history_block, history_budget, short_term_turns
 from .llm import LLM
 from .llm import stage as llm_stage
-from .memory import Entry, MemoryStore, safe_output_regex
+from .memory import Entry, MemoryStore, SCENE_STATE_HEAD, context_with_scene, insert_static, safe_output_regex
 from .tailties import tail_ties
 from .tics import find_tics, tic_line
 from .planner import ChapterPlanner
@@ -248,6 +248,8 @@ class Engine:
         self.budget = context_budget(config)
         # Token ceiling under short_term_turns; see config.history_budget.
         self.history_tokens = history_budget(config)
+        # The cache layout cuts the history only at multiples of this many messages (0 = slide freely); see config.history_block.
+        self.history_block = history_block(config)
         self.scenes_tail = 4
         # Follow one hop from what activated (an item's holder, a person's ties): off until a measured run says it
         # helps (D-059). `is True`, so a hand-written "false" string is not read as on.
@@ -390,13 +392,32 @@ class Engine:
             self.store.log_degraded("tic-guard", f"no tic line this turn: {type(e).__name__}: {e}")
             return ""
 
+    @property
+    def prompt_layout(self) -> str:
+        """"cache" (the default): what never changes first, what changes every turn last, so a prompt cache can reuse the top (D-072).
+        "legacy": the older order, kept as a switch (`generation.prompt_layout: legacy`) for comparing the two."""
+        return "legacy" if str(self.cfg.generation.get("prompt_layout", "cache")).lower() == "legacy" else "cache"
+
     def _messages(self, history, player_input):
-        messages = self.store.assemble(history, player_input,
-                                       scenes_tail=self.scenes_tail,
-                                       budget_tokens=self.budget,
-                                       retriever=self.retriever,
-                                       follow_links=self.follow_links)
-        return self._augment_style(self._augment_rpg(messages))
+        layout = self.prompt_layout
+        messages, volatile = self.store.assemble_parts(history, player_input,
+                                                       scenes_tail=self.scenes_tail,
+                                                       budget_tokens=self.budget,
+                                                       retriever=self.retriever,
+                                                       follow_links=self.follow_links,
+                                                       layout=layout)
+        if layout == "legacy":
+            return self._augment_style(self._augment_rpg(messages))
+        messages, sheet = self._static_rpg(messages)
+        messages = self._augment_style(messages, layout)
+        # What changes every turn rides one system message at the bottom, between the recent history and the player's action (the clock
+        # and location, anything built from a clock or random macro, the live character sheet). The action stays the last of these
+        # messages; the card, the ties line and the chapter goal still follow it, as they always did.
+        scene = "\n\n".join(x for x in (volatile, sheet) if x)
+        if scene and messages:
+            note = {"role": "system", "content": SCENE_STATE_HEAD + scene}
+            messages = [*messages[:-1], note, messages[-1]] if len(messages) >= 2 else [*messages, note]
+        return messages
 
     def history_window(self, drop_last: bool = False) -> list[dict]:
         """The verbatim turns actually sent, capped by COUNT and by TOKENS.
@@ -407,15 +428,29 @@ class Engine:
         Trims from the OLDEST end (the newest turns are the ones that matter) and
         never below HISTORY_FLOOR_TURNS, so one runaway turn cannot leave the
         model with no conversation at all.
+
+        In the cache layout (D-072) the start of the window is then moved up to the next multiple of `history_block` messages, counted from
+        the first message of the story: between two cuts the window only gains messages at its end, so a prefix cache can reuse all of it,
+        and a cut costs one recompute of the history instead of one every turn. Moving the start UP only shortens the window, so the
+        count cap and the token ceiling still hold; the floor wins over the alignment (a window that would fall below it is left as it is).
         """
-        turns = self.store.recent_turns(self.short_term)
+        every = self.store.turns()
         if drop_last:
-            turns = turns[:-1]
+            every = every[:-1]
+        total = len(every)
+        turns = every[-self.short_term:] if self.short_term > 0 else every
         limit = self.history_tokens * 4          # same chars-per-token estimate
         floor = HISTORY_FLOOR_TURNS              # as the rest of the engine uses
         while len(turns) > floor and \
                 sum(len(t.get("text", "")) for t in turns) > limit:
             turns = turns[1:]
+        # A window the author set small is cut in smaller blocks (a quarter of it at most), so the cut never costs more than a quarter of
+        # what they asked for; under 8 messages there is nothing worth caching and the window slides as before.
+        block = min(self.history_block, self.short_term // 4) if self.prompt_layout == "cache" else 0
+        if block > 1 and turns:
+            cut = -(-(total - len(turns)) // block) * block          # the start, up to the next multiple of the block
+            if total - cut >= floor:
+                turns = every[cut:]
         return turns
 
     def _authors_note_cfg(self) -> tuple[str, int]:
@@ -430,7 +465,7 @@ class Engine:
             every = 1
         return depth, every
 
-    def _augment_style(self, messages):
+    def _augment_style(self, messages, layout="legacy"):
         """Wave 4 response controls + ST-21 author's note. The length knob always
         rides the system prompt; the save's custom instructions (the author's note)
         obey their depth + frequency: 'system' appends to the system prompt, 'tail'
@@ -467,16 +502,19 @@ class Engine:
         exchange = sum(1 for t in self.store.turns()
                        if t.get("role") == "narrator") + 1
         note_now = bool(custom) and (exchange % every == 0)
-        if custom and depth == "system" and note_now:
+        # In the cache layout a note that is only sent on some turns (every > 1) must not sit in the cached top: it would be there on
+        # one turn and gone on the next, and the prefix would end at it on both. It rides before the action, as a tail note does.
+        in_top = depth == "system" and not (layout == "cache" and every > 1)
+        if custom and in_top and note_now:
             parts.append(custom)
         out = messages
         if parts:
             add = "\n\n# STYLE DIRECTIVES\n" + "\n".join(f"- {p}" for p in parts)
-            out = [{**messages[0], "content": messages[0]["content"] + add},
-                   *messages[1:]]
+            content = insert_static(messages[0]["content"], add) if layout == "cache" else messages[0]["content"] + add
+            out = [{**messages[0], "content": content}, *messages[1:]]
         # tail: only when there's an actual last action to sit in front of (>=2
         # messages), else the note would land before the system prompt.
-        if custom and depth == "tail" and note_now and len(out) >= 2:
+        if custom and not in_top and note_now and len(out) >= 2:
             note = {"role": "system", "content": "# AUTHOR'S NOTE\n" + custom}
             out = out[:-1] + [note, out[-1]]     # right before the player's action
         return out
@@ -497,6 +535,24 @@ class Engine:
             add += "\n\n## Your character sheet\n" + sheet
         return [{**messages[0], "content": messages[0]["content"] + add},
                 *messages[1:]]
+
+    def _static_rpg(self, messages):
+        """The cache layout's `_augment_rpg` (D-072): the RPG rules join the cacheable top, and the live character sheet, which changes
+        every turn, is handed back to ride the tail. -> (messages, sheet block or "")."""
+        if not messages or not self.store.rpg_enabled():
+            return messages, ""
+        rules = self.store.read("rpg-rules.md").strip()
+        sheet = (self.rpg_mod.context_block(self.store, prompt_narrate=self.trinity is None)
+                 if self.rpg_mod is not None else "")
+        content = insert_static(messages[0]["content"], "# RPG MODULE (mechanics ON)\n\n" + rules)
+        return [{**messages[0], "content": content}, *messages[1:]], ("## Your character sheet\n" + sheet if sheet else "")
+
+    def _with_no_think(self, messages):
+        """The Qwen3 soft switch, on a COPY of the system message (never the caller's). Static text, so in the cache layout it joins the
+        cacheable top instead of ending the system message."""
+        content = (insert_static(messages[0]["content"], "/no_think") if self.prompt_layout == "cache"
+                   else messages[0]["content"] + "\n\n/no_think")
+        return [{**messages[0], "content": content}, *messages[1:]]
 
     def _snapshot_rpg(self):
         """Deep-copy the WHOLE mutable state before a turn — with Wave 1's world
@@ -865,9 +921,7 @@ class Engine:
             "only the action or dialogue I take — do NOT narrate any outcomes "
             "or write as the narrator.")
         if not self.cfg.generation.get("think", False) and messages:
-            messages = [{**messages[0],
-                         "content": messages[0]["content"] + "\n\n/no_think"},
-                        *messages[1:]]
+            messages = self._with_no_think(messages)
         with llm_stage(self.llm, "impersonate"):
             raw = "".join(self.llm.stream(messages))  # stream() filters <think>
         visible, _ = sidecar_mod.strip_sidecar(raw)  # drop any ```rpg block
@@ -1130,9 +1184,9 @@ class Engine:
                     + "\n\n(Enforce these silently; NEVER reveal an unfired rule " \
                       "in prose.)"
             if add and messages:
-                messages = [{**messages[0],
-                             "content": messages[0]["content"] + "\n\n" + add},
-                            *messages[1:]]
+                content = (insert_static(messages[0]["content"], add) if self.prompt_layout == "cache"
+                           else messages[0]["content"] + "\n\n" + add)
+                messages = [{**messages[0], "content": content}, *messages[1:]]
             # Optional continuity pass BEFORE the prose (one extra call). Works
             # without the quad pipeline — see _lore_check. Rate-limited by
             # lore_check_every, since the world rarely changes enough to need
@@ -1200,9 +1254,7 @@ class Engine:
             # Qwen3 soft switch: /no_think for fast prose. Copy the system message
             # so we never mutate the caller's assembled context.
             if not self.cfg.generation.get("think", False) and messages:
-                messages = [{**messages[0],
-                             "content": messages[0]["content"] + "\n\n/no_think"},
-                            *messages[1:]]
+                messages = self._with_no_think(messages)
             chunks: list[str] = []
             hidden: list[str] = []
             # prose_tokens, NOT reply_tokens: reasoning is spent out of the same
@@ -1557,7 +1609,7 @@ class Engine:
         t0 = time.monotonic()
         if on_stage:
             on_stage("Continuity check")
-        payload = ("STORY CONTEXT:\n" + messages[0]["content"]
+        payload = ("STORY CONTEXT:\n" + context_with_scene(messages)
                    + "\n\nPLAYER ACTION:\n"
                    + next((m["content"] for m in reversed(messages)
                            if m["role"] == "user"), ""))

@@ -12,12 +12,16 @@ turn plus a summary.
                         [--stub-knowledge truthful|leaky|wrong]
                         [--provider ollama|openrouter] [--allow-paid] [--max-requests 900]
                         [--response-length short|medium|long] [--max-tokens 700] [--no-reasoning-headroom]
+                        [--layout cache|legacy]
 
   --response-length, --max-tokens, --no-reasoning-headroom (D-070): the reply-length experiment. A long soak showed replies growing past 1,000
            words and repeating themselves, and the engine's own length control turned out to cap nothing: `prose_tokens` adds 3,000 tokens of
            headroom for a reasoning model to every prose call. --response-length short is the existing setting that adds a "keep it short"
            directive; --max-tokens sets the medium budget; --no-reasoning-headroom drops the +3,000 for this run only, so the budget is a real
            cap for a model that does not reason. The summary records the cap the Writer actually had (`prose_cap_tokens`)
+  --layout (D-072): the prompt order. cache (the engine's default) puts what never changes first and what changes every turn last, so a
+           prompt cache or a local KV cache can reuse the top; legacy is the older order, for comparing the two. The summary records the
+           layout the engine actually used (`prompt_layout`)
   --stub   an offline writer (deterministic prose, no model, no network): what the tests and a dry run use
   --model  a local Ollama model on this machine. It must already be running: this never starts it, and a host that is
            not this machine is refused (the invented story is the only text sent, but a habit of refusing is cheap)
@@ -241,7 +245,7 @@ def repeat_share(texts: list[str], n: int = 8) -> float:
 
 def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False,
             stub_folds: bool = False, tail_ties: bool = False, tic_guard: bool = False, provider: str = "ollama",
-            response_length: str = "medium", max_tokens: int = 700) -> str:
+            response_length: str = "medium", max_tokens: int = 700, layout: str = "cache") -> str:
     profile = hosted.profile_lines(model) if provider == "openrouter" else f"""active_profile: local
 profiles:
   local:
@@ -262,7 +266,7 @@ profiles:
   chapter_outline: false
   lore_check: false
   tic_guard: {"true" if tic_guard else "false"}
-memory:
+{('  prompt_layout: ' + layout + chr(10)) if layout != "cache" else ""}memory:
   short_term_turns: {window}
   medium_fold_after: {10_000 if stub and not stub_folds else 12}
   medium_fold_size: 5
@@ -309,7 +313,8 @@ def run_play(args, home: Path) -> int:
     (home / "config.yaml").write_text(
         _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links), bool(args.stub_folds),
                 bool(args.tail_ties), bool(args.tic_guard), provider,
-                getattr(args, "response_length", "medium"), int(getattr(args, "reply_max_tokens", 700))),
+                getattr(args, "response_length", "medium"), int(getattr(args, "reply_max_tokens", 700)),
+                getattr(args, "layout", "cache")),
         encoding="utf-8")
 
     from coderain import fate
@@ -426,6 +431,7 @@ def run_play(args, home: Path) -> int:
                "health_rows": len(store.health(200)),
                "provider": provider, "requests": pacer.count if pacer is not None else None, "stopped": stopped,
                "response_length": getattr(args, "response_length", "medium"),
+               "prompt_layout": eng.prompt_layout,
                "prose_cap_tokens": coderain_config.prose_tokens(eng.cfg.generation)}
     if undo_pacing is not None:
         undo_pacing()

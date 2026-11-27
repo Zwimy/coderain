@@ -27,7 +27,7 @@ os.environ["CODERAIN_HOME"] = str(WORK / "home")
 
 from coderain.config import load_config                                    # noqa: E402
 from coderain.engine import Engine                                         # noqa: E402
-from coderain.memory import Entry, Library                                 # noqa: E402
+from coderain.memory import SCENE_STATE_HEAD, Entry, Library                # noqa: E402
 from coderain.planner import ChapterPlanner                                # noqa: E402
 from coderain.tics import HEAD, MAX_PHRASE, MAX_TICS, MIN_REPLIES, WINDOW, find_tics, tic_line   # noqa: E402
 
@@ -157,7 +157,9 @@ def test_the_engine():
     assert len(got) == 1 and TIC in got[0]["content"], [m["content"][:50] for m in msgs if m["role"] == "system"]
     assert msgs[-1]["role"] == "system" and "THIS CHAPTER" in msgs[-1]["content"], "the chapter goal must stay the last thing read"
     assert msgs[-2]["content"] == got[0]["content"], "the line sits right before the chapter directive"
-    assert msgs[-3]["role"] == "user" and "look around" in msgs[-3]["content"], "and after the player's action"
+    # the scene-state message (D-072) sits before the action; its place is pinned in prompt_layout_test
+    rest = [m for m in msgs if not m["content"].startswith(SCENE_STATE_HEAD)]
+    assert rest[-3]["role"] == "user" and "look around" in rest[-3]["content"], "and after the player's action"
     assert all(HEAD not in t["text"] for t in store.turns()), "the line was stored in the transcript"
     # only the narrator's replies are read: the player's own repeated action is the player's business
     store, eng = engine(replies=["Wind rises.", "Rain falls.", "Gulls cry.", "Fog lifts."], tic_guard=True)

@@ -37,6 +37,7 @@ import random
 import re
 
 from .llm import extract_json
+from .memory import context_with_scene
 from .llm import stage as llm_stage
 from .planner import _restates
 from .templates import WORLD_SIDECAR
@@ -456,7 +457,7 @@ def run_stage(store, llm, messages: list[dict], action: str, *, seed, card: str 
         # with no second try a third of the exchanges got no direction at all, mostly lines a few characters over the
         # limit or a reply in the wrong JSON shape, and every one of those is fixed by asking once more.
         for _ in range(ATTEMPTS):
-            convo = build_messages(messages[0]["content"] if messages else "", recent, card, chapter, action,
+            convo = build_messages(context_with_scene(messages), recent, card, chapter, action,
                                    tier, avoid, offender, no_think, note)
             with llm_stage(llm, "fate"):
                 obj, err = _ask(llm, convo)

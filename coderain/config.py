@@ -54,6 +54,7 @@ generation:
   use_memory_tool: false
   trinity_brain: true
   response_length: medium
+  prompt_layout: cache
   ai_acts_as_player: false
   chapter_outline: true
   chapter_horizon: 4
@@ -227,6 +228,12 @@ HISTORY_FLOOR_TURNS = 4
 # governs, this only stops a pathological transcript being walked in full.
 HISTORY_COUNT_CAP = 200
 
+# The cache layout (D-072) cuts the verbatim history only at multiples of this many messages (three exchanges), so that between two cuts
+# the history is the same text with the newest turns added at its end, which is what a prefix cache can reuse. A window that slides by one
+# exchange every turn starts at a different message every turn and matches nothing. The window is rounded DOWN in size (its start up to the
+# next multiple), so the count cap and the token ceiling still hold; it is at most this many messages shorter than it would have been.
+HISTORY_BLOCK_MESSAGES = 6
+
 
 def short_term_turns(config) -> int:
     """How many verbatim turns to consider before the token ceiling trims them.
@@ -249,6 +256,22 @@ def short_term_turns(config) -> int:
     except (TypeError, ValueError, OverflowError):
         return HISTORY_COUNT_CAP
     return n if n > 0 else HISTORY_COUNT_CAP
+
+
+def history_block(config) -> int:
+    """The block the cache layout cuts the history at (`memory.history_block`), in messages: 'auto' (the default) is HISTORY_BLOCK_MESSAGES;
+    0 or 1 keeps the window sliding by one message at a time, as it did before D-072. A bad value means the default."""
+    mem = getattr(config, "memory", None) or {}
+    raw = mem.get("history_block", "auto")
+    if isinstance(raw, bool):
+        return HISTORY_BLOCK_MESSAGES
+    if isinstance(raw, str) and raw.strip().lower() in ("", "auto"):
+        return HISTORY_BLOCK_MESSAGES
+    try:
+        n = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return HISTORY_BLOCK_MESSAGES
+    return 0 if n <= 1 else min(n, 60)
 
 
 def history_budget(config) -> int:

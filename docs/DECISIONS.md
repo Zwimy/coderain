@@ -3414,3 +3414,85 @@ the caution of D-055 stands for gemma3:4b; one run at 80 turns does not make fat
 **What this means.** Gemma 4 E4B does not copy, keeps the looks with the card, and takes fate in its stride, and it is weaker than gemma3:4b at using
 ties and at keeping a secret. Not measured: Gemma 4 with tail ties or follow links, story-supplied looks, the stock (not heretic) model, a second seed, and a
 1,000-turn run.
+
+
+## D-072: The prompt is laid out for caching: what never changes first, what changes every turn last (built 2026-11-24, revised 2026-11-27)
+
+**Asked by the owner.** For prompt caching, put on top (static) the prose style guidelines, the JSON formatting rules, the active world, the character, the
+lorebook; at the bottom (dynamic) the recent chat history, the current scene state and the player's latest action, with changing timestamps and random seeds
+going there too. After the first version he asked to fix its three weak points (activated lore in the cached block, a history window that slides, an author's
+note sent every N turns), and for the history to come straight after the top. He chose to have the entries the action activates sit below the history.
+
+**Why order matters.** A hosted provider's prompt cache and a local server's KV cache (llama.cpp, Ollama) reuse the longest EXACT prefix of the previous
+request. One changed character ends the reuse, and everything after it is computed again. The old prompt did not respect that, found by playing 30 turns
+offline and listing the system message heading by heading: the writer rules, then the story context in the order the author wrote it (Premise, You, **Time**,
+World, the arc, recent scenes, the timeline, the people and places the action activated), and only then the static blocks (the RPG rules, the style
+directives, the world-update JSON rules, `/no_think`), then the live character sheet. The clock sat third, so every change of clock or location cut the
+reusable prefix there, and rules that never change sat behind text that does. The history window also slid by a message or two every turn once full, so it
+never matched the turn before.
+
+**The order now (`generation.prompt_layout: cache`, the default).**
+
+1. The system message: the writer rules; the RPG rules when mechanics are on; the style directives (including an author's note set to depth "system" and sent
+   every turn); the world-update JSON rules; `/no_think`; then `# STORY & MEMORY CONTEXT`, only what changes when an author edits or a fold lands, ordered by
+   how often that is (`_stability_rank`): the premise, the player and the world; then open threads, the arc, established facts, the chapter plan, recent
+   scenes, the timeline and always-on lore (`pinned` and `critical`).
+2. The recent history, cut only in blocks (below).
+3. One system message, `# CURRENT SCENE STATE (this turn)`: the clock and location; any section whose text holds a clock or random macro (`{{day}}`,
+   `{{clock}}`, `{{time}}`, `{{random::a::b}}`, `{{roll::2d6}}`), moved whole because it can only be expanded once; everything the action brings in
+   (activated lore, linked, related and referenced entries, recalled scenes, the companion chat, the story beat); and the live character sheet. Macros are
+   expanded in the same seeded pass (story seed, turn), so a retry reproduces them (invariant 5).
+4. The player's action, still the last message `_messages` builds. After it, as before: the lore-check directive, the canon card, the ties line, the tic line,
+   fate's steer, and the chapter goal last.
+
+**The history is cut in blocks.** `history_window` still applies the count cap and the token ceiling, then moves the window's start up to the next multiple of
+`memory.history_block` messages (default 6, counted from the story's first message; `0` or `1` keeps the old sliding window). Between two cuts the history only
+gains messages at its end. Rounding the start up only shortens the window (by at most one block, less one message), so the cap and the ceiling hold, and the
+floor of 4 messages wins over the alignment. A window the author set small is cut in smaller blocks: at most a quarter of `short_term_turns`, and not at all
+under 8. Legacy never cuts.
+
+**An author's note sent every N turns** (N above 1) would be in the top on one turn and gone on the next, so in this layout it rides before the action as a
+tail note does. A note sent every turn stays a style directive in the top.
+
+`generation.prompt_layout: legacy` restores the old order exactly. `python -m soak play --layout cache|legacy` runs either, and the summary records what the
+engine used.
+
+**What else had to move.** The Director (quad) used to be handed everything from the context marker on, which then held the RPG rules, the clock and the
+sheet; it is now assembled from the same exact texts (`_director_context`). The continuity check, the quad lore-keeper, fate and the soak's prompt probe read
+memory's part of the prompt as one block, so they read `context_with_scene(messages)`: the system message plus the scene state. The Context panel
+(`inspect.py`) lists the scene-state sections and does not count that message as history.
+
+**A bug this made, caught by the existing tests.** The first version of that helper was called `story_context`, and `fate.py` already had a function of that
+name, which silently replaced the import: fate was sent the Python printout of the message list. The new test passed anyway, because the clock's text was in
+the printout. `fate_engine_test` caught it. The helper is now `context_with_scene`, and the test asserts that fate reads the text as text.
+
+**Measured offline (no model).** The longest exact prefix each request shares with the one before, as a share of the whole prompt, legacy to cache:
+
+| case | legacy | cache |
+|---|---|---|
+| synthetic: the clock moves and the action names someone else every turn (8 turns) | 50% | 91% |
+| the soak's invented story, 4-message window, 60 turns (turns 10 to 60) | 63.3% | 79.1% |
+| the same, default window that never filled, 60 turns | 68.9% | 67.1% |
+| the same, default window, token ceiling binding (budget 3000), 120 turns (turns 10 to 120) | 50.0% | 60.7% |
+
+In the third row nothing slid and the legacy top rarely changed, so there was little to gain, and the new layout loses the previous action from the reused
+prefix, because the scene state now sits before it. The fourth row is the case the block cut is for. In it the system message alone goes from 77.0% to 90.7%
+shared. With the clock and action fixed and the ceiling binding, the system message and history start with the turn before's on 0% of turns sliding and on
+64% cut in blocks (`prompt_layout_test`, case 16).
+
+**Limits.** (1) A cut turn (about every third one at the default block) recomputes the history. (2) A fold changes the arc, the scenes and the timeline,
+which are in the top, so the turn after a fold reuses less. (3) A section with any volatile macro leaves the top whole, even if the macro is one word in a
+long entry. (4) Activated lore now sits after the history, near the action; whether the Writer reads it differently there is NOT measured. The A/B on a model
+(the graph probe, `--layout cache` against `legacy`, same seeds) and the seconds a turn are still to run; a hosted provider's own hit count shows in the usage
+panel's `cached` figure. (5) A system message between the history and the action is already how the tail author's note works, and the llama-family fold of
+D-054 only touches the messages after the action.
+
+**What would change this.** A quality drop on the probes that the order explains (ties or looks worse with `cache` than with `legacy` on the same seed), or a
+model that follows the old order measurably better. Then `legacy` becomes the default; the switch is kept for that.
+
+Tests: `tests/prompt_layout_test.py` (17 cases) and a soak `--layout` case in `soak_reply_cap_test.py`. In a copy of the code, 29 breaks were tried and each
+turned the tests red, among them: static blocks appended after the context, volatile macros ignored, the scene state after the action, the Director losing the
+rules or the clock, the three side calls reading the system message only, fate handed the message list, the soak probe reading the system message only, the
+history never cut, cut the wrong way, cut under the floor or cut in legacy, a small window cut in the full block, an every-N note left in the top, activated
+lore left in the top. Existing tests that assumed the old positions were changed, with the reason written into them (`phase4_test`, `link_follow_test`,
+`canon_inject_test`, `chapter_pressure_test`, `tics_test`, `tail_ties_test`, `cast_test`).

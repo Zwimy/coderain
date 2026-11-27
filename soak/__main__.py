@@ -183,6 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--no-reasoning-headroom", action="store_true",
                     help="experiment (D-070): drop the engine's +3,000 token reasoning headroom for this run, so --max-tokens is a real "
                          "cap for a model that does not reason. Only the soak does this; the engine is unchanged")
+    pl.add_argument("--layout", choices=["cache", "legacy"], default="cache",
+                    help="the prompt order (D-072): cache puts what never changes first and what changes every turn last (the engine's "
+                         "default); legacy is the older order, for comparing the two")
     pl.add_argument("--allow-paid", action="store_true", help="openrouter: allow a model that is not ':free' (refused by default)")
     pl.add_argument("--max-requests", type=int, default=900,
                     help="openrouter: stop between turns when fewer than a turn's worth of requests are left of this many (free models "

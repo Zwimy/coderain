@@ -30,7 +30,7 @@ os.environ["CODERAIN_HOME"] = str(WORK / "home")
 
 from coderain.config import load_config                                    # noqa: E402
 from coderain.engine import Engine                                         # noqa: E402
-from coderain.memory import Entry, Library                                 # noqa: E402
+from coderain.memory import SCENE_STATE_HEAD, Entry, Library                # noqa: E402
 from coderain.planner import ChapterPlanner                                # noqa: E402
 from coderain.tailties import HEAD, MAX_FACTS, MAX_LINE, tail_ties         # noqa: E402
 
@@ -226,7 +226,9 @@ def test_the_engine():
     assert "Brass lamp key is held by Hollis Wren" in got[0]["content"] and "Hollis Wren is tied to Ottoline Pike" in got[0]["content"]
     assert msgs[-1]["role"] == "system" and "THIS CHAPTER" in msgs[-1]["content"], "the chapter goal must stay the last thing read"
     assert msgs[-2] is got[0] or msgs[-2]["content"] == got[0]["content"], "the line sits right before the chapter directive"
-    assert msgs[-3]["role"] == "user" and "brass lamp key" in msgs[-3]["content"], "and after the player's action"
+    # the scene-state message (D-072) sits before the action; its place is pinned in prompt_layout_test
+    rest = [m for m in msgs if not m["content"].startswith(SCENE_STATE_HEAD)]
+    assert rest[-3]["role"] == "user" and "brass lamp key" in rest[-3]["content"], "and after the player's action"
     assert all(HEAD not in t["text"] for t in store.turns()), "the line was stored in the transcript"
     # the engine hands the committed message count: a `delay` the story has reached lets the entry through
     store, eng = engine(tail_ties=True)

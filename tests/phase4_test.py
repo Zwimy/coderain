@@ -111,7 +111,9 @@ NAR = ('You hurl a bolt of flame at the shade.\n\n'
 class FakeLLM:
     def stream(self, messages, **kw):
         assert "RPG MODULE" in messages[0]["content"], "rpg rules not injected"
-        assert "Your character sheet" in messages[0]["content"]
+        # The rules are static and join the cached top; the live sheet changes every turn, so it rides the scene-state message
+        # between the history and the action (D-072). The Writer still reads both.
+        assert any("Your character sheet" in m["content"] for m in messages[1:]) and "Your character sheet" not in messages[0]["content"]
         for i in range(0, len(NAR), 3):
             yield NAR[i:i+3]
     def complete(self, *a, **k):

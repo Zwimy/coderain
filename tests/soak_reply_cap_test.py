@@ -11,6 +11,7 @@ whether a real cap or the existing "short" setting stops the growth, the soak ga
     long 4,096 + 3,000; and with the headroom dropped, medium 700 (or the value given), short 1,200, long 4,096
  3) the headroom is dropped for that run only: the engine's constant is still 3,000 in a fresh process
  4) a bad option is refused before anything runs (an unknown length, a budget under 64 tokens) and 64 is accepted
+ 5) `--layout cache|legacy` (D-072, the prompt order) reaches the engine and the summary records what the engine used
 """
 import json
 import os
@@ -85,8 +86,24 @@ def test_bad_options():
     print("4. an unknown length and a budget under 64 are refused before anything runs; 64 is accepted (the engine floors it at 256)")
 
 
+def test_layout_option():
+    """5) --layout (D-072) reaches the engine: the summary records what the engine reports, so a flag that never got into the config
+    shows up as "cache" next to a typed "legacy" (the summary reads `eng.prompt_layout`, the one source that cannot disagree with the run)."""
+    base = _config("m", 4, 5000, "off", False)
+    legacy = _config("m", 4, 5000, "off", False, layout="legacy")
+    assert "prompt_layout" not in base and base == _config("m", 4, 5000, "off", False, layout="cache"), "the default config text changed"
+    assert legacy.replace("  prompt_layout: legacy\n", "") == base, "the layout option changed something else in the config"
+    for args, want in (((), "cache"), (("--layout", "cache"), "cache"), (("--layout", "legacy"), "legacy")):
+        code, text, s = run(*args)
+        assert code == 0 and s is not None and s["prompt_layout"] == want, (args, text[-300:], s and s.get("prompt_layout"))
+    code, text, s = run("--layout", "sideways")
+    assert code != 0 and s is None
+    print("5. --layout legacy writes one config line and the engine reports it; the default and cache change nothing; an unknown layout is refused")
+
+
 test_config_lines()
 test_the_budget_the_writer_has()
 test_headroom_is_for_that_run_only()
 test_bad_options()
+test_layout_option()
 print("\nSOAK REPLY CAP TESTS PASSED")
