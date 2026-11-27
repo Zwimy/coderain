@@ -32,5 +32,8 @@ ROADMAP.md
 DISTRIBUTION-PLAN.md
 SILLYTAVERN-IMPROVEMENT-PLAN.md
 
+# --- model check reports (python -m soak check): results for this machine's models ---
+model-checks/
+
 # --- private soak fixtures: they quote a real story, so they stay local ---
 soak/fixtures/local_*.py

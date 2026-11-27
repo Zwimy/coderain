@@ -1,6 +1,7 @@
 """python -m soak audit SAVE_DIR [--fixture NAME] [--out DIR]
    python -m soak scribe --model NAME --out DIR [--provider ollama|openai|openrouter]
    python -m soak gate SAVE_DIR --fixture NAME --out DIR [--model NAME]
+   python -m soak check --model NAME            (the prompts to run when you switch models, soak/check.py)
 
 audit copies SAVE_DIR into a throwaway CODERAIN_HOME, verifies the source was not
 touched, and measures the copy. The order of imports below is not style: the
@@ -218,6 +219,23 @@ def main(argv: list[str] | None = None) -> int:
                     help="plain: each graph question also asks for a straight one-sentence answer; open: the bare question")
     pl.add_argument("--stub-knowledge", choices=["truthful", "leaky", "wrong"], default="truthful",
                     help="what the OFFLINE writer does with graph probes; for tests of the scoring")
+    ck = sub.add_parser(
+        "check", help="the fixed prompts to run when you switch models, compared with the last model checked (D-079)",
+        description="Asks a model the same questions about an invented story, through the real engine, and scores the answers by "
+                    "code. Needs a local Ollama that is already running (this never starts it), or --provider openrouter.")
+    ck.add_argument("--model", default=None, help="a local Ollama model; with --provider openrouter, a ':free' model id")
+    ck.add_argument("--stub", choices=["good", "bad"], default=None, help="no model: an offline writer, to try the check or for tests")
+    ck.add_argument("--repeats", type=int, default=2, help="rounds of the whole set; more rounds leave less to chance (default 2)")
+    ck.add_argument("--think", choices=["on", "off"], default="off", help="generation.think, for models that reason (default off)")
+    ck.add_argument("--host", default="http://localhost:11434", help="must be this machine")
+    ck.add_argument("--provider", choices=["ollama", "openrouter"], default="ollama",
+                    help="openrouter: a hosted FREE model; the key is read from OPENROUTER_API_KEY")
+    ck.add_argument("--allow-paid", action="store_true", help="openrouter: allow a model that is not ':free' (refused by default)")
+    ck.add_argument("--max-requests", type=int, default=900, help="openrouter: stop after this many requests")
+    ck.add_argument("--against", default=None,
+                    help="an earlier report (its folder or report.json) to compare with, or 'none'. Default: the newest report of "
+                         "another model")
+    ck.add_argument("--out", type=Path, default=None, help="where to write the report (default: model-checks/<date>-<model>/)")
     ca = sub.add_parser(
         "creation-audit", help="lint a world's files with no model (shared names, dangling links, thin sheets ...)",
         description="Reads Markdown only; never opens a store. Use --default for the shipped scenario.")
@@ -242,6 +260,19 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         from soak.play import run_play
         return run_play(args, home)
+    if args.cmd == "check":
+        if args.repeats < 1:
+            ap.error("--repeats must be at least 1")
+        try:
+            home = isolated_home("soakcheck-")          # before anything imports coderain
+        except UnsafeHome as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 3
+        try:
+            from soak.check import run_check
+            return run_check(args, home, REPO_ROOT)
+        finally:
+            shutil.rmtree(home, ignore_errors=True)     # nothing in it is worth keeping: the replies are saved with the report
     if args.cmd == "creation-audit":
         if not args.default and args.dir is None:
             ap.error("give a folder, or --default")
