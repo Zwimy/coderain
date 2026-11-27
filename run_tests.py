@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -20,18 +22,44 @@ ROOT = Path(__file__).resolve().parent
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 PY = PY if PY.exists() else Path(sys.executable)
 
-# Point every test at a throwaway data dir. Tests read load_config(), and the
-# real config.yaml is the USER's live settings (e.g. use_memory_tool on) — a
-# stub LLM then hits a code path it doesn't implement and the suite fails on the
-# user's machine even though a fresh clone (default config) is green. A temp home
-# gives every run the same default config and also keeps tests from touching real
-# saves. (Tests that need their own home set CODERAIN_HOME themselves.)
-_TEST_HOME = tempfile.mkdtemp(prefix="coderain-tests-")
 
-# Force UTF-8 for every child so a test that prints a non-ASCII glyph (→, …)
-# doesn't die on a Windows cp1252 console — keeps the suite green on any OS.
-ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
-       "PYTHONUNBUFFERED": "1", "CODERAIN_HOME": _TEST_HOME}
+# One temp folder holds a whole run, and it is removed when the run ends. Every suite, and every process a suite starts, gets it
+# as TEMP/TMP/TMPDIR, so the temp folders they make land inside it. Suites do not clean up after themselves: each run left a few
+# hundred folders behind in the system temp folder, and more than 8,000 (1.9 GB) had piled up on one machine.
+def make_run_dir() -> Path:
+    return Path(tempfile.mkdtemp(prefix="coderain-tests-"))
+
+
+def child_env(run_dir: Path) -> dict:
+    # Point every test at a throwaway data dir. Tests read load_config(), and the
+    # real config.yaml is the USER's live settings (e.g. use_memory_tool on) — a
+    # stub LLM then hits a code path it doesn't implement and the suite fails on the
+    # user's machine even though a fresh clone (default config) is green. A temp home
+    # gives every run the same default config and also keeps tests from touching real
+    # saves. (Tests that need their own home set CODERAIN_HOME themselves.)
+    home = run_dir / "home"
+    home.mkdir(exist_ok=True)
+    # Force UTF-8 for every child so a test that prints a non-ASCII glyph (→, …)
+    # doesn't die on a Windows cp1252 console — keeps the suite green on any OS.
+    return {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1",
+            "CODERAIN_HOME": str(home), "TEMP": str(run_dir), "TMP": str(run_dir), "TMPDIR": str(run_dir)}
+
+
+def remove_run_dir(run_dir: Path) -> bool:
+    """Remove the run's temp folder, read-only files included. False when something in it would not go (a process a suite left
+    running still holds a file); the rest is removed all the same."""
+    def make_writable_and_retry(func, path, _error):
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except OSError:
+            pass                # still held: the caller says what is left
+
+    # `onerror` was renamed in 3.12; both pass the handler the failed call and the path.
+    handler = {"onexc" if sys.version_info >= (3, 12) else "onerror": make_writable_and_retry}
+    shutil.rmtree(run_dir, **handler)
+    return not os.path.exists(run_dir)
+
 
 # A suite whose optional dependency is missing (playwright, node) says so on a line starting SKIP or SKIPPED and
 # exits 0. That is the right behaviour for a dev-only dependency, but a bare "ALL SUITES PASSED" then hid that the
@@ -58,9 +86,16 @@ def ensure_utf8_stdout() -> None:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def run_one(path: Path, timeout: float = SUITE_TIMEOUT_S) -> tuple[int, bool, list[str]]:
-    """Run one suite, echoing its output as it arrives. Returns (exit code, timed out, its SKIP lines)."""
-    proc = subprocess.Popen([str(PY), str(path)], env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+def run_one(path: Path, timeout: float = SUITE_TIMEOUT_S, env: dict | None = None) -> tuple[int, bool, list[str]]:
+    """Run one suite, echoing its output as it arrives. Returns (exit code, timed out, its SKIP lines). Without `env` it gets a
+    temp folder of its own, removed afterwards."""
+    if env is None:
+        own = make_run_dir()
+        try:
+            return run_one(path, timeout, child_env(own))
+        finally:
+            remove_run_dir(own)
+    proc = subprocess.Popen([str(PY), str(path)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace", bufsize=1)
     timed_out: list[int] = []
     timer = threading.Timer(timeout, lambda: (timed_out.append(1), proc.kill()))
@@ -79,11 +114,20 @@ def run_one(path: Path, timeout: float = SUITE_TIMEOUT_S) -> tuple[int, bool, li
 
 def main() -> int:
     ensure_utf8_stdout()
+    run_dir = make_run_dir()
+    try:                                            # an interrupted run cleans up too
+        return run_all(child_env(run_dir))
+    finally:
+        if not remove_run_dir(run_dir):
+            print(f"\nCould not remove all of {run_dir}: something a suite started may still hold a file there.")
+
+
+def run_all(env: dict) -> int:
     tests = sorted((ROOT / "tests").glob("*.py"))
     failed, stuck, skipped = [], [], []
     for t in tests:
         print(f"=== {t.name} ===", flush=True)      # flush: a crash mid-run must
-        rc, timed_out, skips = run_one(t)          # still leave the name behind
+        rc, timed_out, skips = run_one(t, env=env)  # still leave the name behind
         if timed_out:
             print(f"!!! {t.name} exceeded {SUITE_TIMEOUT_S}s and was killed "
                   f"(a blocking dialog or an infinite loop)", flush=True)
