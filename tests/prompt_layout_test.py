@@ -39,11 +39,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 HOME = tempfile.mkdtemp(prefix="cr-layout-")
 os.environ["CODERAIN_HOME"] = HOME
 
-from coderain import streaming                                          # noqa: E402
 from coderain.config import HISTORY_FLOOR_TURNS, history_block, load_config              # noqa: E402
 from coderain.engine import Engine                                      # noqa: E402
 from coderain.macros import has_volatile_macro                          # noqa: E402
-from coderain.memory import CONTEXT_MARK, SCENE_STATE_HEAD, Entry, Library, insert_static   # noqa: E402
+from coderain.memory import CONTEXT_MARK, SCENE_STATE_HEAD, Entry, Library, echo_line_sets, insert_static   # noqa: E402
 
 lib = Library(os.path.join(HOME, "lib"))
 
@@ -166,8 +165,16 @@ def test_per_turn_out_of_the_top():
     sa, sb = scene_of(a), scene_of(b)
     assert sa.startswith(SCENE_STATE_HEAD) and "Day 1, morning" in sa and "the ferry deck" in sa, sa
     assert "Day 2, night" in sb and "the lighthouse stair" in sb and "Day 1" not in sb, sb
-    lines = streaming.system_line_set(a)
-    assert any("Current in-world time: Day 1, morning" in ln for ln in lines), "the echo filter cannot see the clock any more"
+    lines, directives = echo_line_sets(a)
+    assert "Current in-world time: Day 1, morning" in lines, "the echo filter cannot see the clock any more"
+    assert "Current in-world time: Day 1, morning" not in directives, "the scene state is treated as a directive, not as context"
+    # a copied scaffolding line is dropped from the start of a reply; a lore sentence repeated honestly is kept (it ends like a sentence)
+    stub.reply = "Current in-world time: Day 1, morning\nThe ferrywoman, who keeps the tide tables."
+    play(eng, stub, "I ask Ottoline about the ferry.", 1, "morning", "the ferry deck")
+    said = eng.store.turns()[-1]["text"]
+    assert "Current in-world time" not in said, "a copied clock line reached the story: " + said
+    assert "The ferrywoman, who keeps the tide tables." in said, "an honest lore sentence from the scene state was cut: " + said
+    stub.reply = "The rain keeps falling on the harbour."
     # the control: the legacy layout puts the clock in the middle of the system message, so the system message DOES change
     eng2, stub2 = story("Layout clock legacy", layout="legacy")
     la = play(eng2, stub2, "I look around.", 1, "morning", "the ferry deck")

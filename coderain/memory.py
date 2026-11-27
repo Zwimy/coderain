@@ -727,6 +727,16 @@ def context_with_scene(messages: list[dict]) -> str:
     return text
 
 
+def echo_line_sets(messages: list[dict]) -> tuple[set[str], set[str]]:
+    """The two line sets the echo filter matches a reply against: memory's context (the system message and, in the cache layout, the
+    scene state), where a line that reads like a sentence is left alone, and the directives the engine appends (the card, the ties line,
+    the chapter goal), dropped even when they read like prose. The scene state is context, not a directive: it carries lore sentences a
+    narration may honestly repeat (D-072)."""
+    from .streaming import prompt_line_set, system_line_set
+    directives = [m for m in messages[1:] if not str(m.get("content") or "").startswith(SCENE_STATE_HEAD)]
+    return prompt_line_set(context_with_scene(messages)), system_line_set([*messages[:1], *directives])
+
+
 def insert_static(content: str, block: str) -> str:
     """Put a static block in the cacheable top of a system message: just before the story-and-memory context, after the static blocks
     already there. A system message with no context (a hand-built one) just gets the block at its end, as it always did."""

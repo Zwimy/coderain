@@ -187,20 +187,24 @@ def _is_echo(line: str, prompt_lines: set[str],
     - the scaffolding lines are all short. 200 is the same bound `_one_line`
       uses for a rendered attr value.
 
-    `directive_lines` is exempt from the punctuation rule, and has to be. The
-    tail directives are written AS SENTENCES — "Every scene must move toward
-    that goal, complicate it, or pay it off." — so the punctuation guard, which
+    `directive_lines` is exempt from both rules, and has to be. The tail
+    directives are written AS SENTENCES — "Every scene must move toward that
+    goal, complicate it, or pay it off." — so the punctuation guard, which
     assumes scaffolding never looks like prose, protected them from removal.
     Reported live: a whole chapter directive rendered into the story, heading
-    and all. Exact-matching a 100-character line we wrote is not coincidence,
-    which is what makes the exemption safe; the 200-char bound still applies,
-    only a LEADING run is ever dropped, and every drop is logged.
+    and all. And they run long: the ties line is up to 600 characters and a
+    chapter goal up to 2,000, so the 200 bound let a copied one through.
+    Exact-matching a long line we wrote is the least coincidental match there
+    is, which is what makes the exemption safe; only a LEADING run is ever
+    dropped, and every drop is logged.
     """
     s = line.strip()
-    if not s or len(s) > 200:
+    if not s:
         return False
     if s in directive_lines:
         return True
+    if len(s) > 200:
+        return False
     if s[-1] in ".!?\"'”’":
         return False
     return s in prompt_lines

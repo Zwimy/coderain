@@ -32,10 +32,9 @@ import time
 from . import rpg as rpg_mod
 from .. import validator as validator_mod
 from ..llm import LLM, emit_json_ex, extract_json
-from ..streaming import (filter_context_echo, prompt_line_set,
-                         system_line_set)
+from ..streaming import filter_context_echo
 from ..llm import stage as llm_stage
-from ..memory import SCENE_STATE_HEAD, context_with_scene
+from ..memory import SCENE_STATE_HEAD, context_with_scene, echo_line_sets
 
 DIRECTOR_SYS = """\
 You are the LOGIC AGENT (director) of an interactive story. Given the story context
@@ -368,14 +367,10 @@ class TrinityBrain:
         # path. The quad Writer sees the same `## Time` block, so it has the same
         # opportunity to copy it back into the prose.
         echoed: list[str] = []
-        stream = filter_context_echo(
-            stream,
-            prompt_line_set(writer_msgs[0]["content"] if writer_msgs else ""),
-            echoed,
-            # The tail directives (continuity, chapter) ride writer_msgs too, and
-            # are the MOST echo-prone text in the prompt precisely because they
-            # sit last. messages[0] alone could not see them.
-            system_line_set(writer_msgs))
+        # Memory's context and the tail directives (continuity, chapter), which ride writer_msgs too and are the MOST
+        # echo-prone text in the prompt precisely because they sit last (see echo_line_sets).
+        context_lines, directive_lines = echo_line_sets(writer_msgs)
+        stream = filter_context_echo(stream, context_lines, echoed, directive_lines)
         for piece in stream:
             out_chunks.append(piece)
             yield piece

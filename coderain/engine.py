@@ -29,7 +29,7 @@ from .config import Config, context_budget
 from .config import HISTORY_FLOOR_TURNS, history_block, history_budget, short_term_turns
 from .llm import LLM
 from .llm import stage as llm_stage
-from .memory import Entry, MemoryStore, SCENE_STATE_HEAD, context_with_scene, insert_static, safe_output_regex
+from .memory import Entry, MemoryStore, SCENE_STATE_HEAD, context_with_scene, echo_line_sets, insert_static, safe_output_regex
 from .tailties import tail_ties
 from .tics import find_tics, tic_line
 from .planner import ChapterPlanner
@@ -1267,18 +1267,14 @@ class Engine:
             # ```rpg block, and keep the world/lore delta channel open.
             stream = sidecar_mod.filter_sidecar(stream, hidden)
             # Then drop any context scaffolding the model copied back at the top
-            # of its reply. messages[0] is where assemble() puts the sections;
-            # the tail system messages are the directives we append ourselves.
-            # Both are engine-authored, so both are safe to match. The transcript
-            # is still excluded — matching it would let a legitimately repeated
-            # line be deleted as an echo.
+            # of its reply. The sections memory put in the prompt are context; the
+            # tail system messages are the directives we append ourselves (see
+            # echo_line_sets). Both are engine-authored, so both are safe to match.
+            # The transcript is still excluded — matching it would let a
+            # legitimately repeated line be deleted as an echo.
             echoed: list[str] = []
-            stream = streaming.filter_context_echo(
-                stream,
-                streaming.prompt_line_set(messages[0]["content"] if messages
-                                          else ""),
-                echoed,
-                streaming.system_line_set(messages))
+            context_lines, directive_lines = echo_line_sets(messages)
+            stream = streaming.filter_context_echo(stream, context_lines, echoed, directive_lines)
             for piece in stream:
                 chunks.append(piece)
                 yield piece

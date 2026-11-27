@@ -122,11 +122,47 @@ def test_drops_are_reported():
     print(f"6. {len(dropped)} drops reported to the caller for the health log")
 
 
+def test_long_lines():
+    """§7 a directive is matched at any length (the ties line runs to 600 characters); a long CONTEXT line keeps the 200 bound."""
+    ties = "Facts in play, from the story's own files: " + " ".join(f"Person {i} is tied to Person {i + 1} (a cousin)." for i in range(8))
+    assert len(ties) > 300
+    msgs = [{"role": "system", "content": "## World\n" + ("the marsh stretches on and on " * 9).strip()},
+            {"role": "user", "content": "I wait."}, {"role": "system", "content": ties}]
+    dropped = []
+    out = "".join(filter_context_echo(iter([ties + "\nThe heron lifts."]), prompt_line_set(msgs[0]["content"]), dropped,
+                                      system_line_set(msgs)))
+    assert out.strip() == "The heron lifts.", repr(out[:80])
+    long_context = msgs[0]["content"].splitlines()[1]
+    assert len(long_context) > 200
+    dropped = []
+    out = "".join(filter_context_echo(iter([long_context + "\nThe heron lifts."]), prompt_line_set(msgs[0]["content"]), dropped,
+                                      system_line_set(msgs)))
+    assert out.startswith(long_context) and not dropped, "the 200 bound on context lines is gone"
+    print("7. a directive line over 200 characters is dropped; a context line over 200 is left alone")
+
+
+def test_scene_state_is_context():
+    """§8 the cache layout's scene-state message (D-072) is memory's context: its sentences are protected like messages[0]'s."""
+    from coderain.memory import SCENE_STATE_HEAD, echo_line_sets
+    scene = SCENE_STATE_HEAD + "## Time\nCurrent in-world time: Day 3\n\n## Characters\nThe ferrywoman keeps the tide tables."
+    msgs = [{"role": "system", "content": "# Writer rules"}, {"role": "system", "content": scene},
+            {"role": "user", "content": "I wait."}, {"role": "system", "content": DIRECTIVE}]
+    context, directives = echo_line_sets(msgs)
+    assert "Current in-world time: Day 3" in context and "The ferrywoman keeps the tide tables." in context
+    assert "The ferrywoman keeps the tide tables." not in directives and "You are in: The Harvest Fair" in directives
+    dropped = []
+    out = "".join(filter_context_echo(iter(["Current in-world time: Day 3\nThe ferrywoman keeps the tide tables.\nShe nods."]),
+                                      context, dropped, directives))
+    assert out.startswith("The ferrywoman keeps the tide tables.") and dropped == ["Current in-world time: Day 3"], (out, dropped)
+    print("8. the scene state is context: its scaffolding is dropped, its sentences are kept; later directives are still directives")
+
+
 try:
     for fn in (test_system_line_set_scope, test_sentence_directive_is_dropped,
                test_the_reported_block_clears,
                test_short_coincidence_still_protected,
-               test_only_a_leading_run_is_dropped, test_drops_are_reported):
+               test_only_a_leading_run_is_dropped, test_drops_are_reported,
+               test_long_lines, test_scene_state_is_context):
         fn()
 finally:
     shutil.rmtree(WORK, ignore_errors=True)
