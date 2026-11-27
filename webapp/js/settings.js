@@ -263,8 +263,8 @@ export async function renderSettings() {
         Repeat key facts next to your action
       </label>
       <p class="muted">Says who holds what and who is tied to whom once more, right after your action, for what you and the last reply
-        named. In tests on a small local model, both switches together made it use these facts far better; it also repeated secrets it
-        had been told more often.</p>
+        named. In two rounds of tests on a small local model, both switches together made it use these facts clearly better. In one
+        round it also gave away more secrets; in the other, the same number.</p>
       <label>
         <input type="checkbox" id="mm-search" ${st.memory.story_search ? "checked" : ""}>
         Search the story's own words
@@ -397,7 +397,7 @@ export async function renderSettings() {
               value="${st.generation.presence_penalty ?? ""}"></div>
         </div>
         <div class="row">
-          <div><label>Repetition penalty <span class="muted">(local models)</span></label>
+          <div><label>Repetition penalty <span class="muted">(Ollama ignores it; some other servers use it)</span></label>
             <input id="gc-rep" type="number" step="0.05" min="0" max="2"
               value="${st.generation.repetition_penalty ?? ""}"></div>
           <div><label>Seed <span class="muted">(fixed = reproducible)</span></label>
@@ -405,7 +405,7 @@ export async function renderSettings() {
               value="${st.generation.seed ?? ""}"></div>
         </div>
         <div class="row">
-          <div><label>Min-p <span class="muted">(drops unlikely words; not every server uses it)</span></label>
+          <div><label>Min-p <span class="muted">(drops unlikely words; Ollama ignores it, some other servers use it)</span></label>
             <input id="gc-minp" type="number" step="0.01" min="0" max="1"
               value="${st.generation.min_p ?? ""}"></div>
         </div>

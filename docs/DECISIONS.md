@@ -3480,11 +3480,27 @@ prefix, because the scene state now sits before it. The fourth row is the case t
 shared. With the clock and action fixed and the ceiling binding, the system message and history start with the turn before's on 0% of turns sliding and on
 64% cut in blocks (`prompt_layout_test`, case 16).
 
+**Measured on a model (2026-11-27).** The relationship and secrets probe of D-071 on Gemma 4 E4B (the heretic quant), 120 turns, seeds 5 and 6, `cache`
+against the older order on the same seeds (the `legacy` runs are D-073's runs with both switches off). One run per cell.
+
+| (both seeds pooled; per seed in brackets) | legacy | cache |
+|---|---|---|
+| one-hop answers right | 13 of 24 (8, 5) | 14 of 24 (8, 6) |
+| two-hop answers right | 2 of 10 (1, 1) | 5 of 10 (3, 2) |
+| right, when the evidence was in memory's part of the prompt | 15 of 31 (48%) | 18 of 29 (62%) |
+| questions whose evidence reached memory's part | 31 of 34 | 29 of 34 |
+| the told secret recalled | 4 of 10 (2, 2) | 5 of 10 (3, 2) |
+| the secret said by someone not told (leak) | 3 of 10 (1, 2) | 3 of 10 (1, 2) |
+| words a reply, mean | 270, 260 | 322, 327 |
+
+No quality drop that the order explains, so `cache` stays the default. The gains are small counts on two seeds. Replies came out about a fifth longer on
+both seeds; why was not looked into. The seconds a turn are not comparable, because test runs shared the machine during these. The health lines of the
+`cache` runs (1 and 4) are ordinary fold housekeeping: empty promotions dropped and the player not added as a character.
+
 **Limits.** (1) A cut turn (about every third one at the default block) recomputes the history. (2) A fold changes the arc, the scenes and the timeline,
 which are in the top, so the turn after a fold reuses less. (3) A section with any volatile macro leaves the top whole, even if the macro is one word in a
-long entry. (4) Activated lore now sits after the history, near the action; whether the Writer reads it differently there is NOT measured. The A/B on a model
-(the graph probe, `--layout cache` against `legacy`, same seeds) and the seconds a turn are still to run; a hosted provider's own hit count shows in the usage
-panel's `cached` figure. (5) A system message between the history and the action is already how the tail author's note works, and the llama-family fold of
+long entry. (4) Activated lore now sits after the history, near the action; the A/B above covers the whole new order, not that move on its own. The seconds a
+turn are still not measured; a hosted provider's own hit count shows in the usage panel's `cached` figure. (5) A system message between the history and the action is already how the tail author's note works, and the llama-family fold of
 D-054 only touches the messages after the action.
 
 **What would change this.** A quality drop on the probes that the order explains (ties or looks worse with `cache` than with `legacy` on the same seed), or a
@@ -3521,6 +3537,24 @@ together, so neither one's share is known, and these are small counts.
 
 **Decided.** Both stay off by default for now. The lore web (D-074) changes how links are followed, so the form that ships is measured again, secret leaks
 included, before any default changes.
+
+**Measured again in the shipped form (2026-11-27):** links followed both ways (D-074) and the `cache` layout (D-072), same probe, model and seeds, against
+the `cache` runs of D-072 with both switches off.
+
+| (both seeds pooled; per seed in brackets) | both off | both on |
+|---|---|---|
+| one-hop answers right | 14 of 24 (8, 6) | 19 of 24 (10, 9) |
+| two-hop answers right | 5 of 10 (3, 2) | 8 of 10 (3, 5) |
+| right, when the evidence was in memory's part of the prompt | 18 of 29 (62%) | 26 of 33 (79%) |
+| questions whose evidence reached memory's part | 29 of 34 | 33 of 34 |
+| the told secret recalled | 5 of 10 (3, 2) | 6 of 10 (4, 2) |
+| the secret said by someone not told (leak) | 3 of 10 (1, 2) | 3 of 10 (3, 0) |
+| words a reply, mean | 322, 327 | 295, 307 |
+
+**Read.** The answers improved on both seeds again, by less than before because the `cache` order alone already answers better. Leaks totalled the same, but
+moved in opposite directions by seed (1 to 3, 2 to 0), so five leak questions a run are too few to tell a change from noise. Over both measurements they are
+6 of 20 off and 9 of 20 on. The replies counted as leaks were read: in each, a character states the secret aloud. **Still off by default:** the gain on
+questions is clear, and that leaks do not rise is not shown. A player whose story does not turn on secrets gains by switching both on.
 
 
 ## D-074: The lore web: one graph of how entries point at each other, followed both ways, drawn and edited in the app (built 2026-11-27)
@@ -3626,7 +3660,13 @@ on. A refusal naming neither is retried without both, and they are given up only
 not cost them. Either way the story's health log says so (invariant 2). The memory tool's loop, which does not stream, has the same care now; before, a
 server that refused `reasoning` there failed the call.
 
-**Not measured:** whether strict JSON improves any stage on any model, and which local servers use `min_p` rather than ignoring it.
+**Ollama ignores Min-p and the repetition penalty here (measured 2026-11-27, Gemma 4 E4B).** The app talks to Ollama's OpenAI-compatible endpoint. With
+`min_p` 1.0 at temperature 2, where only the likeliest token should survive, five requests gave four different replies; Ollama's own `/api/chat` with the
+same setting gave one. For `repetition_penalty`, an older setting, at temperature 0 with a fixed seed the text was identical with 2.0 and without it, while
+the native `repeat_penalty` changed it. Both labels in Settings now say so; the old one read "(local models)". Making them work on Ollama would mean sending
+turns through its own API, which is not done.
+
+**Not measured:** whether strict JSON improves any stage on any model, and whether other local servers use either setting.
 
 **What would change this.** A provider whose refusal wording hides which setting it means so often that the retry costs more than it saves, or a model where
 forced JSON makes a thinking model answer emptily: then strict JSON becomes per stage.

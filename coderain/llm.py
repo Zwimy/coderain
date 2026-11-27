@@ -309,8 +309,8 @@ class LLM:
             if g.get(k) is not None:
                 p[k] = g[k]
         p.update(overrides)
-        # repetition_penalty is non-standard (llama.cpp/Ollama) → extra_body so it
-        # reaches those backends without breaking strict OpenAI schemas. Merged AFTER
+        # repetition_penalty is non-standard, so it rides extra_body, for servers that take it without breaking strict
+        # OpenAI schemas. Ollama's OpenAI endpoint ignores it, and min_p too (measured, D-076). Merged AFTER
         # overrides (and via setdefault) so a caller's own extra_body isn't clobbered
         # and can still win on the same key.
         # Thinking control. Until this existed nothing here ever sent a
