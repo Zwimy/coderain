@@ -264,9 +264,9 @@ export async function renderSettings() {
       </label>
       <p class="muted">Says who holds what and who is tied to whom once more, right after your action, for what you and the last reply
         named. Both of these switches are on unless you turn them off. In two rounds of tests on a small local model, the two together
-        made it use these facts clearly better. In one round characters also gave away more secrets they were never told; in the other,
-        the same number. Keeping those secrets depends on the writer following its rule that characters only know what they saw or were
-        told.</p>
+        made it use these facts clearly better. In one round, characters who had never been told a secret also spoke of it more often;
+        in the other, just as often. Stopping that depends on the writer following its rule that characters only know what they saw or
+        were told.</p>
       <label>
         <input type="checkbox" id="mm-search" ${st.memory.story_search ? "checked" : ""}>
         Search the story's own words
