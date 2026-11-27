@@ -262,6 +262,14 @@ def test_a_truthful_run():
     assert s_t["tail_ties"] is True and s_t["graph"]["tail_ties_rows"] > 0, s_t["graph"]["tail_ties_rows"]
     assert all(r["tail_ties"].startswith("Facts in play") for r in asked_t if r["tail_ties"]), "a row recorded something that is not the line"
     assert [r["action"] for r in asked_t] == [r["action"] for r in rows_f if r["kind"] == "graph"], "the flag changed the questions"
+    # `--story-search` (D-075): the passages are quoted for questions whose words the story holds before the history window, the row
+    # and the summary say so, and without the flag no prompt has the section
+    assert s["story_search"] is False and s["graph"]["story_search_rows"] == 0 and not any(r.get("story_search") for r in rows)
+    rows_s, s_s = play("--probe-set", "graph", "--turns", "60", "--story-search")
+    asked_s = [r for r in rows_s if r["kind"] == "graph"]
+    assert s_s["story_search"] is True and s_s["graph"]["story_search_rows"] > 0, s_s["graph"]["story_search_rows"]
+    assert all(r["story_search"].startswith("[T") for r in asked_s if r["story_search"]), "a row recorded something that is not it"
+    assert [r["action"] for r in asked_s] == [r["action"] for r in rows_f if r["kind"] == "graph"], "the flag changed the questions"
     # `--tic-guard` (D-064): the summary says so and reports how much each turn repeats the one before; with the flag the Writer's prompt
     # carries the tic line once the stub's recurring phrases have been seen in three replies, and without it none does
     assert s["tic_guard"] is False and 0.0 < s["repeat_share"] <= 1.0 and s["graph"]["tic_rows"] == 0, s["repeat_share"]

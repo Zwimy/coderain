@@ -245,7 +245,8 @@ def repeat_share(texts: list[str], n: int = 8) -> float:
 
 def _config(model: str, window: int, budget: int, canon: str, stub: bool, follow_links: bool = False,
             stub_folds: bool = False, tail_ties: bool = False, tic_guard: bool = False, provider: str = "ollama",
-            response_length: str = "medium", max_tokens: int = 700, layout: str = "cache") -> str:
+            response_length: str = "medium", max_tokens: int = 700, layout: str = "cache",
+            story_search: bool = False) -> str:
     profile = hosted.profile_lines(model) if provider == "openrouter" else f"""active_profile: local
 profiles:
   local:
@@ -275,6 +276,7 @@ profiles:
   context_budget_tokens: {budget}
   follow_links: {"true" if follow_links else "false"}
   tail_ties: {"true" if tail_ties else "false"}
+  story_search: {"true" if story_search else "false"}
 rpg: {{}}
 retrieval:
   enabled: false
@@ -314,7 +316,7 @@ def run_play(args, home: Path) -> int:
         _config(model, args.window, args.budget, args.canon, stub, bool(args.follow_links), bool(args.stub_folds),
                 bool(args.tail_ties), bool(args.tic_guard), provider,
                 getattr(args, "response_length", "medium"), int(getattr(args, "reply_max_tokens", 700)),
-                getattr(args, "layout", "cache")),
+                getattr(args, "layout", "cache"), bool(getattr(args, "story_search", False))),
         encoding="utf-8")
 
     from coderain import fate
@@ -412,6 +414,7 @@ def run_play(args, home: Path) -> int:
                     row["linked"] = gp.linked_lines(writer_msgs)
                     row["tail_ties"] = gp.tail_line(writer_msgs)
                     row["tic_line"] = gp.tic_message(writer_msgs)
+                    row["story_search"] = gp.search_section(writer_msgs)
             rows.append(row)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
@@ -439,6 +442,7 @@ def run_play(args, home: Path) -> int:
         summary["probe_set"], summary["ask"], summary["facts"] = probe_set, ask, args.facts
         summary["follow_links"] = bool(args.follow_links)
         summary["tail_ties"] = bool(args.tail_ties)
+        summary["story_search"] = bool(getattr(args, "story_search", False))
         summary["graph"] = gp.summarize(rows)
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

@@ -206,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
                          "run uses; for tests of the probe's prompt capture")
     pl.add_argument("--follow-links", action="store_true",
                     help="memory: follow_links on (D-059): an activated item leads to its holder, a person to their ties")
+    pl.add_argument("--story-search", action="store_true",
+                    help="memory: story_search on (D-075): passages from before the history window that match the action are quoted")
     pl.add_argument("--tail-ties", action="store_true",
                     help="memory: tail_ties on (D-063): the ties and holders of what the action and the last reply name, said again "
                          "at the end of the prompt")

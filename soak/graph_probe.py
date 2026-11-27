@@ -226,6 +226,20 @@ def linked_lines(messages) -> list[str]:
     return []
 
 
+def search_section(messages) -> str:
+    """The story search's passages (D-075) in the Writer's prompt, or "". Recorded in a probe's row like the ties line."""
+    from coderain.memory import EARLIER_TITLE
+    for m in messages or []:
+        if m.get("role") != "system":
+            continue
+        body = str(m.get("content", ""))
+        at = body.find("## " + EARLIER_TITLE)
+        if at >= 0:
+            section = body[at:].split("\n", 1)[1] if "\n" in body[at:] else ""
+            return section.split("\n\n")[0].strip()
+    return ""
+
+
 def tail_line(messages) -> str:
     """The ties line (D-063) the engine put after the player's action, or "". Recorded in a probe's row, as the Linked lines are, so a
     run with `--tail-ties` can be shown to have had it and a run without it to have had none."""
@@ -335,6 +349,7 @@ def summarize(rows) -> dict:
     out["prompt_missing"] = sum(1 for r in marked if r.get("prompt_found") is False)
     out["tic_rows"] = sum(1 for r in marked if r.get("tic_line"))              # questions whose prompt carried the tic line (D-064)
     out["tail_ties_rows"] = sum(1 for r in marked if r.get("tail_ties"))        # questions whose prompt carried the ties line (D-063)
+    out["story_search_rows"] = sum(1 for r in marked if r.get("story_search"))  # questions whose prompt quoted passages (D-075)
     if marked:
         hop = [r for r in marked if r["sub"] in ("relation", "possession", "twohop")]
         mem = [r for r in hop if r["seen_memory"]]
