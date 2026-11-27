@@ -3496,3 +3496,28 @@ rules or the clock, the three side calls reading the system message only, fate h
 history never cut, cut the wrong way, cut under the floor or cut in legacy, a small window cut in the full block, an every-N note left in the top, activated
 lore left in the top. Existing tests that assumed the old positions were changed, with the reason written into them (`phase4_test`, `link_follow_test`,
 `canon_inject_test`, `chapter_pressure_test`, `tics_test`, `tail_ties_test`, `cast_test`).
+
+
+## D-073: Facts next to the action help Gemma 4 use them: follow links and the ties line together (measured 2026-11-24)
+
+**Run.** The relationship and secrets probe of D-071 on Gemma 4 E4B (the heretic quant), 120 turns, seeds 5 and 6, with `--follow-links --tail-ties`
+(D-059, D-063), against the same seeds without them. One run per cell; the old prompt layout (before D-072).
+
+| (both seeds pooled; per seed in brackets) | both off | both on |
+|---|---|---|
+| one-hop answers right | 13 of 24 (8, 5) | 21 of 24 (11, 10) |
+| two-hop answers right | 2 of 10 (1, 1) | 9 of 10 (4, 5) |
+| right, when the evidence was in memory's part of the prompt | 15 of 31 (48%) | 30 of 34 (88%) |
+| questions whose evidence reached memory's part | 31 of 34 | 34 of 34 |
+| the told secret recalled | 4 of 10 (2, 2) | 8 of 10 (4, 4) |
+| the secret said by someone not told (leak) | 3 of 10 (1, 2) | 6 of 10 (4, 2) |
+| leaks, among the leak questions with the secret in the prompt | 3 of 8 | 6 of 10 |
+| seconds a turn | 24.3 and 23.3 | 24.0 and 23.1 |
+
+**Read.** The gain is mostly faithfulness: with the evidence already in the prompt, saying it again next to the question made the model use it. That is the
+opposite of D-067, where the ties line alone did nothing for gemma3:4b. It costs no time. The leaks rose on seed 5 and not on seed 6; in seed 5 the secret
+was in the prompt for all five leak questions both with and without the switches, so the model used what it already had more often. The two switches ran
+together, so neither one's share is known, and these are small counts.
+
+**Decided.** Both stay off by default for now. The lore web (D-074) changes how links are followed, so the form that ships is measured again, secret leaks
+included, before any default changes.
