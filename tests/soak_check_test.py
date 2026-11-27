@@ -137,6 +137,11 @@ def test_scorers():
                        str(gp.RELATIONSHIPS), *(f"{a} {r}" for a, r in ck.HISTORY if a != ck.LETTER_TELL)]).lower()
     assert ck.LETTER_TOKEN not in nobody, "the letter's secret names somebody in the story"
     assert ck.PROBES["K2"]["token"] == "marrow gull" and ck.PROBES["L1"]["token"] == ck.LETTER_TOKEN
+    # facts in the prompt: said no when they are missing, and the question itself is never the fact
+    asked = {"role": "user", "content": f"I ask Bram about the {ck.LETTER_TOKEN}."}
+    assert not ck.facts_in_prompt("K1", [{"role": "system", "content": "A quiet town."}, asked]), "the question counted"
+    assert ck.facts_in_prompt("K1", [{"role": "assistant", "content": f"He hears of the {ck.LETTER_TOKEN}."}, asked])
+    assert not ck.facts_in_prompt("P1", [{"role": "system", "content": "A quiet town."}, asked])
     assert ck.LETTER_TELL in [a for a, _r in ck.HISTORY] and ck.LETTER_TOKEN in ck.LETTER_TELL
     assert ck.finishes("You wait.") and ck.finishes(f"{q1}Go{q2}") and ck.finishes("*She nods.*")
     assert not ck.finishes("You wait and") and not ck.finishes("")
