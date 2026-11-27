@@ -236,6 +236,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="an earlier report (its folder or report.json) to compare with, or 'none'. Default: the newest report of "
                          "another model")
     ck.add_argument("--out", type=Path, default=None, help="where to write the report (default: model-checks/<date>-<model>/)")
+    ck.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                    help="change one setting for this run, to see whether it still helps this model, e.g. memory.tail_ties=false; "
+                         "compared with the newest run of the same model without it. Repeatable (a wrong name lists the right ones)")
+    ck.add_argument("--predict", action="append", default=[], metavar="CHECK=WORD",
+                    help="what you expect, before the run: better, worse, same or not-worse. Saved before the first reply, and the "
+                         "report says which held. Repeatable, e.g. keeps_quiet=not-worse (a wrong name lists the checks)")
     ca = sub.add_parser(
         "creation-audit", help="lint a world's files with no model (shared names, dangling links, thin sheets ...)",
         description="Reads Markdown only; never opens a store. Use --default for the shipped scenario.")

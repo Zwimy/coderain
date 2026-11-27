@@ -95,6 +95,17 @@ hermetic temp `CODERAIN_HOME`). Green is the bar for every commit.
   is wrong. If the test encoded old behaviour, fix the test *and write the
   reasoning into it* (see `sweep2_test.py` §12).
 
+## Measuring
+
+Before a run that will decide something (a default, a fix, a model), write down
+what you expect: which checks or probes should get better and which must not get
+worse. `python -m soak check --predict` saves it before the first reply. Record
+afterwards, in the DECISIONS entry, which predictions held; a result nobody
+predicted is a new question, not a confirmation. A fix tuned on one model is not
+known to help another: ask with `--set`. The index at the top of
+`docs/DECISIONS.md` groups entries by recurring problem: read the group before
+trying a fix again, and add each new entry to it (D-081).
+
 ## Never touch live data
 
 The repo root is a real install: real saves, a real `.env` with a real API key.

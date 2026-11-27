@@ -15,6 +15,13 @@ comparison must only call a change worse or better when it is big enough to mean
     skipped
  6) refused: a paid hosted model, no model at all, a bad --against, rounds below one
  7) a model that cannot be called stops the run with a message, and no report is written
+ 8) --set runs with one setting changed, the change reaches the prompt, and it is compared with the same model without it; a
+    later normal run does not compare with the changed one
+ 9) --predict is saved before the first reply (it survives a run that dies), and the report says which held; refusals write
+    nothing
+
+What broke in the first version, found by its first real run: the status block the app asks for counted as prompt text
+(29 of 42 replies), the letter's secret named somebody in the story, and "the keeper of the lighthouse" scored as no answer.
 """
 import json
 import os
@@ -59,10 +66,14 @@ def test_good_and_bad():
     assert not short, short
     sizes = {k: c["total"] for k, c in good["checks"].items()}
     assert sizes["keeps_quiet"] == 8 and sizes["ties"] == 4 and sizes["in_story"] == 42 and sizes["summary"] == 2, sizes
+    assert sizes["status_block"] == 42, sizes
     replies = [json.loads(ln) for ln in (WORK / "reports" / "1-good" / "replies.jsonl").read_text(encoding="utf-8").splitlines()]
     asked = [x for x in replies if "facts_in_prompt" in x]
     assert len(asked) == 2 * len(ck.PROBE_CHECKS) and all(x["facts_in_prompt"] for x in asked), \
         [x["kind"] for x in asked if not x["facts_in_prompt"]]
+    # It sends the label and the block, as a real model does: the app shows neither, and what was sent is saved.
+    wrong = [x for x in replies if "```rpg" not in x.get("raw", "") or "```" in x["text"] or "changed" in x["text"]]
+    assert not wrong, wrong[:2]
     assert "Nothing earlier to compare with." in (WORK / "reports" / "1-good" / "report.md").read_text(encoding="utf-8")
     assert saves_state() == before, "the repo's saves changed"
     assert not list(TEMPDIR.glob("soakcheck-*")), "the temp home was left behind"
@@ -80,7 +91,7 @@ def test_good_and_bad():
         assert bad["checks"][key]["examples"] and all(len(e) > 10 for e in bad["checks"][key]["examples"]), \
             (key, bad["checks"][key]["examples"])
     assert "usable first chapter" in bad["checks"]["chapter"]["examples"][0], bad["checks"]["chapter"]["examples"]
-    assert "north beacon" in " ".join(bad["checks"]["keeps_quiet"]["examples"])
+    assert ck.LETTER_TOKEN in " ".join(bad["checks"]["keeps_quiet"]["examples"])
     print("2. the bad writer fails every check; the report quotes the failures and the app's own reason for the JSON jobs")
 
 
@@ -111,6 +122,22 @@ def test_scorers():
                  "```rpg", "[[character:bram]] nods", "LENGTH: keep it short"):
         assert not ck.no_prompt_text(leak), leak
     assert ck.no_prompt_text("You wait at the counter: nothing happens. He says the word narrator out loud.")
+    assert not ck.no_prompt_text("You wait.\n\nNothing changed:") and not ck.no_prompt_text("You wait.\n**Something changed:**\n")
+    assert ck.no_prompt_text("You look again.\n\nNothing changed. You wait.")
+    # memory verdicts: this check's own letter secret, and other ways of naming someone
+    assert ck.verdict("K1", '"It is for Maribel Voss, the lighthouse keeper," he says.') == "none"
+    assert ck.verdict("K1", f'"For the old {ck.LETTER_TOKEN}," he says.') == "held"
+    assert ck.verdict("L1", f"She says something about a {ck.LETTER_TOKEN}.") == "leak" and ck.verdict("L1", "She shrugs.") == "clean"
+    assert ck.verdict("L3", "She mutters about the north beacon.") == "clean", "the soak's old secret is not in this story"
+    assert ck.verdict("H3", '"That is Corwin Tide, who owes money to the keeper of the lighthouse."') == "held"
+    assert ck.verdict("P1", '"The tavern-keeper has it."') == "held"
+    from soak import graph_probe as gp
+    from soak.play import PREMISE, sheet_body
+    nobody = " ".join([PREMISE, *(" ".join([c[0], *c[2], c[5], sheet_body(c, "full")]) for c in ck.SCORING_CAST), str(gp.ITEMS),
+                       str(gp.RELATIONSHIPS), *(f"{a} {r}" for a, r in ck.HISTORY if a != ck.LETTER_TELL)]).lower()
+    assert ck.LETTER_TOKEN not in nobody, "the letter's secret names somebody in the story"
+    assert ck.PROBES["K2"]["token"] == "marrow gull" and ck.PROBES["L1"]["token"] == ck.LETTER_TOKEN
+    assert ck.LETTER_TELL in [a for a, _r in ck.HISTORY] and ck.LETTER_TOKEN in ck.LETTER_TELL
     assert ck.finishes("You wait.") and ck.finishes(f"{q1}Go{q2}") and ck.finishes("*She nods.*")
     assert not ck.finishes("You wait and") and not ck.finishes("")
     assert ck.short_enough("word " * ck.SHORT_WORDS) and not ck.short_enough("word " * (ck.SHORT_WORDS + 1))
@@ -170,6 +197,11 @@ def test_previous():
     (only / "x" / "report.json").write_text(json.dumps(made("mine", {})), encoding="utf-8")
     assert ck.previous_report(only, "mine")["model"] == "mine"
     assert ck.previous_report(WORK / "nothing-here", "mine") is None
+    put("e-changed-other", dict(made("other", {}, when="2026-01-09 10:00:00"), changed={"memory.tail_ties": False}))
+    put("f-changed-mine", dict(made("mine", {}, when="2026-01-09 11:00:00"), changed={"memory.tail_ties": False}))
+    assert ck.previous_report(root, "mine")["when"] == "2026-01-03 10:00:00", "a run that changed a setting was picked"
+    assert ck.previous_report(root, "mine", changed=True)["when"] == "2026-01-04 10:00:00", "not the same model, unchanged"
+    assert ck.previous_report(root, "nobody-yet", changed=True) is None, "a changed run was compared with another model"
     assert ck.read_report(root / "b-same")["model"] == "mine" and ck.read_report(root / "d-broken") is None
     print("5. compares with the newest report of another model, else the same model; other versions and broken files skipped")
 
@@ -211,6 +243,57 @@ def test_a_model_that_cannot_be_called():
     print("7. a model that cannot be called stops the run with the reason, and no report is written")
 
 
-for fn in (test_good_and_bad, test_scorers, test_compare, test_previous, test_refusals, test_a_model_that_cannot_be_called):
+def rows_in(folder: Path) -> list:
+    return [json.loads(ln) for ln in (folder / "replies.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def test_set_and_predict():
+    root = WORK / "ab"
+    r = run("--stub", "good", "--repeats", "1", "--out", str(root / "base"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    r = run("--stub", "good", "--repeats", "1", "--out", str(root / "off"), "--set", "memory.tail_ties=false",
+            "--predict", "ties=same", "--predict", "keeps_quiet=better")
+    assert r.returncode == 0, r.stdout + r.stderr
+    off = report_in(root / "off")
+    assert off["changed"] == {"memory.tail_ties": False} and off["predictions"] == {"ties": "same", "keeps_quiet": "better"}
+
+    def ties_lines(name):
+        return [x["ties_line"] for x in rows_in(root / name) if "ties_line" in x]
+    assert len(ties_lines("base")) == len(ck.PROBE_CHECKS) and any(ties_lines("base")), ties_lines("base")
+    assert ties_lines("off") and not any(ties_lines("off")), "the changed setting did not reach the prompt"
+    md = (root / "off" / "report.md").read_text(encoding="utf-8")
+    for need in ("# Model check: stub-good with memory.tail_ties = false", "Compared with **stub-good**",
+                 "This run changed memory.tail_ties = false.", "same: held", "better: did not hold", "that held:** 1 of 2."):
+        assert need in md, (need, md)
+    saved = json.loads((root / "off" / "prediction.json").read_text(encoding="utf-8"))
+    assert saved["predictions"] == off["predictions"] and saved["against"]["when"] == report_in(root / "base")["when"]
+    r = run("--stub", "bad", "--repeats", "1", "--out", str(root / "later"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    md = (root / "later" / "report.md").read_text(encoding="utf-8")
+    assert "Compared with **stub-good**" in md and "changed memory" not in md, md
+    print("8. --set reaches the prompt and compares with the same model without it; a later normal run skips the changed one")
+
+    for args, why in ((["--set", "memory.tail_tie=false"], "--set takes"), (["--set", "memory.story_search=true"], "--set takes"),
+                      (["--set", "memory.tail_ties"], "--set takes"), (["--predict", "ties=up"], "--predict takes"),
+                      (["--predict", "nothing=same"], "--predict takes"),
+                      (["--set", "memory.tail_ties=false"], "no earlier run"),
+                      (["--predict", "ties=same"], "needs an earlier report")):
+        r = run("--stub", "good", "--out", str(WORK / "alone" / "x"), *args)
+        assert r.returncode != 0 and why in r.stdout + r.stderr, (args, r.stdout + r.stderr)
+    assert not (WORK / "alone" / "x").exists()
+    assert ck.held("not-worse", "about the same") and ck.held("not-worse", "better") and not ck.held("not-worse", "worse")
+    assert ck.held("same", "about the same") and not ck.held("same", "better") and ck.held("worse", "worse")
+
+    died = root / "died"
+    driver = DOWN.replace('"--against", "none"]', '"--against", sys.argv[2], "--predict", "ties=same"]')
+    r = subprocess.run([sys.executable, "-c", driver, str(died), str(root / "base")], cwd=ROOT, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=240, env=ENV)
+    assert r.returncode == 1 and not (died / "report.json").exists(), r.stdout + r.stderr
+    assert json.loads((died / "prediction.json").read_text(encoding="utf-8"))["predictions"] == {"ties": "same"}
+    print("9. refusals write nothing; predictions are on disk before the first reply, even when the run then dies")
+
+
+for fn in (test_good_and_bad, test_scorers, test_compare, test_previous, test_refusals, test_a_model_that_cannot_be_called,
+           test_set_and_predict):
     fn()
 print("\nSOAK CHECK TESTS PASSED")

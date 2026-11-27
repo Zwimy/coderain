@@ -4,6 +4,40 @@ Design calls that are deliberate, so nobody (human or agent) "fixes" them back.
 Each entry says what was decided, what the tempting alternative is, and what
 evidence would change the answer.
 
+## Index: the problems that keep coming back
+
+Read the group before trying a fix again, and add each new entry to its group. A result holds for the model named, until it is
+measured on another (D-081).
+
+**A character says a secret they were never told**
+- The probe that scores it: D-058. Gemma 4 E4B said a secret more freely than gemma3:4b (3 of 10 against 0 of 10, D-071).
+- Facts switches, Gemma 4 E4B: over two measurements 6 of 20 off against 9 of 20 on (D-073). On by default anyway, the owner's
+  call, with the writer rule as the only guard for a fact told in the story (D-078).
+- Story search can quote a secret to someone never told it; 3 against 4 of 10 on its first form. Off (D-075).
+
+**Ties, who carries what, and two-step questions answered wrongly**
+- With the facts in the prompt the wrong answers are the Writer not using them, not retrieval (D-058 as corrected by D-059; D-071).
+- Follow links on gemma3:4b: found the evidence on one seed of two, never shown to make answers more often right (D-061).
+- The ties line alone on gemma3:4b: no effect (D-067). llama3.1:8b was the most faithful, several times slower (D-061).
+- Both switches together, Gemma 4 E4B: clearly better in both measurements (D-073); drawn and followed both ways since D-074.
+
+**Replies grow and copy the reply before them**
+- Fate lengthened gemma3:4b's replies, and two of four steered runs fell into a loop (D-055).
+- The tic guard did not help and hurt the answers, gemma3:4b (D-064, D-067). Off.
+- A reply cap leaves the copying (D-070). It was gemma3:4b's; Gemma 4 E4B did not copy in runs of up to 300 turns (D-070, D-071).
+- Open on gemma3:4b: nothing built stops it (D-069).
+
+**A character's looks drift**
+- The canon card did not help in its first long soak (D-029); after the fixes between (D-022 to D-041 and others), 111 of 119 named
+  colours were right with it against 11 of 63 without, 1,000 turns, gemma3:4b, looks stated by the author (D-069). It also helped
+  Gemma 4 E4B (D-071). It has much less to carry when the story must supply the looks (D-034).
+
+**Model output the app cannot use, or shows when it should not**
+- A reader that thinks, or replies with nothing: asked not to reason; an empty reply is a failure (D-040).
+- Fate's answers were often unusable before its fixes (D-053). Strict JSON for hosted models (D-076).
+- The status block's label reached the reader in most small-model replies for months; no probe read the shown text (D-080).
+- The model check now asks every model for the block, the memory summary, the chapter plan and the planning step (D-079, D-081).
+
 ---
 
 ## D-001 — A pinned entry does not consume its inclusion group's winner
@@ -3801,7 +3835,8 @@ thresholds, the refusals, and a model that cannot be called.
 ## D-080: The status block's label, copied into replies, is removed in code (found by the first real model check, 2026-11-27)
 
 **Found.** The first real run of D-079 flagged two Gemma 4 replies ending "Nothing changed:". That is the label the world-sidecar instruction puts over
-its empty example block. Reading every saved reply of the long runs (6,931): it ended 2,288 of 3,100 gemma3:4b replies and 1,421 of 2,814 Gemma 4 E4B
+its empty example block. It came in with the 2026-07-30 rewording (commit 08c988e) that made small models send the block far more often: that A/B counted
+blocks and applied changes, not what the reader was shown. Reading every saved reply of the long runs (6,931): it ended 2,288 of 3,100 gemma3:4b replies and 1,421 of 2,814 Gemma 4 E4B
 replies (the heretic quant); llama3.1:8b and the hosted models never wrote it. The reader saw it, the transcript kept it, and the next turns saw it in the
 history, which teaches the model to write it again. Of 3,765 replies with the words at the start of a line: 3,584 the label alone as the last line, 164 the
 label and then the block's JSON without the ```rpg fence (so raw JSON reached the reader), 17 the label and then the model's own editing note. No probe
@@ -3822,3 +3857,27 @@ Run over all 6,931 saved replies: 3,748 cleaned, the streamed and the whole-repl
 was removed, and the 17 editing notes are what remains.
 
 Tests: `tests/status_label_test.py`.
+
+
+## D-081: Test one setting against the same model, and say what you expect first (2026-11-27)
+
+**Why.** The owner approved three habits taken from arXiv 2611.18856 (Self-Improvement Memory, Google Cloud AI and Google DeepMind). In it, a harness
+tuned on one model started below the plain one on another, and the record kept for whoever changes the harness holds each fix's reason and its expected
+and observed result. We have met the same: the ties line alone did nothing on gemma3:4b (D-067), and both switches together helped Gemma 4 (D-073),
+which is not a like-for-like pair.
+
+**Built into the model check** (D-079). `--set NAME=VALUE` runs one setting changed and compares with the newest run of the same model without it; a
+later normal run ignores changed runs. Only settings this short story can show something about are accepted (it is too short for story search,
+background summaries or the history cut), and a mistyped name is refused, since it would read as "no difference". `--predict CHECK=better|worse|same|
+not-worse` is saved to `prediction.json` before the first reply, and the report says which predictions held. With the check's two-rounds-a-run sizes only
+large effects show; use `--repeats` for smaller ones.
+
+**Also corrected in the check after its first real run** (check version 2; version 1 reports are not compared). "Prompt text" is read on what the
+reader sees, because 29 of 42 replies failed only for sending the status block the app asks for. A new check asks that the block arrives. The letter's
+secret now goes to someone who is nobody in the story: "the keeper of the north beacon" let "it is for Maribel Voss, the lighthouse keeper" score as
+forgotten from the one told and as kept from the one not told. The saved D-073 runs were read for that and show no such reply, so those counts stand.
+Naming someone by their work ("the keeper of the lighthouse") counts as naming them.
+
+**The habit** is in `CLAUDE.md` ("Measuring") and the index at the top of this file.
+
+Tests: `soak_check_test.py` cases 1, 3, 5, 8 and 9.

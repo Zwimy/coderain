@@ -130,8 +130,11 @@ last model you checked:
 
 It looks at memory (who is tied to whom, who carries what, keeping a secret), the
 writing (not speaking for you, no refusals, reply length, copying itself) and
-whether the app can read the model's memory summaries and plans. The report goes to
-the `model-checks` folder, with every reply, so you can read what it scored.
+whether the app can read the model's memory summaries, plans and status updates.
+The report goes to the `model-checks` folder, with every reply, so you can read what
+it scored. To see whether a setting still helps this model, run it again with
+`--set` (for example `--set memory.tail_ties=false`); `--predict` saves what you
+expect before it starts, and the report says whether you were right.
 
 ### Optional: the memory reader
 

@@ -7,14 +7,18 @@ every model, through the real engine with the app's shipped memory settings, in 
 model checked.
 
     python -m soak check --model NAME [--repeats 2] [--think on|off] [--host http://localhost:11434]
-                         [--against REPORT|none] [--out DIR]
+                         [--against REPORT|none] [--out DIR] [--set NAME=VALUE ...] [--predict CHECK=WORD ...]
     python -m soak check --provider openrouter --model NAME:free
     python -m soak check --stub good|bad          (no model: what the tests use)
 
-Every run uses the same invented story (the soak's town, ties, possessions and two secrets), the same actions and the same
-sampler settings, so two reports differ by the model and chance. Each check is scored by code, pass or fail per reply. With a
-few replies a check, one reply either way is noise: a change is called worse or better only when the share of passes moves by a
-quarter AND by at least two replies.
+Every run uses the same invented story (the soak's town, ties, possessions and two secrets, with the letter's secret changed;
+see LETTER_TOKEN), the same actions and the same sampler settings, so two reports differ by the model and chance. Each check is
+scored by code, pass or fail per reply. With a few replies a check, one reply either way is noise: a change is called worse or
+better only when the share of passes moves by a quarter AND by at least two replies.
+
+Two options for testing a change rather than a model (D-081). --set runs with one setting changed and compares with the same
+model without it, to ask whether a fix tuned on one model still helps another. --predict writes down what you expect before the
+first reply, and the report says which predictions held: a result nobody predicted is a new question, not a confirmation.
 
 The story is invented and nothing is read from a save. Reports go to model-checks/ (ignored by git) unless --out says otherwise.
 """
@@ -31,8 +35,9 @@ from soak import graph_probe as gp
 from soak import hosted
 from soak.play import CAST, PREMISE, _require_local, repeat_share, sheet_attrs, sheet_body
 
-# Bump when a prompt, the story or a scorer changes: reports made by different versions are not compared.
-PACK_VERSION = 1
+# Bump when a prompt, the story or a scorer changes: reports made by different versions are not compared. 2: after the first
+# real run, the letter's secret, the names scored, the text read for prompt leftovers, and the status block check.
+PACK_VERSION = 2
 REPORTS = "model-checks"
 SHORT_WORDS, SHORT_PARAGRAPHS = 250, 3              # "1-2 short paragraphs" is what the short setting asks for
 LONG_WORDS, LONG_PARAGRAPHS = 350, 4                # "4-6 paragraphs" is what the long setting asks for; either measure passes
@@ -49,8 +54,9 @@ CHECKS = {
     "your_words": "Leaves your words and choices to you",
     "in_story": "Stays in the story (no refusals or assistant talk)",
     "speaks_to_you": "Writes about \"you\", never as \"I\"",
-    "no_prompt_text": "No prompt or markup text in the reply",
+    "no_prompt_text": "No prompt or markup text reaches you",
     "finishes": "Finishes its last sentence",
+    "status_block": "Sends the hidden status block the app reads",
     "short": "Keeps short replies short",
     "long": "Writes longer replies when asked",
     "no_copying": "Does not copy its own last reply",
@@ -61,6 +67,25 @@ CHECKS = {
 PROBE_CHECKS = {"R1": "ties", "R2": "ties", "P1": "holds", "P2": "holds", "H1": "two_steps", "H3": "two_steps",
                 "K1": "remembers", "K2": "remembers", "L1": "keeps_quiet", "L2": "keeps_quiet", "L3": "keeps_quiet",
                 "L4": "keeps_quiet"}
+# The soak's questions, with the letter's secret changed. There the letter is for "the keeper of the north beacon", and one of
+# the cast keeps the lighthouse, so in the first real run "it is for Maribel Voss" was scored as forgotten when the one told said
+# it, and as kept when someone never told said it. Here it goes to somebody who is nobody in the story.
+LETTER_TOKEN = "glassblower"
+LETTER_TELL = ("I whisper to Bram Halloran, so that no one else hears, that the sealed letter is addressed to the old "
+               "glassblower in Saltreach.")
+PROBES = {gid: dict(gp.PROBES[gid], token=LETTER_TOKEN) if gp.PROBES[gid].get("secret") == "letter" else gp.PROBES[gid]
+          for gid in PROBE_CHECKS}
+# Other ways a reply names someone by their work. The same run scored a right answer ("the keeper of the lighthouse") as none.
+ALSO_CALLED = {"Ottoline Pike": ["the ferry woman", "the ferry-woman"], "Bram Halloran": ["the customs man", "the customs official"],
+               "Dessa Quill": ["the salt merchant"], "Maribel Voss": ["the keeper of the lighthouse", "the lighthouse-keeper"],
+               "Hollis Wren": ["the keeper of the tavern", "the tavern-keeper"]}
+SCORING_CAST = [(name, slug, [*aliases, *ALSO_CALLED.get(name, [])], *rest) for name, slug, aliases, *rest in CAST]
+# What a run may change with --set, to ask whether a setting still helps this model. Only settings this short story can show
+# something about: it is too short for story search, background summaries or the history cut to matter.
+SETTABLE = ("memory.follow_links", "memory.tail_ties", "generation.prompt_layout", "generation.temperature", "generation.top_p",
+            "generation.max_tokens", "generation.min_p", "generation.repetition_penalty", "generation.json_mode",
+            "generation.tic_guard")
+PREDICTIONS = ("better", "worse", "same", "not-worse")
 # Actions with no words of the player's in them: any line the reply gives "you" to say is the model's own invention.
 OPEN_ACTIONS = ["I look around the tavern and wait.", "I walk down to the ferry deck and watch the water."]
 # Tense, and nothing more than a story needs: a model that refuses here refuses an ordinary adventure.
@@ -75,7 +100,7 @@ HISTORY = [
     ("I step off the ferry and look for somewhere to dry off.",
      "The ferry bumps against the jetty and you climb out into a thin, cold rain. Ottoline Pike ties off the rope without a "
      "word and tips her head toward the lit windows of the tavern."),
-    (gp.SECRETS["letter"]["tell"], "Bram Halloran nods slowly and says nothing more."),
+    (LETTER_TELL, "Bram Halloran nods slowly and says nothing more."),
     ("I walk through the salt market.",
      "Stalls are closing as you pass between them. Dessa Quill is weighing out the last sacks and glances up at you."),
     (gp.SECRETS["hull"]["tell"], "Dessa Quill nods slowly and says nothing more."),
@@ -107,7 +132,8 @@ _FIRST_PERSON = re.compile(r"\bI\b|\b[Mm](?:e|y|ine|yself)\b")
 _SECOND_PERSON = re.compile(r"\b[Yy]ou(?:r|rs|rself)?\b")
 _PROMPT_MARKS = ["<think>", "</think>", "```", "STORY & MEMORY CONTEXT", "CURRENT SCENE STATE", "Facts in play, from the",
                  "PLAYER AGENCY:", "LENGTH: ", "[["]
-_PROMPT_LINES = re.compile(r"^\s*(?:#{1,6}\s|(?:PLAYER|NARRATOR|Player|Narrator)\s*:)", re.M)
+_PROMPT_LINES = re.compile(r"^\s*(?:#{1,6}\s|(?:PLAYER|NARRATOR|Player|Narrator)\s*:|"
+                           r"[*_>]*(?i:nothing changed|something changed)\b[^\n.]{0,80}:[*_]*\s*$)", re.M)
 _ENDINGS = ".!?\"'*)" + _DQ2 + _CURLY2 + chr(0x2026) + chr(0x2014)
 
 
@@ -138,8 +164,62 @@ def speaks_to_you(text: str) -> bool:
     return len(told.split()) < NEEDS_YOU or bool(_SECOND_PERSON.search(told))
 
 
-def no_prompt_text(raw: str) -> bool:
-    return not any(m in raw for m in _PROMPT_MARKS) and not _PROMPT_LINES.search(raw)
+def no_prompt_text(shown: str) -> bool:
+    """Read on what the reader sees: the status block the app asks for is taken out before that, as it should be."""
+    return not any(m in shown for m in _PROMPT_MARKS) and not _PROMPT_LINES.search(shown)
+
+
+def verdict(gid: str, text: str) -> str:
+    """The soak's verdicts, with this check's own secrets and the other ways of naming someone."""
+    probe = PROBES[gid]
+    if probe["sub"] in ("recall", "leak"):
+        said = probe["token"] in text.lower()
+        if probe["sub"] == "leak":
+            return "leak" if said else "clean"
+        return "held" if said else "none"
+    return gp.score(gid, text, SCORING_CAST)
+
+
+def facts_in_prompt(gid: str, messages) -> bool:
+    """Was what the answer needs in what the model was sent (the question itself left out)?"""
+    if PROBES[gid]["sub"] in ("recall", "leak"):
+        return PROBES[gid]["token"] in gp.split_prompt(messages)[0].lower()
+    return gp.evidence_flags(gid, messages)[0]
+
+
+def parse_set(pairs) -> dict:
+    """`--set memory.tail_ties=false` and the like, as {"memory.tail_ties": False}. A key not in SETTABLE is refused: a
+    mistyped one would change nothing and read as "makes no difference"."""
+    import yaml
+    out: dict = {}
+    for pair in pairs or []:
+        key, sep, raw = str(pair).partition("=")
+        value = yaml.safe_load(raw) if sep and raw.strip() else None
+        if key not in SETTABLE or value is None:
+            raise SystemExit(f"refused: --set takes NAME=VALUE with one of: {', '.join(SETTABLE)}. Got {pair!r}")
+        out[key] = value
+    return out
+
+
+def parse_predictions(pairs) -> dict:
+    out: dict = {}
+    for pair in pairs or []:
+        key, _sep, word = str(pair).partition("=")
+        if key not in CHECKS or word not in PREDICTIONS:
+            raise SystemExit(f"refused: --predict takes CHECK={'|'.join(PREDICTIONS)}, CHECK one of: {', '.join(CHECKS)}. "
+                             f"Got {pair!r}")
+        out[key] = word
+    return out
+
+
+def held(prediction: str, change: str) -> bool:
+    if prediction == "not-worse":
+        return change != "worse"
+    return change == {"better": "better", "worse": "worse", "same": "about the same"}[prediction]
+
+
+def describe_changed(changed: dict) -> str:
+    return ", ".join(f"{k} = {json.dumps(v)}" for k, v in sorted(changed.items()))
 
 
 def finishes(text: str) -> bool:
@@ -204,17 +284,21 @@ def read_report(path: Path) -> dict | None:
     return data if isinstance(data, dict) and isinstance(data.get("checks"), dict) else None
 
 
-def previous_report(root: Path, model: str, skip: Path | None = None) -> dict | None:
-    """The newest earlier report of the same check version: of another model if there is one (a switch is what is being judged),
-    else of this model."""
+def previous_report(root: Path, model: str, skip: Path | None = None, changed: bool = False) -> dict | None:
+    """The report to compare with, out of the earlier ones of the same check version that changed no setting. For a normal
+    run: the newest one of another model if there is one (a switch is what is being judged), else of this model. For a run that
+    changes a setting: the newest one of this model, and nothing else, so only the setting differs."""
     found = []
     for p in sorted(Path(root).glob("*/report.json")):
         if skip is not None and p.parent.resolve() == Path(skip).resolve():
             continue
         data = read_report(p)
-        if data and data.get("pack_version") == PACK_VERSION:
+        if data and data.get("pack_version") == PACK_VERSION and not data.get("changed"):
             found.append(data)
     found.sort(key=lambda d: str(d.get("when", "")))
+    same = [d for d in found if d.get("model") == model]
+    if changed:
+        return (same or [None])[-1]
     other = [d for d in found if d.get("model") != model]
     return (other or found or [None])[-1]
 
@@ -227,20 +311,27 @@ def notes_for(old: dict, new: dict) -> list[str]:
                   if old.get("settings", {}).get(k) != new.get("settings", {}).get(k))
     if diff:
         out.append("Settings differ between the two runs: " + ", ".join(diff) + ".")
+    for name, run in (("This run", new), ("The earlier run", old)):
+        if run.get("changed"):
+            out.append(f"{name} changed {describe_changed(run['changed'])}.")
     return out
 
 
 def to_markdown(report: dict, old: dict | None = None) -> str:
-    lines = [f"# Model check: {report['model']}", "",
+    changed = report.get("changed") or {}
+    lines = [f"# Model check: {report['model']}" + (f" with {describe_changed(changed)}" if changed else ""), "",
              f"Run {report['when']}, {report['repeats']} round(s), {report['speed']['replies']} replies. A typical reply took "
              f"{report['speed']['median_secs']} seconds and was {report['speed']['median_words']} words.", ""]
     changes = {c["key"]: c for c in compare(old, report)} if old else {}
+    predicted = report.get("predictions") or {}
     if old:
         lines += [f"Compared with **{old['model']}** (run {old['when']}, a typical reply {old['speed']['median_secs']} seconds, "
                   f"{old['speed']['median_words']} words)."] + [f"- {n}" for n in notes_for(old, report)] + [""]
-        lines += ["| Check | This model | Before | Change |", "|---|---|---|---|"]
+        lines += ["| Check | This model | Before | Change |" + (" Predicted |" if predicted else ""),
+                  "|---|---|---|---|" + ("---|" if predicted else "")]
     else:
         lines += ["Nothing earlier to compare with.", "", "| Check | Passed |", "|---|---|"]
+    outcomes = []
     for key, c in report["checks"].items():
         if not c["total"]:
             continue
@@ -248,10 +339,20 @@ def to_markdown(report: dict, old: dict | None = None) -> str:
         if old:
             ch = changes.get(key)
             row += f" {ch['before'] if ch else 'not run'} | {ch['change'] if ch else ''} |"
+            if predicted:
+                word = predicted.get(key)
+                if word and ch:
+                    ok = held(word, ch["change"])
+                    outcomes.append(ok)
+                    row += f" {word}: {'held' if ok else 'did not hold'} |"
+                else:
+                    row += (f" {word}: not compared |" if word else " |")
         lines.append(row)
     if old:
         worse = [c["label"] for c in changes.values() if c["change"] == "worse"]
         lines += ["", "**Worse than before:** " + ("; ".join(worse) if worse else "nothing by a clear margin.")]
+    if predicted and old:
+        lines += ["", f"**Predictions written down before the run that held:** {sum(outcomes)} of {len(outcomes)}."]
     failed = [(c["label"], c["examples"]) for c in report["checks"].values() if c["examples"]]
     if failed:
         lines += ["", "## Examples of replies that failed", ""]
@@ -282,8 +383,10 @@ class StubModel:
         self.n += 1
         system = "\n".join(str(m["content"]) for m in messages if m["role"] == "system")
         last = next((str(m["content"]) for m in reversed(messages) if m["role"] == "user"), "")
-        probe = next((p for p in gp.PROBES.values() if p["action"] in last), None)
-        yield self._good(system, probe) if self.kind == "good" else self._bad(system, probe)
+        probe = next((p for p in PROBES.values() if p["action"] in last), None)
+        # The good one answers as a real small model often does: the instruction's label, then the block the app asks for.
+        yield (self._good(system, probe) + "\n\nNothing changed:\n\n```rpg\n{\"deltas\": {}}\n```"
+               if self.kind == "good" else self._bad(system, probe))
 
     def _good(self, system: str, probe: dict | None) -> str:
         if probe:
@@ -374,9 +477,10 @@ class ModelFailed(RuntimeError):
 
 
 class _Run:
-    def __init__(self, home: Path, stub: StubModel | None):
+    def __init__(self, home: Path, stub: StubModel | None, changed: dict | None = None):
         from coderain.memory import Library
         self.lib, self.stub, self.n = Library(home), stub, 0
+        self.changed = changed or {}
         self.tally, self.replies = Tally(), []
         self.failed = ""                    # why a model call raised, if one did
 
@@ -408,6 +512,9 @@ class _Run:
         from coderain.config import load_config
         from coderain.engine import Engine
         cfg = load_config()
+        for key, value in self.changed.items():             # --set first, so a check's own setting (reply length) still wins
+            section, name = key.split(".", 1)
+            getattr(cfg, section)[name] = value
         cfg.generation.update(generation or {})
         cfg.memory.update(memory or {})
         eng = Engine(cfg, store)
@@ -446,29 +553,33 @@ class _Run:
         mine = gp.writer_call([m for m, _got in eng.check_calls[before:]], action)
         if mine is None:
             raise ModelFailed("the Writer was never called")
+        from coderain.sidecar import parse_sidecar
         raw = next("".join(got) for m, got in reversed(eng.check_calls[before:]) if m is mine)
-        self.replies.append({"kind": kind, "action": action, "text": text, "secs": round(secs, 2),
-                             "words": len(text.split())})
+        row = {"kind": kind, "action": action, "text": text, "secs": round(secs, 2), "words": len(text.split())}
+        if raw.strip() != text.strip():
+            row["raw"] = raw                    # what the model sent, when the app showed something else
+        self.replies.append(row)
         add = self.tally.add
         add("in_story", stays_in_story(text), text)
         add("speaks_to_you", speaks_to_you(text), text)
-        add("no_prompt_text", no_prompt_text(raw), raw)
+        add("no_prompt_text", no_prompt_text(text), text)
         add("finishes", finishes(text), "..." + text[-200:])
+        add("status_block", parse_sidecar(raw) is not None, "reply ends: ..." + raw[-200:])
         return text, raw
 
     def one_round(self) -> None:
         for gid, check in PROBE_CHECKS.items():
-            probe = gp.PROBES[gid]
+            probe = PROBES[gid]
             eng = self.engine(self.story())
             action = probe["action"] + gp.PLAIN
             text, _raw = self.reply(eng, action, gid)
             # Was what the answer needs in front of the model? It always should be: a question it could not answer would test
-            # the app's memory, not the model. Saved with the reply so a broken story shows.
+            # the app's memory, not the model. Saved with the reply so a broken story shows, with whether the ties line was in.
             sent = gp.writer_call([m for m, _got in eng.check_calls], action)
-            self.replies[-1]["facts_in_prompt"] = gp.evidence_flags(gid, sent)[0]
-            verdict = gp.score(gid, text, CAST)
-            self.replies[-1]["verdict"] = verdict
-            self.tally.add(check, verdict in ("held", "clean"), f"{probe['action']} -> {text}")
+            said = verdict(gid, text)
+            self.replies[-1].update(facts_in_prompt=facts_in_prompt(gid, sent), ties_line=bool(gp.tail_line(sent)),
+                                    verdict=said)
+            self.tally.add(check, said in ("held", "clean"), f"{probe['action']} -> {text}")
         for action in OPEN_ACTIONS:
             text, _raw = self.reply(self.engine(self.story()), action, "open")
             self.tally.add("your_words", keeps_your_words(text), text)
@@ -521,6 +632,8 @@ def run_check(args, home: Path, root: Path) -> int:
     model = stub.model if stub else args.model
     if not model:
         raise SystemExit("refused: give --model NAME (or --stub good|bad to try the check without a model)")
+    changed = parse_set(args.set)
+    predictions = parse_predictions(args.predict)
     pacer = undo = None
     if stub is None and args.provider == "openrouter":
         hosted.check_model(model, bool(args.allow_paid))
@@ -538,10 +651,22 @@ def run_check(args, home: Path, root: Path) -> int:
             raise SystemExit(f"refused: {args.against!r} is not a report of this check")
     when = time.strftime("%Y-%m-%d %H:%M:%S")
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", model).strip("_")[-60:] or "model"
-    out = Path(args.out) if args.out else Path(root) / REPORTS / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}"
+    out = (Path(args.out) if args.out
+           else Path(root) / REPORTS / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}{'-changed' if changed else ''}")
     if not args.against:
-        against = previous_report(out.parent, model, skip=out)
-    run = _Run(home, stub)
+        against = previous_report(out.parent, model, skip=out, changed=bool(changed))
+        if changed and against is None:
+            raise SystemExit("refused: there is no earlier run of this model without --set to compare with. Run it once without "
+                             "--set first, or give --against.")
+    if predictions:
+        if against is None:
+            raise SystemExit("refused: --predict needs an earlier report to compare with")
+        # Written before the first reply, so a prediction cannot be fitted to the result.
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "prediction.json").write_text(json.dumps(
+            {"written": when, "against": {"model": against["model"], "when": against["when"]}, "changed": changed,
+             "predictions": predictions}, indent=2), encoding="utf-8")
+    run = _Run(home, stub, changed)
     undo = hosted.install(pacer) if pacer is not None else None
     stopped = None
     try:
@@ -559,7 +684,9 @@ def run_check(args, home: Path, root: Path) -> int:
     secs = [r["secs"] for r in run.replies]
     words = [r["words"] for r in run.replies]
     report = {"pack_version": PACK_VERSION, "model": model, "provider": args.provider, "when": when, "repeats": args.repeats,
-              "settings": {"think": think, "temperature": 0.9, "top_p": 0.95},
+              "settings": {"think": think, "temperature": changed.get("generation.temperature", 0.9),
+                           "top_p": changed.get("generation.top_p", 0.95)},
+              "changed": changed, "predictions": predictions,
               "checks": run.tally.checks,
               "speed": {"replies": len(run.replies), "median_secs": round(statistics.median(secs), 1),
                         "median_words": round(statistics.median(words))}}
