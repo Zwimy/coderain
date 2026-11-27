@@ -236,6 +236,20 @@ export async function renderSettings() {
     <div class="setting-panel">
       <h2>Memory</h2>
       <label>
+        <input type="checkbox" id="mm-follow" ${st.memory.follow_links ? "checked" : ""}>
+        Follow connections (the lore web)
+      </label>
+      <p class="muted">When someone or something comes into play, also tell the writer, in one line each, about what is connected to it:
+        who holds it, who it is tied to, who is tied to them. Secrets are never brought in this way. See the web with <b>Lore web…</b> in a
+        story's Memory window or in the world builder.</p>
+      <label>
+        <input type="checkbox" id="mm-ties" ${st.memory.tail_ties ? "checked" : ""}>
+        Repeat key facts next to your action
+      </label>
+      <p class="muted">Says who holds what and who is tied to whom once more, right after your action, for what you and the last reply
+        named. In tests on a small local model, both switches together made it use these facts far better; it also repeated secrets it
+        had been told more often.</p>
+      <label>
         <input type="checkbox" id="rt-enabled"
           ${st.retrieval.enabled ? "checked" : ""}>
         Semantic recall (find relevant past scenes by meaning, not just keywords)
@@ -536,6 +550,8 @@ export async function renderSettings() {
         min_similarity: $("#rt-minsim").value,
       },
       memory: {
+        follow_links: $("#mm-follow").checked,
+        tail_ties: $("#mm-ties").checked,
         short_term_turns: $("#mm-short").value,
         medium_fold_after: $("#mm-mafter").value,
         medium_fold_size: $("#mm-msize").value,

@@ -110,9 +110,11 @@ def test_a_person_is_followed_to_their_ties():
     store = story()
     cast(store)
     lines = linked(prompt(store, "I ask Corwin Tide what he is up to.", follow_links=True))
-    assert len(lines) == 1 and lines[0].startswith("Maribel Voss (maribel-voss)"), lines
+    # Since D-074 the web is walked both ways: what Corwin states (his tie) comes first, then what points at him (the ledger he holds).
+    assert [ln.split(" (")[0] for ln in lines] == ["Maribel Voss", "Salt ledger"], lines
     assert "Corwin Tide (corwin-tide): is owed money by him" in lines[0], lines[0]
-    print("3. naming one person brings the people they are tied to")
+    assert "Salt ledger is held by Corwin Tide" in lines[1], "a fact followed backwards is said in the direction the file states it"
+    print("3. naming one person brings the people they are tied to, then what they hold")
 
 
 def test_one_line_for_two_sources():
@@ -127,11 +129,13 @@ def test_one_line_for_two_sources():
 
 
 def test_depth_one():
-    """4. A names B, B names C: B is linked, C is not."""
+    """4. A names B, B names C: B is linked, C is not. (C's own tie goes on to a fourth person: since D-074 an edge is walked both ways,
+    so a tie from C back to A would make C a direct neighbour of A.)"""
     store = story()
     person(store, "Ada Fenn", "ada-fenn", "bea-lorne: her friend")
     person(store, "Bea Lorne", "bea-lorne", "cy-marsh: her rival")
-    person(store, "Cy Marsh", "cy-marsh", "ada-fenn: owes him")
+    person(store, "Cy Marsh", "cy-marsh", "dov-ash: owes him")
+    person(store, "Dov Ash", "dov-ash")
     lines = linked(prompt(store, "I greet Ada Fenn.", follow_links=True))
     assert [ln.split(" (")[0] for ln in lines] == ["Bea Lorne"], lines
     assert "Cy Marsh" in lines[0], "Bea's own tie is shown as text on her line"
@@ -140,11 +144,11 @@ def test_depth_one():
 
 
 def test_in_the_prompt_already():
-    """5. Both named: both are in full, nothing is linked."""
+    """5. Both named: both are in full, neither is linked again. (Since D-074 what Hollis holds comes along.)"""
     store = story()
     cast(store)
     text = prompt(store, "Hollis Wren and Ottoline Pike meet.", follow_links=True)
-    assert linked(text) == [], linked(text)
+    assert [ln.split(" (")[0] for ln in linked(text)] == ["Brass lamp key"], linked(text)
     assert text.count("## Hollis Wren") == 1 and text.count("## Ottoline Pike") == 1
     print("5. someone already in the prompt in full is not repeated as a linked line")
 

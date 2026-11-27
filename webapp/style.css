@@ -650,3 +650,39 @@ label + .hint { margin-top: 3px; }
     content: ""; position: absolute; inset: -9px;
   }
 }
+
+/* the lore web (D-074) */
+#modal-card:has(.lw) { max-width: 760px; }
+.lw-tools { align-items: center; gap: 10px; flex-wrap: wrap; }
+.lw-tools select { flex: 1 1 200px; }
+.lw-check { display: flex; align-items: center; gap: 6px; margin: 0; text-transform: none; letter-spacing: 0; font-size: 13.5px; }
+.lw-check input { width: auto; }
+#lw-svg { width: 100%; height: auto; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; margin: 8px 0;
+          touch-action: none; user-select: none; }
+.lw-edge { stroke: var(--accent-dim); stroke-width: 1.3; }
+.lw-k-holds { stroke: var(--player); }
+.lw-k-link { stroke-dasharray: 6 3; }
+.lw-k-mention { stroke: var(--dim); stroke-dasharray: 2 4; }
+.lw-hot { stroke-width: 2.6; }
+.lw-dim { opacity: 0.25; }
+#lw-svg marker path { fill: var(--accent-dim); }
+.lw-node { cursor: pointer; }
+.lw-node circle { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
+.lw-node text { fill: var(--text); font-size: 12px; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+.lw-t-locations circle { fill: var(--player); }
+.lw-t-items circle { fill: #5ec8ff; }
+.lw-t-factions circle { fill: #c99cff; }
+.lw-t-canon-events circle { fill: var(--dim); }
+.lw-secret circle { fill: var(--bg); stroke: var(--player); stroke-dasharray: 3 2; }
+.lw-sel circle { stroke: #fff; stroke-width: 3; }
+.lw-node:focus { outline: none; }
+.lw-node:focus-visible circle { stroke: #fff; stroke-width: 4; }
+.lw-empty { fill: var(--dim); }
+.lw-conns { list-style: none; margin: 4px 0; padding: 0; max-height: 28vh; overflow-y: auto; }
+.lw-conns li { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.lw-conns li > span:first-child { flex: 1 1 auto; min-width: 0; }
+.lw-conns button { flex: 0 0 auto; white-space: nowrap; overflow-wrap: normal; }
+.lw-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.lw-add p { flex: 1 0 100%; margin: 0; }
+.lw-add select { flex: 1 1 180px; }
+.lw-add input { flex: 2 1 220px; }

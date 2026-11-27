@@ -10,6 +10,7 @@ import {
   promptModal
 } from "./modal.js";
 import {clearDirty, registerDirty} from "./nav.js";
+import {loreWebModal} from "./loreweb.js";
 import {render} from "./app.js";
 
 /* ---------- world builder (#world/<slug>) ---------- */
@@ -86,6 +87,7 @@ export async function renderBuilder(slug, scope = "scenario") {
         Use prompt improver on seeds
       </label>
       <span id="b-status" class="muted" role="status" aria-live="polite"></span>
+      <button id="b-web" title="see how entries point at each other, and add or remove connections">Lore web…</button>
       <button class="primary" id="b-save">${isSave ? "Save changes"
         : "Save world"}</button>
       ${isSave ? "" : '<button id="b-tolib" title="copy every character, '
@@ -207,6 +209,7 @@ export async function renderBuilder(slug, scope = "scenario") {
       if ($("#b-save")) $("#b-save").textContent = label;
     }, 1500);
   });
+  $("#b-web").addEventListener("click", () => loreWebModal(isSave ? `/api/saves/${slug}` : `/api/scenarios/${slug}`));
   const tolib = $("#b-tolib");
   if (tolib) tolib.addEventListener("click", async () => {
     await guard(saveMain, "Couldn't save first");   // mirror the saved state

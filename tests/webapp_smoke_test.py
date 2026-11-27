@@ -73,6 +73,7 @@ Asserts, once it can run:
 49) a refused delete of a world or a character says so in a toast and keeps the card
 50) a library character already in the world is refused with a reason and the picker stays open; a new one goes in once
 51) the fold review (folds.js) opens on the newest scene, pages to an older one, saves an edit, and refuses an empty summary
+52) the lore web (D-074): the graph, choosing by picker or keyboard, adding and removing ties in the Markdown, a phone, the builder
 """
 import json
 import os
@@ -2569,6 +2570,72 @@ with sync_playwright() as p:
         failures.append("Back to the plan from the Characters screen did not show the chapter plan")
     close_modal()
     print("51) the fold review opens on the newest scene, pages to an older one, saves an edit, and refuses an empty summary; the plan's Characters screen comes back")
+
+    # 52) The lore web (D-074): from the Memory dialog the graph shows every entry and connection; an entry can be chosen from the picker
+    #     or with the keyboard; a tie added with a note is written into the Markdown; Remove asks first, and "Keep it" changes nothing;
+    #     mentions appear only when asked; the dialog fits a phone; the world builder opens it too.
+    from coderain.memory import Entry as WebEntry
+    w_slug = c.post("/api/saves", json={"title": "Web check", "mode": "simple", "premise": "A harbour."}).json()["slug"]
+    w_store = server._engine(w_slug).store
+    w_store.upsert_entry("characters.md", WebEntry(title="Hollis Wren", slug="hollis-wren", body="Keeps the tavern near [[brinewick]]."))
+    w_store.upsert_entry("characters.md", WebEntry(title="Ottoline Pike", slug="ottoline-pike", body="Runs the ferry."))
+    w_store.upsert_entry("items.md", WebEntry(title="Brass lamp key", slug="brass-lamp-key", attrs={"holder": "hollis-wren"}, body="A key."))
+    w_store.upsert_entry("locations.md", WebEntry(title="Brinewick", slug="brinewick", body="A town."))
+    page.evaluate(f"location.hash = '#play/{w_slug}'")
+    page.wait_for_selector("#mem-btn", timeout=8000)
+    page.click("#mem-btn")
+    page.wait_for_selector("#mem-web", timeout=4000)
+    page.click("#mem-web")
+    page.wait_for_selector("#lw-pick", timeout=4000)
+    count = lambda sel: page.evaluate(f"document.querySelectorAll('{sel}').length")   # noqa: E731
+    conns = lambda: page.evaluate("[...document.querySelectorAll('.lw-conns li span:first-child')].map(x => x.textContent)")   # noqa: E731
+    if count("#lw-svg .lw-node") != 4 or count("#lw-svg .lw-edge") != 1:
+        failures.append(f"the web shows {count('#lw-svg .lw-node')} entries and {count('#lw-svg .lw-edge')} connections, not 4 and 1")
+    page.select_option("#lw-pick", "hollis-wren")
+    if conns() != ["Brass lamp key is held by Hollis Wren"]:
+        failures.append(f"choosing an entry did not list its connections: {conns()}")
+    page.focus("#lw-svg [data-node='ottoline-pike']")
+    page.keyboard.press("Enter")
+    if page.input_value("#lw-pick") != "ottoline-pike" or page.evaluate("document.activeElement.dataset.node") != "ottoline-pike":
+        failures.append("Enter on a node did not choose it and keep the focus on it")
+    page.select_option("#lw-to", "hollis-wren")
+    page.fill("#lw-note", "her brother")
+    page.click("#lw-add button[type=submit]")
+    page.wait_for_function("[...document.querySelectorAll('.lw-conns li')].some(li => li.textContent.includes('her brother'))", timeout=4000)
+    if "relationships: hollis-wren: her brother" not in w_store.read("characters.md"):
+        failures.append("a tie added in the web is not in the entry's Markdown")
+    page.click("[data-cut='0']")
+    page.wait_for_selector("#modal-ask", timeout=2000)
+    page.click("#modal-ask [data-act=keep]")
+    if "her brother" not in w_store.read("characters.md") or not page.is_visible("#lw-pick"):
+        failures.append("'Keep it' removed the connection or closed the web")
+    page.click("[data-cut='0']")
+    page.click("#modal-ask [data-act=ok]")
+    page.wait_for_function("document.querySelectorAll('.lw-conns li').length === 0", timeout=4000)
+    if "her brother" in w_store.read("characters.md"):
+        failures.append("Remove did not remove the connection from the Markdown")
+    page.select_option("#lw-pick", "brinewick")
+    before_mentions = conns()
+    page.check("#lw-mentions")
+    if before_mentions or conns() != ["Hollis Wren mentions Brinewick"] or count("#lw-svg .lw-k-mention") != 1:
+        failures.append(f"mentions: shown unasked {before_mentions}, after asking {conns()}")
+    unnamed = page.evaluate("[...document.querySelectorAll('#modal-card button')].filter(b => b.offsetParent && "
+                            "!/[A-Za-z]/.test(b.getAttribute('aria-label') || b.textContent)).length")
+    page.set_viewport_size({"width": 375, "height": 800})
+    page.select_option("#lw-pick", "hollis-wren")
+    wide = page.evaluate("[...document.querySelectorAll('#modal-card *')].filter(el => !el.closest('#lw-svg') && el.getBoundingClientRect().width "
+                         "&& el.getBoundingClientRect().right > document.documentElement.clientWidth + 1).map(el => el.tagName)")
+    page.set_viewport_size({"width": 1280, "height": 800})
+    if unnamed or wide:
+        failures.append(f"the web dialog: {unnamed} unnamed buttons; off the right edge at 375px: {wide[:6]}")
+    close_modal()
+    page.evaluate("location.hash = '#world/the-veil'")
+    page.wait_for_selector("#b-web", timeout=8000)
+    page.click("#b-web")
+    page.wait_for_selector("#lw-svg .lw-node", timeout=4000)
+    close_modal()
+    print("52) the lore web draws every entry and connection, adds and removes ties in the Markdown, asks first, fits a phone, and opens from "
+          "the world builder")
 
     browser.close()
 

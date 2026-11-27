@@ -3521,3 +3521,49 @@ together, so neither one's share is known, and these are small counts.
 
 **Decided.** Both stay off by default for now. The lore web (D-074) changes how links are followed, so the form that ships is measured again, secret leaks
 included, before any default changes.
+
+
+## D-074: The lore web: one graph of how entries point at each other, followed both ways, drawn and edited in the app (built 2026-11-27)
+
+**Asked by the owner.** "Items can refer to each other in a sort of web", as he saw in AI Dungeon and FictionLab. FictionLab's documentation calls its
+memory feature the Memory Matrix and its lore entries can be "Linked Lore Pieces": a link makes two pieces more likely to be activated together. The three
+pages read show no graph view and do not say whether a link works both ways. For AI Dungeon, nothing found confirms that one story card brings another.
+
+**Where we stood.** Four things in the files already made one entry point at another: a `relationships:` line (any entry), an item's `holder:`, a `links:`
+line and a `[[slug]]` reference in the text. `links:` and references gave a one-line "Referenced" copy. The follow pass (D-059, off) walked holders and ties,
+but only the way they were written: naming the person who carries the brass lamp key never brought the key.
+
+**The web (`coderain/loreweb.py`).** One set of edges (holds, tie with its note, link, mention), read from the Markdown each time it is needed. Nothing about
+the web is stored: a few hundred entries are cheap to read, Markdown stays the only truth (invariant 7), and there is no second copy to fall out of step.
+SQLite is used for the story search (D-075), not for the web. A reference that names no entry is left out, never guessed; a mention beside a stronger edge to
+the same entry is dropped.
+
+- **Walked both ways** by the follow pass and the ties line: what the activated entry states comes first (so a crowded web still brings what the one-way pass
+  brought), then what points at it. A fact is always said in the direction its file states it ("Brass lamp key is held by Hollis Wren"), whichever end was
+  named. A mention is drawn but never walked: half the entries mention the town.
+- **Secrets.** A hidden entry is never pulled in by an edge in either direction, and a followed entry's line never names a hidden entry it is tied to (the
+  old line did: a followed person's tie to a hidden patron printed the patron's name). The author's gates (`chance: 0`, `delay`, `triggers_not`) hold in both
+  directions.
+- **Caps unchanged:** one hop, at most 4 per source and 6 a turn, within the lore budget.
+- **Co-activation** (the FictionLab idea), only with the pass on: an activated entry joined to another activated or always-on entry by a holds, tie or link
+  edge ranks 25% higher for the lore budget. An activated entry scores at most 10, so the boost cannot reach the 100 that skips the budget.
+
+**The app.** "Lore web..." in a story's Memory window and in the world builder: a drawing of every entry and connection (a plain force layout with no random
+numbers, `webapp/js/loreweb_layout.js`), a picker and keyboard focus so the drawing is never the only way, and each entry's connections with a Remove button.
+Adding one writes a tie with an optional note on the stating entry's `relationships:` line, which a fold keeps and whose note it never rewrites (`merge_ties`);
+adding again to the same entry replaces the note, since the author's word wins. Removing takes only that tie, link or holder; a mention is edited in the text.
+A `;` in a note becomes a comma, since `;` separates ties. Writes are refused while a turn is generating. Two switches in Settings, "Follow connections" and
+"Repeat key facts next to your action", are `memory.follow_links` and `memory.tail_ties`.
+
+**Off by default, on purpose.** D-073 measured both switches together in the one-way form and found large gains in using facts, with more secret leaks on one
+seed. The two-way form is measured, leaks included, before any default changes.
+
+**Not done.** More than one hop in the drawing's follow; the fold adds ties only for characters, as before; a web of a hundred or more entries draws crowded
+(the picker and the list still work).
+
+**What would change this.** The measurement showing the two-way pass answers worse, or leaks more, than the one-way pass on the same seeds: then the follow
+pass goes back to forwards only and the drawing stays.
+
+Tests: `tests/loreweb_test.py` (10), `loreweb_api_test.py` (7), `loreweb_layout_test.py` (5, in Node) and browser check 52 in `webapp_smoke_test.py`; 20
+breaks tried in copies, each turned a test red (one first slipped through because the test entry had a single tie). Four link-follow cases and the ties tests
+changed for the two-way walk, with the reason written in each.

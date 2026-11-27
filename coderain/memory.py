@@ -801,6 +801,7 @@ class _Assembly:
     ref_slugs: list = field(default_factory=list)
     follow_links: bool = False      # follow holders and ties from what activated (settings: memory.follow_links)
     followed: set = field(default_factory=set)   # slugs the follow pass rendered, so later stages do not repeat them
+    web: list | None = None                      # the lore web's edges this turn (D-074), built when first needed
     layout: str = "legacy"          # "cache" orders the sections by stability and sets the per-turn ones aside in `volatile` (D-072)
     volatile: str = ""              # the per-turn sections (the clock and location, clock or random macros), expanded; "" in the legacy layout
 
@@ -1932,71 +1933,98 @@ class MemoryStore:
     FOLLOW_TOTAL = 6
     FOLLOW_LINE = 320            # characters of one linked line
 
+    # A connected entry that the action also activated ranks this much higher for the lore budget (FictionLab's co-activation, D-074).
+    # An activated entry scores at most weight 2 x importance 5 = 10, so the boost cannot reach the 100 that skips the budget.
+    LINK_BOOST = 1.25
+
+    def _web(self, a: "_Assembly", by_slug: dict) -> list:
+        """The lore web's edges for this turn, built once (D-074)."""
+        if a.web is None:
+            from .loreweb import edges_of                      # loreweb reads this module, so it is imported where it is used
+            a.web = edges_of({slug: e for slug, (_rel, e) in by_slug.items()})
+        return a.web
+
+    def _boost_connected(self, a: "_Assembly", candidates: list, by_slug: dict) -> list:
+        """Candidates joined to another candidate by the web (not a mere mention) rank higher for the budget."""
+        from .loreweb import FOLLOWED
+        active = {e.slug for _score, _rel, e in candidates}
+        joined: set[str] = set()
+        for edge in self._web(a, by_slug):
+            if edge.kind in FOLLOWED and edge.src in active and edge.dst in active:
+                joined |= {edge.src, edge.dst}
+        return [(score * self.LINK_BOOST if e.slug in joined and score < 100 else score, rel, e) for score, rel, e in candidates]
+
     def _follow_links(self, a: "_Assembly", picked: dict, by_slug: dict, turn_index: int,
                       used_lore: int, lore_budget: float) -> int:
-        """Follow ONE hop from what activated: an item to its holder, a character to the people they are tied to.
+        """Follow ONE hop of the lore web from what activated, in either direction (D-059, two-way since D-074).
 
         Name-keyed activation finds an entry only when the story names it, so "who is the sister of the person who
         carries the brass lamp key" put the key in the prompt and never its holder, and the answer sat in the holder's
-        `relationships:` line, one link away (D-058: two-hop evidence reached the prompt 0 of 10 times). A followed
-        entry is shown as ONE short line (its name, its ties, a little of what it is), not its whole sheet, in its own
-        "Linked" section, and it is never followed again (depth 1, as the recursion pass). Everything is a property of
-        the files and the text so far, so a retry of the turn follows the same links (invariant 5).
+        `relationships:` line, one link away (D-058: two-hop evidence reached the prompt 0 of 10 times). Following only
+        what an entry states missed the other half: naming the holder never brought the key. So every holder, tie and
+        `links:` edge touching an activated entry is walked, what the entry itself states first. A followed entry is
+        shown as ONE short line (its name, why it is here when the activated entry does not say so, its ties, a little of
+        what it is), not its whole sheet, in its own "Linked" section, and it is never followed again (depth 1, as the
+        recursion pass). Everything is a property of the files and the text so far, so a retry of the turn follows the
+        same links (invariant 5).
 
-        What is not followed: a hidden entry (a secret stays in its own block), one already in the prompt, the
-        player, an entry the author's own gates hold back (`delay`, `chance: 0`, `triggers_not`), and anything past
-        FOLLOW_PER_ENTRY per source or FOLLOW_TOTAL per turn. The player's sheet is not in any registry this reads, so a
-        tie to the player resolves to nothing. Returns the updated used_lore."""
-        titles: dict[str, str] = {}
-        for slug, (_rel, e) in by_slug.items():
-            for name in [e.title] + e.aliases:
-                titles.setdefault(name_key(name), slug)
+        What is not followed: a hidden entry, in either direction (a secret stays in its own block, and a link must not
+        give it away), one already in the prompt, the player, an entry the author's own gates hold back (`delay`,
+        `chance: 0`, `triggers_not`), a mere `[[mention]]`, and anything past FOLLOW_PER_ENTRY per source or
+        FOLLOW_TOTAL per turn. The player's sheet is not in any registry this reads, so a tie to the player resolves to
+        nothing. Returns the updated used_lore."""
+        from .loreweb import fact, neighbours, resolver
+        entries = {slug: e for slug, (_rel, e) in by_slug.items()}
+        resolve = resolver(entries)
 
-        def resolve(raw: str) -> str | None:
-            slug = templates.slugify(raw)
-            return slug if slug in by_slug else titles.get(name_key(raw))
+        def speakable(slug: str) -> bool:
+            e = entries[slug]
+            if e.hidden() or e.chance() == 0:
+                return False
+            dly = e.delay()
+            if dly is not None and turn_index < dly:
+                return False
+            return not any(trigger_hit(tok, a.haystack) for tok in e.triggers_not())
 
+        web = self._web(a, by_slug)
         lines: list[str] = []
         for group in list(picked.values()):
             for src in group:
-                raw_targets = ([src.attrs["holder"]] if src.attrs.get("holder") else []) \
-                    + [other for other, _note in src.relationships()]
                 taken = 0
-                for raw in raw_targets:
+                for edge, other, outgoing in neighbours(src.slug, web):
                     if taken >= self.FOLLOW_PER_ENTRY or len(a.followed) >= self.FOLLOW_TOTAL:
                         break
-                    slug = resolve(raw)
-                    # `src` is itself in matched_slugs, so an entry tied or held to itself is skipped here too.
-                    if not slug or slug in a.matched_slugs or slug in a.followed:
+                    # `src` is itself in matched_slugs; the web holds no edge from an entry to itself.
+                    if other in a.matched_slugs or other in a.followed or not speakable(other):
                         continue
-                    target = by_slug[slug][1]
-                    if target.hidden() or target.chance() == 0:
-                        continue
-                    dly = target.delay()
-                    if dly is not None and turn_index < dly:
-                        continue
-                    if any(trigger_hit(tok, a.haystack) for tok in target.triggers_not()):
-                        continue
-                    line = self._linked_line(target, by_slug, resolve)
+                    why = "" if outgoing else fact(edge, entries)        # what src states is already in its own entry
+                    line = self._linked_line(entries[other], entries, resolve, speakable, why, "" if outgoing else src.slug)
                     if used_lore + len(line) > lore_budget:
                         continue
                     lines.append(line)
-                    a.followed.add(slug)
+                    a.followed.add(other)
                     used_lore += len(line)
                     taken += 1
         if lines:
-            a.sections.append((2, "Linked to what is in play (an item's holder, a person's ties)", "\n".join(lines)))
+            a.sections.append((2, "Linked to what is in play (what it is connected to)", "\n".join(lines)))
         return used_lore
 
-    def _linked_line(self, e: "Entry", by_slug: dict, resolve) -> str:
-        """One followed entry on one line: its name and slug, its ties with the other people's names beside their slugs,
-        then a little of what it is. The ties come first, because they are why it was followed."""
+    def _linked_line(self, e: "Entry", entries: dict, resolve, speakable, why: str = "", said: str = "") -> str:
+        """One followed entry on one line: its name and slug, why it is here (`why`, a fact the activated entry does not state), its
+        ties with the other people's names beside their slugs (not the one `why` already says, and never one to a hidden or held-back
+        entry), then a little of what it is. The ties come first, because they are why it was followed."""
         ties = []
-        for other, note in e.relationships()[:self.FOLLOW_PER_ENTRY]:
+        for other, note in e.relationships():
             slug = resolve(other)
-            who = f"{by_slug[slug][1].title} ({slug})" if slug else other     # a name beside the slug when there is one
+            if slug and (slug == said and why or not speakable(slug)):
+                continue
+            who = f"{entries[slug].title} ({slug})" if slug else other     # a name beside the slug when there is one
             ties.append(f"{who}: {note}" if note else who)
+            if len(ties) >= self.FOLLOW_PER_ENTRY:
+                break
         head = f"{e.title} ({e.slug})"
+        if why:
+            head += ". " + why
         if ties:
             head += ". Ties: " + "; ".join(ties)
         first = e.body.strip().splitlines()[0] if e.body.strip() else ""
@@ -2264,6 +2292,8 @@ class MemoryStore:
             seed, turn_index, always_slug=current_loc_slug)
         candidates = [c for c in collapsed if not c[2].hidden()]
         hidden_hits = [c[2] for c in collapsed if c[2].hidden()]
+        if a.follow_links:                      # the lore web (D-074): entries joined to each other rank higher together
+            candidates = self._boost_connected(a, candidates, by_slug)
         candidates.sort(key=lambda c: c[0], reverse=True)
         lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
         picked: dict[str, list[Entry]] = {}

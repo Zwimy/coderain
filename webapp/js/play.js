@@ -7,6 +7,7 @@ import {attachFind} from "./find.js";
 import {createTurnMenu} from "./turnmenu.js";
 import {displayModal} from "./display.js";
 import {duplicatesModal} from "./duplicates.js";
+import {loreWebModal} from "./loreweb.js";
 import {outlineModal} from "./outline.js";
 import {contextModal} from "./context.js";
 import {foldReview} from "./folds.js";
@@ -823,6 +824,7 @@ export async function renderPlay(slug) {
       <textarea id="mem-text" rows="14" spellcheck="false" aria-label="Contents of the chosen file"></textarea>
       <div class="modal-actions">
         <button id="mem-dups" title="find the same person written under two names, and merge them">Duplicates…</button>
+        <button id="mem-web" title="see how entries point at each other, and add or remove connections">Lore web…</button>
         <button id="mem-folds" title="review the scene summaries the folds wrote"
           >Recent folds…</button>
         <button id="mem-override" class="hidden"></button>
@@ -831,6 +833,7 @@ export async function renderPlay(slug) {
         <button class="primary" id="mem-save">Save</button>
       </div>`);
     $("#mem-dups").addEventListener("click", () => duplicatesModal(slug));
+    $("#mem-web").addEventListener("click", () => loreWebModal(`/api/saves/${slug}`));
     $("#mem-folds").addEventListener("click",
       () => foldReview(slug, {onDemand: true}));
 

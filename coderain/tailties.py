@@ -7,8 +7,9 @@ after the player's action, but it is built from the canon ledger, which knows lo
 Those live in the story's own files: a character's `relationships:` line and an item's `holder:` attr (D-059).
 
 This builds ONE short system message from those files for the things the player's action and the last reply name, plus one hop
-(an item to its holder, then the holder's ties), and the engine appends it right after the card. Off unless
-`memory: {tail_ties: true}`; nothing here has been measured on a model yet, which is why it is off.
+(an item to its holder, then the holder's ties), and the engine appends it right after the card. Since D-074 the facts come from
+the lore web, so a tie or holder is said whichever of its two ends was named, and `links:` count too. Off unless
+`memory: {tail_ties: true}`: measured on a model only together with follow_links, and before the web (D-073).
 
 Rules it keeps, because they were paid for elsewhere in the engine:
   * A hidden entry (a secret), one whose `chance` is 0, one whose `delay` has not passed and one whose `triggers_not` is in the text
@@ -19,8 +20,8 @@ Rules it keeps, because they were paid for elsewhere in the engine:
 """
 from __future__ import annotations
 
-from . import templates
-from .memory import name_key, trigger_hit
+from .loreweb import HOLDS, TIE, edges_of, fact, neighbours
+from .memory import trigger_hit
 
 MAX_FACTS = 8
 MAX_LINE = 600
@@ -39,20 +40,16 @@ def _names(e, firsts: set[str]) -> list[str]:
 def tail_ties(store, text: str, turn_index: int) -> str:
     """The ties line for a turn whose player action and last reply are `text`, or "" when there is nothing to say."""
     hay = text.lower()
-    entries = [(rel, e) for rel in store.gated_registries() for e in store.entries(rel)]
-    by_slug = {e.slug: e for _rel, e in entries}
-    titles: dict[str, str] = {}
+    by_slug: dict = {}
+    for rel in store.gated_registries():
+        for e in store.entries(rel):
+            by_slug.setdefault(e.slug, e)
     first_words: dict[str, int] = {}
     for e in by_slug.values():
-        for name in [e.title, *e.aliases]:
-            titles.setdefault(name_key(name), e.slug)
         w = e.title.split()[0].lower() if e.title.split() else ""
         first_words[w] = first_words.get(w, 0) + 1
     unique_firsts = {w for w, n in first_words.items() if n == 1}
-
-    def resolve(raw: str) -> str | None:
-        slug = templates.slugify(raw)
-        return slug if slug in by_slug else titles.get(name_key(raw))
+    web = edges_of(by_slug)
 
     def speakable(e) -> bool:
         if e.hidden() or e.chance() == 0:
@@ -67,39 +64,31 @@ def tail_ties(store, text: str, turn_index: int) -> str:
     facts: list[str] = []
     seen_slugs: set[str] = set()
     holders: list[str] = []
-
-    def add_ties(slug: str) -> None:
-        e = by_slug[slug]
-        for other, note in e.relationships():
-            target = resolve(other)
-            if target is None or target == slug or not speakable(by_slug[target]):
-                continue
-            who = by_slug[target].title
-            facts.append(f"{e.title} is tied to {who}" + (f" ({note})" if note else ""))
-
+    # Every holder, tie and link touching what was named, what the entry itself states first (D-074): naming the person who carries
+    # the key now says so, as naming the key always did.
     for slug in named:
-        e = by_slug[slug]
         if slug in seen_slugs:
             continue
         seen_slugs.add(slug)
-        raw_holder = e.attrs.get("holder", "").strip()
-        if raw_holder:
-            holder = resolve(raw_holder)
-            if holder is not None and holder != slug and speakable(by_slug[holder]):
-                facts.append(f"{e.title} is held by {by_slug[holder].title}")
-                holders.append(holder)
-        add_ties(slug)
+        for edge, other, outgoing in neighbours(slug, web):
+            if not speakable(by_slug[other]):
+                continue
+            facts.append(fact(edge, by_slug))
+            if edge.kind == HOLDS and outgoing:
+                holders.append(other)
     # One hop: whoever holds a named item has their own ties, and the question is often about them.
     for slug in holders:
         if slug not in seen_slugs:
             seen_slugs.add(slug)
-            add_ties(slug)
+            for edge, other, outgoing in neighbours(slug, web, (TIE,)):
+                if outgoing and speakable(by_slug[other]):
+                    facts.append(fact(edge, by_slug))
 
     kept: list[str] = []
     total = len(HEAD)
-    for fact in dict.fromkeys(facts):                       # in order, each once
-        if len(kept) >= MAX_FACTS or total + len(fact) + 2 > MAX_LINE:
+    for said in dict.fromkeys(facts):                       # in order, each once
+        if len(kept) >= MAX_FACTS or total + len(said) + 2 > MAX_LINE:
             break
-        kept.append(fact)
-        total += len(fact) + 2
+        kept.append(said)
+        total += len(said) + 2
     return HEAD + ". ".join(kept) + "." if kept else ""
