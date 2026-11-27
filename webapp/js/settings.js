@@ -250,6 +250,13 @@ export async function renderSettings() {
         named. In tests on a small local model, both switches together made it use these facts far better; it also repeated secrets it
         had been told more often.</p>
       <label>
+        <input type="checkbox" id="mm-search" ${st.memory.story_search ? "checked" : ""}>
+        Search the story's own words
+      </label>
+      <p class="muted">For each action, finds up to three passages from earlier in the story (before the recent turns the writer already
+        has) and quotes them, so an exact line said long ago can come back. Works on its own by keyword; with semantic recall on, by
+        meaning too.</p>
+      <label>
         <input type="checkbox" id="rt-enabled"
           ${st.retrieval.enabled ? "checked" : ""}>
         Semantic recall (find relevant past scenes by meaning, not just keywords)
@@ -552,6 +559,7 @@ export async function renderSettings() {
       memory: {
         follow_links: $("#mm-follow").checked,
         tail_ties: $("#mm-ties").checked,
+        story_search: $("#mm-search").checked,
         short_term_turns: $("#mm-short").value,
         medium_fold_after: $("#mm-mafter").value,
         medium_fold_size: $("#mm-msize").value,

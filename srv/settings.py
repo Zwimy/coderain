@@ -335,6 +335,7 @@ def get_settings():
             # the engine reads these two as on only for a real true (D-059, D-063), so that is what the switches show
             "follow_links": core._cfg.memory.get("follow_links") is True,
             "tail_ties": core._cfg.memory.get("tail_ties") is True,
+            "story_search": core._cfg.memory.get("story_search") is True,
             "short_term_turns": core._cfg.memory.get("short_term_turns", 12),
             "medium_fold_after": core._cfg.memory.get("medium_fold_after", 12),
             "medium_fold_size": core._cfg.memory.get("medium_fold_size", 5),
@@ -398,7 +399,7 @@ def put_settings(body: dict):
     mem = body.get("memory") or {}
     if mem:
         raw.setdefault("memory", {})
-        for key in ("follow_links", "tail_ties"):
+        for key in ("follow_links", "tail_ties", "story_search"):
             if key in mem:
                 raw["memory"][key] = mem[key] is True
         for key, lo, hi in (("short_term_turns", 2, 200),

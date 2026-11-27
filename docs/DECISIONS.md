@@ -3567,3 +3567,40 @@ pass goes back to forwards only and the drawing stays.
 Tests: `tests/loreweb_test.py` (10), `loreweb_api_test.py` (7), `loreweb_layout_test.py` (5, in Node) and browser check 52 in `webapp_smoke_test.py`; 20
 breaks tried in copies, each turned a test red (one first slipped through because the test entry had a single tie). Four link-follow cases and the ties tests
 changed for the two-way walk, with the reason written in each.
+
+
+## D-075: Search of the story's own words, in SQLite, by keyword and by meaning (built 2026-11-27)
+
+**Asked by the owner,** from the second architecture blueprint he shared: find old passages by keyword and meaning, locally, with SQLite. A fold keeps what a
+summary keeps, and the exact line someone said forty turns ago is gone from the prompt. Semantic recall (Phase 5) searches entries and scene summaries,
+never the story's own words, and the memory tool resolved only a turn range, a scene or a timeline line.
+
+**What it is (`coderain/storysearch.py`).** Every turn is cut into passages of at most 500 characters (paragraphs together, long ones at sentence ends) and
+indexed in `<save>/search.db`: SQLite FTS5 with Porter stemming, ranked by BM25. A passage must hold at least two of the action's search words (one if there
+is only one); stop words are not searched. With semantic recall on, the same embedder also ranks passages by meaning (cosine above 0.3, at most 64 new
+embeddings a turn, so a long story catches up over a few turns), and the two lists are merged by reciprocal rank fusion (k 60). The prompt gets at most 3
+passages, one per turn, in story order, at most 1,500 characters, quoted with their turn number, the player's lines marked: the section "From earlier in the
+story", in the per-turn message below the history (D-072) and first to give way under a tight budget. Only turns BEFORE the history window are searched; not
+for Continue, the opening, the move suggestion or the Context panel, whose input is the app's own words. A `{{macro}}` in story text is kept as text. When
+the memory tool's reference matches no timeline line or scene, it is searched for in the story itself. That part is not behind the switch, since it only
+runs when the model asks the tool for something and would otherwise be told nothing.
+
+**Derived, never truth (invariant 7).** The index is synced to the transcript turn by turn, by content, before every search, so undo, retry, swipe, edit and
+branch leave nothing stale, and deleting it only costs a rebuild. A broken index is logged and the turn runs without the section. Export, duplicate,
+branch and snapshots now also skip SQLite's side files (`-wal`, `-shm`, `-journal`), which they copied before for semantic recall's index too.
+
+**Off by default** (`memory.story_search`, a switch in Settings), as every new prompt section is until measured.
+
+**The blueprint's note on embedding prefixes did not hold here.** nomic-embed-text's model card asks for `search_document:` and `search_query:` prefixes, and
+Ollama does not add them. Measured on this machine, 16 questions over 30 passages of an invented story: without prefixes 15 of 16 answers ranked first
+(all 16 in the top three, mean reciprocal rank 0.969), with them 13 of 16 first (all 16 in the top three, 0.896). Not added. A larger test that shows a gain
+would change that.
+
+**Not measured:** whether the Writer uses a quoted passage, and how often a search brings an unrelated one into a long story. **Limit:** a passage is the
+story as the player saw it, so a secret one character whispered can be quoted when someone asks about its subject; nothing tracks who heard what.
+
+**What would change this.** Passages that mislead the Writer more than they help in a measured run, or noise on most turns: then the two-word rule goes up or
+the search runs only when the action asks about the past.
+
+Tests: `tests/storysearch_test.py` (9 cases); 22 breaks tried in copies, 21 turned a test red; the last changes nothing the code can reach, because the
+per-turn list is checked first. Three first slipped through and the tests were strengthened.

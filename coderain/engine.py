@@ -254,6 +254,9 @@ class Engine:
         # Follow one hop from what activated (an item's holder, a person's ties): off until a measured run says it
         # helps (D-059). `is True`, so a hand-written "false" string is not read as on.
         self.follow_links = config.memory.get("follow_links") is True
+        # Search the story's own words for what the action is about, before the history window (D-075). Off until asked for, `is True` as above.
+        self.story_search = config.memory.get("story_search") is True
+        self._searcher = None
         # The ties line at the tail of the prompt (D-063): off until a measured run says it helps.
         self.tail_ties = config.memory.get("tail_ties") is True
         # Say back the phrases the Writer keeps reusing (D-064): off until a measured run says it helps.
@@ -398,14 +401,18 @@ class Engine:
         "legacy": the older order, kept as a switch (`generation.prompt_layout: legacy`) for comparing the two."""
         return "legacy" if str(self.cfg.generation.get("prompt_layout", "cache")).lower() == "legacy" else "cache"
 
-    def _messages(self, history, player_input):
+    def _messages(self, history, player_input, search: bool = True):
+        """The prompt for `player_input` after `history`. `search` is off for a prompt whose input is the app's own instruction (the
+        opening, Continue, the move suggestion, the inspector's preview): searching the story for those words would find noise."""
         layout = self.prompt_layout
+        earlier = self._earlier_passages(history, player_input) if search else ""
         messages, volatile = self.store.assemble_parts(history, player_input,
                                                        scenes_tail=self.scenes_tail,
                                                        budget_tokens=self.budget,
                                                        retriever=self.retriever,
                                                        follow_links=self.follow_links,
-                                                       layout=layout)
+                                                       layout=layout,
+                                                       earlier=earlier)
         if layout == "legacy":
             return self._augment_style(self._augment_rpg(messages))
         messages, sheet = self._static_rpg(messages)
@@ -418,6 +425,27 @@ class Engine:
             note = {"role": "system", "content": SCENE_STATE_HEAD + scene}
             messages = [*messages[:-1], note, messages[-1]] if len(messages) >= 2 else [*messages, note]
         return messages
+
+    def _earlier_passages(self, history, player_input: str) -> str:
+        """The story search's lines for this action (D-075), or "". Only the turns before the history window are searched: the rest are
+        in the prompt already."""
+        if not self.story_search:
+            return ""
+        if self._searcher is None:
+            from .storysearch import StorySearch
+            index = getattr(self.retriever, "index", None)          # search by meaning too, when semantic recall is on
+            self._searcher = StorySearch(self.store, getattr(index, "embedder", None))
+        return self._searcher.block(player_input, self._before_window(history))
+
+    def _before_window(self, history) -> int:
+        """How many turns of the transcript come before the history window, found by the window's last turn from the end."""
+        if not history:
+            return 0
+        turns, last = self.store.turns(), history[-1]
+        for i in range(len(turns) - 1, -1, -1):
+            if turns[i]["role"] == last["role"] and turns[i]["text"] == last["text"]:
+                return max(0, i - len(history) + 1)
+        return 0
 
     def history_window(self, drop_last: bool = False) -> list[dict]:
         """The verbatim turns actually sent, capped by COUNT and by TOKENS.
@@ -706,7 +734,7 @@ class Engine:
             yield override
             return
         messages = self._messages(
-            [], "Begin the story. Set the opening scene and place me in it.")
+            [], "Begin the story. Set the opening scene and place me in it.", search=False)
         before = len(self.store.turns())
         try:
             yield from self._generate_and_store(messages, on_stage)
@@ -756,7 +784,7 @@ class Engine:
             history,
             "Continue the narration from exactly where it left off. Do not "
             "repeat what was already written and do not summarize — push the "
-            "current scene forward with fresh action or detail.")
+            "current scene forward with fresh action or detail.", search=False)
         before = len(self.store.turns())
         try:
             yield from self._generate_and_store(messages, on_stage)
@@ -919,7 +947,7 @@ class Engine:
             history,
             "Suggest MY next move as the player: first person, 1-2 sentences, "
             "only the action or dialogue I take — do NOT narrate any outcomes "
-            "or write as the narrator.")
+            "or write as the narrator.", search=False)
         if not self.cfg.generation.get("think", False) and messages:
             messages = self._with_no_think(messages)
         with llm_stage(self.llm, "impersonate"):

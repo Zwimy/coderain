@@ -28,6 +28,10 @@ keep it going — but everything is here, forever, for everyone.
   each other form one web you can see and edit ("Lore web..."). Optionally, when
   something comes into play the writer is also told about what is connected to
   it, in either direction, without ever giving away a secret.
+- **Search of the story's own words.** Optionally, each turn finds passages from
+  far back that match what you are doing and quotes them to the writer, so an
+  exact line said long ago can come back. It runs locally in SQLite, by keyword,
+  and by meaning when semantic recall is on.
 - **A code validator between the model and the page.** An optional multi-brain
   "quad" pipeline (Planner → **deterministic code Validator** → Writer) means
   mechanics are checked by code, not hallucinated: engine-rolled dice, real

@@ -33,6 +33,9 @@ SCENARIO_PIECE_FILES = [
     "threads.md", "events.md",
 ]
 # All files that hold indexable entries.
+# Indexes that are rebuilt from the story (semantic recall, story search) and SQLite's side files: never copied or exported.
+DERIVED_DB_PATTERNS = ("*.db", "*.db-wal", "*.db-shm", "*.db-journal")
+DERIVED_DB_SUFFIXES = (".db", ".db-wal", ".db-shm", ".db-journal")
 INDEX_FILES = [
     "player.md", "characters.md", "locations.md", "factions.md", "items.md",
     "canon-events.md", "threads.md",
@@ -751,8 +754,9 @@ def insert_static(content: str, block: str) -> str:
 _STATIC_TITLES = frozenset({"Premise", "World", "You"})
 _SLOW_TITLES = frozenset({"Open threads", "Story so far (arc)", "Established facts (timeless truths)", "Story structure (chapter plan)",
                           "Recent scenes", "Timeline (shorthand; recall a [T..] range for detail)", "Known canon events"})
+EARLIER_TITLE = "From earlier in the story (the words as they were written)"
 _PER_TURN_TITLES = ("Linked to what is in play", "Related past scenes", "Referenced (by name)", "Recalled (semantically related)",
-                    "Companion side-chat", "Story beat")
+                    "Companion side-chat", "Story beat", "From earlier in the story")
 
 
 def _stability_rank(title: str, priority: int) -> int:
@@ -1337,6 +1341,11 @@ class MemoryStore:
         rng = _range_from_ref(ref, self.read("memory/timeline.md"),
                               self.entries("memory/scenes.md"))
         if rng is None:
+            # Not on the timeline: search the story's own words for it (D-075)
+            from .storysearch import StorySearch
+            found = StorySearch(self).block(ref, len(self.turns()))
+            if found:
+                return f"No timeline entry matches '{reference}'. Passages in the story that match:\n{found}"
             return f"No timeline entry matches '{reference}'."
         turns = self.turns_range(*rng)
         if not turns:
@@ -2047,9 +2056,10 @@ class MemoryStore:
     def assemble_parts(self, history: list[dict], player_input: str,
                        scenes_tail: int = 4, budget_tokens: int = 8000,
                        retriever=None, follow_links: bool = False,
-                       layout: str = "legacy") -> tuple[list[dict], str]:
+                       layout: str = "legacy", earlier: str = "") -> tuple[list[dict], str]:
         """`assemble`, and the per-turn text the cache layout (D-072) sets aside: (messages, volatile). In the legacy layout `volatile` is
-        always "". The caller puts it in a system message just before the player's action."""
+        always "". The caller puts it in a system message just before the player's action. `earlier` is the story search's passages
+        (D-075), already written as lines."""
         a = _Assembly(history=history, player_input=player_input,
                       scenes_tail=scenes_tail, budget_tokens=budget_tokens,
                       retriever=retriever, idx=self.index(),
@@ -2058,6 +2068,8 @@ class MemoryStore:
         self._gather_sections(a)
         self._activate_lore(a)
         self._resolve_references(a)
+        if earlier:                       # found for this action, so it is per-turn (rank 2) and the first to give way under budget (3)
+            a.sections.append((3, EARLIER_TITLE, earlier))
         messages = self._pack_budget(a)
         return messages, a.volatile
 
@@ -2767,7 +2779,7 @@ class ScenarioLibrary:
         dest.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
             for p in sorted(src.rglob("*")):
-                if p.is_dir() or p.suffix in (".tmp", ".db"):
+                if p.is_dir() or p.name.endswith((".tmp", *DERIVED_DB_SUFFIXES)):
                     continue
                 z.write(p, p.relative_to(src).as_posix())
         return str(dest)
@@ -2965,7 +2977,7 @@ class SaveLibrary:
         dst = self.root / dst_slug
         shutil.copytree(src, dst,
                         ignore=shutil.ignore_patterns(".snapshots", "*.tmp",
-                                                      "*.db"))
+                                                      *DERIVED_DB_PATTERNS))
         meta = _read_json(dst / "meta.json")
         meta.update({"title": title, "created": time.time(),
                      "updated": time.time()})
@@ -3058,7 +3070,7 @@ class SaveLibrary:
         # A branch starts clean: don't drag along the original's undo history or a
         # stray half-written temp file.
         shutil.copytree(src, self.root / dst_slug,
-                        ignore=shutil.ignore_patterns(".snapshots", "*.tmp", "*.db"))
+                        ignore=shutil.ignore_patterns(".snapshots", "*.tmp", *DERIVED_DB_PATTERNS))
         meta = self.meta(dst_slug)
         meta.update({"title": title, "created": time.time(), "updated": time.time()})
         self._write_meta(dst_slug, meta)
@@ -3100,7 +3112,7 @@ class SaveLibrary:
                 # canon/ is the shadow ledger: derived from the transcript, rebuilt
                 # on demand, and not part of the story, so it does not travel.
                 if (".snapshots" in rel.parts or "canon" in rel.parts
-                        or p.suffix in (".tmp", ".db")):
+                        or p.name.endswith((".tmp", *DERIVED_DB_SUFFIXES))):
                     continue
                 z.write(p, rel.as_posix())
         return str(dest)

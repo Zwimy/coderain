@@ -59,7 +59,7 @@ def context_report(eng, cfg) -> dict:
     # sent. Reporting the uncapped count here would make the panel disagree with
     # the prompt, which is the one thing it exists to prevent.
     hist = eng.history_window()
-    msgs = eng._messages(hist, "(preview of the next turn)")
+    msgs = eng._messages(hist, "(preview of the next turn)", search=False)
     # With the cache layout the clock, the location and the live character sheet ride a system message after the
     # action (D-072). They are still context the model reads, so their sections are listed and counted with the
     # system text, but that message is not history and must not inflate the history count.
