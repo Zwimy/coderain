@@ -80,7 +80,7 @@ class Embedder:
     # silently returned nothing. Fail fast instead: no retries, short timeout.
     FAIL_FAST_TIMEOUT = 8.0
 
-    def __init__(self, client, model: str):
+    def __init__(self, client, model: str, extra_body: dict | None = None):
         try:
             client = client.with_options(max_retries=0,
                                          timeout=self.FAIL_FAST_TIMEOUT)
@@ -88,11 +88,13 @@ class Embedder:
             pass          # a stub/older client: use it as-is
         self.client = client
         self.model = model
+        self.extra_body = extra_body    # OpenRouter's provider block (D-076): story text goes here too
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        resp = self.client.embeddings.create(model=self.model, input=texts)
+        extra = {"extra_body": self.extra_body} if self.extra_body else {}
+        resp = self.client.embeddings.create(model=self.model, input=texts, **extra)
         # Preserve request order (some providers return an `index` field).
         data = sorted(resp.data, key=lambda d: getattr(d, "index", 0))
         return [list(d.embedding) for d in data]
@@ -339,13 +341,22 @@ def build_retriever(store: MemoryStore, client, cfg: dict | None,
     if not cfg.get("enabled"):
         return None
     name = str(cfg.get("profile", "") or "").strip()
+    base_url = getattr(client, "base_url", "")
     if name and app_config is not None:
         from ..config import build_profile
         from ..llm import LLM
         prof = build_profile(app_config.raw, name)
         client = LLM(prof, app_config.generation).client
-    embedder = Embedder(client, str(cfg_get(cfg, "embed_model")))
+        base_url = prof.base_url
+    embedder = Embedder(client, str(cfg_get(cfg, "embed_model")), _routing(base_url, app_config))
     return Retriever(store, VectorIndex(store, embedder), cfg)
+
+
+def _routing(base_url, app_config) -> dict | None:
+    """The `extra_body` for embedding calls: OpenRouter's provider block when the embeddings go there (D-076)."""
+    from ..llm import openrouter_provider
+    route = openrouter_provider(str(base_url or ""), getattr(app_config, "generation", None))
+    return {"provider": route} if route else None
 
 
 def probe_embedder(client, cfg: dict | None, app_config=None) -> str:
@@ -355,12 +366,14 @@ def probe_embedder(client, cfg: dict | None, app_config=None) -> str:
     name = str(cfg.get("profile", "") or "").strip()
     model = str(cfg_get(cfg, "embed_model"))
     try:
+        base_url = getattr(client, "base_url", "")
         if name and app_config is not None:
             from ..config import build_profile
             from ..llm import LLM
-            client = LLM(build_profile(app_config.raw, name),
-                         app_config.generation).client
-        Embedder(client, model).embed(["probe"])
+            prof = build_profile(app_config.raw, name)
+            client = LLM(prof, app_config.generation).client
+            base_url = prof.base_url
+        Embedder(client, model, _routing(base_url, app_config)).embed(["probe"])
         return ""
     except Exception as e:  # noqa: BLE001 — any failure means "not usable"
         return f"{type(e).__name__}: {str(e)[:160]}"

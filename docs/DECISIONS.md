@@ -3604,3 +3604,32 @@ the search runs only when the action asks about the past.
 
 Tests: `tests/storysearch_test.py` (9 cases); 22 breaks tried in copies, 21 turned a test red; the last changes nothing the code can reach, because the
 per-turn list is checked first. Three first slipped through and the tests were strengthened.
+
+## D-076: Hosted model settings: OpenRouter provider choice, Min-p, strict JSON (built 2026-11-27)
+
+**Asked by the owner,** from the second architecture blueprint: which providers may serve a hosted request and whether they may keep it, `min_p`, and
+enforced JSON for the calls that must return it. All three are off unless set.
+
+**OpenRouter's provider block** (`generation.openrouter_provider`) is sent as the request's `provider` object, only to openrouter.ai (matched on the
+whole host name), including semantic recall's embedding calls when they go there. Settings writes `order`, `allow_fallbacks`, `data_collection`, `zdr`
+and `require_parameters` (field names checked against OpenRouter's docs on 2026-11-27) and keeps any other key written by hand. **It is never dropped to
+make a request succeed.** It can carry the user's privacy choice, so a request that cannot be served that way fails with the server's reason, and a value
+that is not a mapping stops the request rather than going out without it. In Settings, a name that cannot be a provider is refused, since dropping it
+would loosen the choice without saying so.
+
+**Min-p** (`generation.min_p`) goes in `extra_body` only when set. **Strict JSON** (`generation.json_mode: true`) sends `response_format:
+{"type": "json_object"}` on the JSON calls (planner, folds, generation, fate), only when the prompt itself asks for JSON, which some providers require; never
+on prose, and never beside tools.
+
+**A server that refuses one of these** (400 or 422) must not end a turn. A refusal naming the setting drops it for that client, and usage accounting stays
+on. A refusal naming neither is retried without both, and they are given up only if that works, so an unrelated failure (too long, a bad model name) does
+not cost them. Either way the story's health log says so (invariant 2). The memory tool's loop, which does not stream, has the same care now; before, a
+server that refused `reasoning` there failed the call.
+
+**Not measured:** whether strict JSON improves any stage on any model, and which local servers use `min_p` rather than ignoring it.
+
+**What would change this.** A provider whose refusal wording hides which setting it means so often that the retry costs more than it saves, or a model where
+forced JSON makes a thinking model answer emptily: then strict JSON becomes per stage.
+
+Tests: `tests/hosted_settings_test.py` (11 cases); 30 breaks tried in copies, all turned it red (one first slipped through and the test was
+strengthened).

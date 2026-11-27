@@ -36,7 +36,7 @@ import json
 import random
 import re
 
-from .llm import extract_json
+from .llm import extract_json, json_overrides
 from .memory import context_with_scene
 from .llm import stage as llm_stage
 from .planner import _restates
@@ -264,7 +264,7 @@ def _ask(llm, convo: list[dict]) -> tuple[dict | None, str | None]:
     """One request: (the reply object, None) or (None, why). It reads the raw text itself, not through emit_json_ex,
     because that helper throws the text away when it does not parse and `salvage` needs it."""
     try:
-        text = llm.complete(convo, max_tokens=FATE_TOKENS)
+        text = llm.complete(convo, max_tokens=FATE_TOKENS, **json_overrides(llm, convo))
     except Exception as e:  # noqa: BLE001 - a network or model failure leaves nothing to parse; the caller degrades
         return None, f"model call failed: {e}"
     text = str(text or "")

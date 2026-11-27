@@ -56,6 +56,8 @@ keep it going — but everything is here, forever, for everyone.
   ready-to-play world.
 - **Local-first, BYO everything.** Ollama on your GPU, or paste a cloud key
   (DeepSeek, GLM, Claude, OpenRouter, …). Your key lives only on your machine.
+  With OpenRouter you can choose which providers may serve you, and require ones
+  that keep nothing.
 
 ## Install
 

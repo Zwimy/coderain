@@ -235,6 +235,8 @@ class Engine:
         # provider's own token counts, tagged by stage. The client keeps working
         # if this raises; the store swallows OSError for the same reason.
         self.llm.on_usage = store.log_usage
+        # A request setting the server would not take (D-076) is said in the health log, not dropped quietly.
+        self.llm.on_notice = lambda message: store.log_degraded("llm-request", message)
         # The rolling chapter outline (book plan). NOT a per-turn brain — it rides
         # the summarizer's occasional LLM (seed once, extend once per completed
         # chapter). Passed into the summarizer so a scene fold can detect a chapter

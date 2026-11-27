@@ -117,6 +117,9 @@ class TrinityBrain:
         self._director = _stage_llm(config, tcfg.get("director"))
         self._lorekeeper = _stage_llm(config, tcfg.get("lorekeeper"))
         self._writer = _stage_llm(config, tcfg.get("writer"))
+        for pinned in (self._director, self._lorekeeper, self._writer):
+            if pinned is not None:      # a setting its server refused is said in this story's health log, as for the base client
+                pinned.on_notice = lambda message: store.log_degraded("llm-request", message)
         # Memory Manager is code-first (SPEC-V2 §1.1): the per-turn Lore-keeper LLM
         # pass is opt-in — retrieval itself is deterministic assembly, already done.
         lk = tcfg.get("lorekeeper")

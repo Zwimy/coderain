@@ -3,6 +3,7 @@ semantic-recall checks."""
 from __future__ import annotations
 
 import copy
+import re
 from urllib.parse import urlparse
 
 import httpx
@@ -321,6 +322,9 @@ def get_settings():
             "presence_penalty": core._cfg.generation.get("presence_penalty"),
             "repetition_penalty": core._cfg.generation.get("repetition_penalty"),
             "seed": core._cfg.generation.get("seed"),
+            "min_p": core._cfg.generation.get("min_p"),
+            "json_mode": core._cfg.generation.get("json_mode") is True,
+            "openrouter_provider": _routing_shown(core._cfg.generation.get("openrouter_provider")),
         },
         "quick_actions": _clean_quick_actions(core._cfg.raw.get("quick_actions")),
         # Your model's price per MILLION tokens. Left at 0 the app reports tokens
@@ -355,6 +359,46 @@ def get_settings():
             "profiles": sorted((core._cfg.raw.get("profiles") or {}).keys()),
         },
     }
+
+
+# The part of OpenRouter's `provider` block the Settings page writes (D-076). Other keys written by hand (only, ignore, sort ...)
+# are kept as they are.
+_ROUTING_KEYS = ("order", "allow_fallbacks", "data_collection", "zdr", "require_parameters")
+_PROVIDER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$")
+
+
+def _routing_shown(block) -> dict:
+    return dict(block) if isinstance(block, dict) else {}
+
+
+def _put_routing(gen: dict, body: dict) -> None:
+    """Write the page's routing choices into `generation.openrouter_provider`. A name that cannot be a provider is refused rather
+    than dropped, since dropping it would loosen what the user asked for without saying so."""
+    order = body.get("order")
+    if isinstance(order, str):
+        order = order.split(",")
+    order = [str(s).strip() for s in (order if isinstance(order, list) else []) if str(s).strip()]
+    bad = [s for s in order if not _PROVIDER_NAME.match(s)]
+    if bad:
+        raise HTTPException(400, f"not a provider name: '{bad[0][:40]}' (OpenRouter's names have no spaces, such as deepinfra)")
+    only = body.get("allow_fallbacks") is False
+    if only and not order:
+        raise HTTPException(400, "'Use only these' needs at least one provider in the list")
+    old = gen.get("openrouter_provider")
+    block = {k: v for k, v in old.items() if k not in _ROUTING_KEYS} if isinstance(old, dict) else {}
+    if order:
+        block["order"] = order[:20]
+    if only:
+        block["allow_fallbacks"] = False
+    if body.get("data_collection") == "deny":
+        block["data_collection"] = "deny"
+    for key in ("zdr", "require_parameters"):
+        if body.get(key) is True:
+            block[key] = True
+    if block:
+        gen["openrouter_provider"] = block
+    elif isinstance(old, dict) or old is None:
+        gen.pop("openrouter_provider", None)      # a hand-written value that is not a mapping stays, so requests keep saying so
 
 
 @router.put("/api/settings")
@@ -478,6 +522,7 @@ def put_settings(body: dict):
     for key, lo, hi, cast in (("frequency_penalty", -2.0, 2.0, float),
                               ("presence_penalty", -2.0, 2.0, float),
                               ("repetition_penalty", 0.0, 2.0, float),
+                              ("min_p", 0.0, 1.0, float),
                               ("seed", 0, 2**31 - 1, int)):
         if key in gen:
             if gen[key] in (None, ""):
@@ -487,6 +532,13 @@ def put_settings(body: dict):
                     raw["generation"][key] = max(lo, min(hi, cast(gen[key])))
                 except (TypeError, ValueError):
                     pass
+    if "json_mode" in gen:
+        if gen["json_mode"] is True:
+            raw["generation"]["json_mode"] = True
+        else:
+            raw["generation"].pop("json_mode", None)
+    if isinstance(gen.get("openrouter_provider"), dict):
+        _put_routing(raw["generation"], gen["openrouter_provider"])
 
     if mode == "local":
         loc = body.get("local") or {}

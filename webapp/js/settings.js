@@ -134,6 +134,22 @@ export async function renderSettings() {
         <code>${esc(st.home || "")}</code>. The desktop app and a source run use
         DIFFERENT folders, so a key saved in one will read as "not saved" in the
         other.</p>
+      <div id="or-routing" hidden>
+        <h2>OpenRouter: who may serve your requests</h2>
+        <p class="muted">OpenRouter passes each request to one of several companies running the model. These choices go with every request
+          to openrouter.ai, including semantic recall when it embeds there. If no provider can serve a request this way, it fails and says
+          so; it is never sent without them.</p>
+        <label><input type="checkbox" id="or-deny" ${st.generation.openrouter_provider.data_collection === "deny" ? "checked" : ""}>
+          Only providers that do not keep or train on my prompts</label>
+        <label><input type="checkbox" id="or-zdr" ${st.generation.openrouter_provider.zdr === true ? "checked" : ""}>
+          Only zero data retention endpoints</label>
+        <label><input type="checkbox" id="or-params" ${st.generation.openrouter_provider.require_parameters === true ? "checked" : ""}>
+          Only providers that support every setting sent (such as Min-p or strict JSON)</label>
+        <label>Providers to try first, in order (names separated by commas; blank = OpenRouter picks)</label>
+        <input id="or-order" placeholder="deepinfra, together" value="${esc([].concat(st.generation.openrouter_provider.order || []).join(", "))}">
+        <label><input type="checkbox" id="or-only" ${st.generation.openrouter_provider.allow_fallbacks === false ? "checked" : ""}>
+          Use only these, with no fallback to others</label>
+      </div>
       <h2>Supporting models (local, free)</h2>
       <p class="muted">The Director plans the turn and the Lore-keeper checks
         continuity. Both are structured work a small local model does well, and
@@ -381,6 +397,15 @@ export async function renderSettings() {
             <input id="gc-seed" type="number" step="1" min="0"
               value="${st.generation.seed ?? ""}"></div>
         </div>
+        <div class="row">
+          <div><label>Min-p <span class="muted">(drops unlikely words; not every server uses it)</span></label>
+            <input id="gc-minp" type="number" step="0.01" min="0" max="1"
+              value="${st.generation.min_p ?? ""}"></div>
+        </div>
+        <label><input type="checkbox" id="gc-json" ${st.generation.json_mode ? "checked" : ""}>
+          Ask for strict JSON in the behind-the-scenes calls</label>
+        <p class="muted">For the planner, the memory summaries and other calls that must answer in JSON, asks the server to force valid
+          JSON. Story text is not affected. A server that refuses is noted in the story's health log and gets plain requests after that.</p>
       </details>
     </div>
 
@@ -502,12 +527,23 @@ export async function renderSettings() {
       hmTest.disabled = false;
     }
   });
+  // The OpenRouter block shows only for an OpenRouter address, and is saved only while it shows: saving another provider keeps it.
+  const isOpenRouter = () => {
+    try {
+      const h = new URL($("#hm-base").value.trim()).hostname.toLowerCase().replace(/\.$/, "");
+      return h === "openrouter.ai" || h.endsWith(".openrouter.ai");
+    } catch (_e) { return false; }
+  };
+  const syncRouting = () => { $("#or-routing").hidden = !isOpenRouter(); };
+  $("#hm-base").addEventListener("input", syncRouting);
+  syncRouting();
   $("#hm-preset").addEventListener("change", () => {
     const p = hosted.presets[Number($("#hm-preset").value)];
     if (!p) return;
     $("#hm-model").value = p.model;
     $("#hm-base").value = p.base_url;
     $("#hm-ctx").value = p.context;
+    syncRouting();
   });
   const pfStatus = m => {
     if (!$("#pf-status")) return;
@@ -585,6 +621,15 @@ export async function renderSettings() {
         presence_penalty: $("#gc-pres").value,
         repetition_penalty: $("#gc-rep").value,
         seed: $("#gc-seed").value,
+        min_p: $("#gc-minp").value,
+        json_mode: $("#gc-json").checked,
+        ...(isOpenRouter() ? {openrouter_provider: {
+          order: $("#or-order").value,
+          allow_fallbacks: !$("#or-only").checked,
+          data_collection: $("#or-deny").checked ? "deny" : "",
+          zdr: $("#or-zdr").checked,
+          require_parameters: $("#or-params").checked,
+        }} : {}),
       },
       quick_actions: $("#qa-global") ? $("#qa-global").value : "",
       local: {

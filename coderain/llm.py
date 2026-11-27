@@ -54,6 +54,39 @@ def is_lan(base_url) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
+def is_openrouter(base_url) -> bool:
+    """True for OpenRouter itself, matched on the whole host name."""
+    try:
+        host = (urlparse(str(base_url)).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
+def openrouter_provider(base_url, generation) -> dict | None:
+    """`generation.openrouter_provider`, sent to OpenRouter (and nowhere else) as its `provider` object: which providers may serve a
+    request, and whether they may keep or train on it. It carries the user's privacy choice, so it is never dropped when a request
+    fails, and a value that is not a mapping stops the request instead of going out without it (D-076)."""
+    block = (generation or {}).get("openrouter_provider")
+    if block in (None, "", {}) or not is_openrouter(base_url):
+        return None
+    if not isinstance(block, dict):
+        raise ValueError("generation.openrouter_provider must be a mapping such as {zdr: true}; nothing was sent, so that your "
+                         "provider settings are not ignored")
+    return dict(block)
+
+
+def json_overrides(llm, messages: list[dict]) -> dict:
+    """With `generation.json_mode: true`, ask the server to hold a JSON stage's reply to one JSON object (`response_format`). Only for a
+    prompt that itself asks for JSON, which some providers require, and never for prose."""
+    gen = getattr(llm, "gen", None)
+    if not isinstance(gen, dict) or gen.get("json_mode") is not True:
+        return {}
+    if not any("json" in str(m.get("content") or "").lower() for m in messages):
+        return {}
+    return {"response_format": {"type": "json_object"}}
+
+
 def needs_fold(base_url, model) -> bool:
     """Does this model need fold_late_system by default? A llama-family model on a server on this machine, and nothing else.
 
@@ -134,6 +167,11 @@ class LLM:
         # plain llama.cpp or Ollama endpoint will 400 on. One rejection turns it
         # off for the life of this client rather than breaking every turn.
         self._send_reasoning = True
+        # And for the two settings of D-076. `on_notice` is set by the Engine, so a
+        # setting the server would not take is said in the story's health log.
+        self._send_min_p = True
+        self._send_json_format = True
+        self.on_notice = None
 
     @contextlib.contextmanager
     def as_stage(self, stage: str):
@@ -174,34 +212,85 @@ class LLM:
         return self.client.chat.completions.create(**kw)
 
     def _create_stream(self, **kw):
-        """Ask for usage, and stop asking if this provider won't have it.
+        """Ask for usage, and stop sending an optional extension a server won't have.
 
         `stream_options` is an OpenAI extension; some OpenAI-compatible servers
         reject the unknown field with a 400. That must not break generation, so
         one 400 downgrades this client for the rest of its life and the turn
-        proceeds without accounting.
+        proceeds without accounting. `reasoning`, `min_p` and `response_format`
+        are given up the same way. OpenRouter's `provider` block never is: see
+        openrouter_provider.
         """
-        if not self._ask_usage:
-            return self._create(False, **kw)
+        want = self._ask_usage
         try:
-            return self._create(True, **kw)
+            return self._create(want, **kw)
         except Exception as e:  # noqa: BLE001 — inspected, then re-raised
-            status = getattr(e, "status_code", None)
-            text = str(e).lower()
-            rejected = (status in (400, 422) or "stream_options" in text
-                        or "unknown" in text or "unsupported" in text)
-            if not rejected:
+            if not _may_be_rejection(e):
                 raise                      # a real failure: auth, network, model
-            # Two optional extensions ride on this call. Drop `reasoning` first
-            # when the error names it: losing thinking control is a smaller loss
+            # An extension the error names goes first: losing it is a smaller loss
             # than losing token accounting, and dropping both on one 400 would
             # blind the usage log for a rejection that was never about usage.
-            if "reasoning" in text and self._send_reasoning:
-                self._send_reasoning = False
-                return self._create_stream(**_without_reasoning(kw))
-            self._ask_usage = False
-            return self._create(False, **_without_reasoning(kw)
-                                if not self._send_reasoning else kw)
+            named = self._drop_named(e, kw)
+            if named is not None:
+                return self._create_stream(**named)
+            if want:
+                self._ask_usage = False
+                return self._create_stream(**kw)
+            return self._retry_bare(lambda **k: self._create(False, **k), kw, e)
+
+    def _create_plain(self, **kw):
+        """A call without streaming (the memory tool's loop), with the same care for an extension the server won't take."""
+        try:
+            return self.client.chat.completions.create(**kw)
+        except Exception as e:  # noqa: BLE001 — inspected, then re-raised
+            if not _may_be_rejection(e):
+                raise
+            named = self._drop_named(e, kw)
+            if named is not None:
+                return self._create_plain(**named)
+            return self._retry_bare(self.client.chat.completions.create, kw, e)
+
+    def _drop_named(self, error, kw: dict) -> dict | None:
+        """The request without the optional extension the error names, which this client stops sending; None when it names none."""
+        text = str(error).lower()
+        eb = kw.get("extra_body") or {}
+        if "reasoning" in text and self._send_reasoning and "reasoning" in eb:
+            self._send_reasoning = False
+            return _without_reasoning(kw)
+        if "min_p" in text and "min_p" in eb:
+            self._send_min_p = False
+            self._notice(f"min_p is off for this model: {str(error)[:200]}")
+            return _without_extra(kw, "min_p")
+        if "response_format" in kw and any(s in text for s in ("response_format", "json_object", "json mode", "json_mode")):
+            self._send_json_format = False
+            self._notice(f"strict JSON replies are off for this model: {str(error)[:200]}")
+            return {k: v for k, v in kw.items() if k != "response_format"}
+        return None
+
+    def _retry_bare(self, send, kw: dict, error):
+        """The last try, without `min_p` and `response_format` for an error that named neither. They are given up only if that works:
+        a request that fails either way (too long, a bad model name) must not cost the settings for the rest of the session."""
+        bare = _without_extra(kw, "min_p")
+        bare.pop("response_format", None)
+        removed = [name for name, there in (("min_p", "min_p" in (kw.get("extra_body") or {})),
+                                            ("response_format", "response_format" in kw)) if there]
+        if not removed:
+            raise error
+        resp = send(**bare)
+        if "min_p" in removed:
+            self._send_min_p = False
+        if "response_format" in removed:
+            self._send_json_format = False
+        self._notice(f"the server took the request only without {' and '.join(removed)}, so this model gets neither from now on: "
+                     f"{str(error)[:200]}")
+        return resp
+
+    def _notice(self, message: str) -> None:
+        if self.on_notice:
+            try:
+                self.on_notice(message)
+            except Exception:  # noqa: BLE001 — logging must never kill a turn
+                pass
 
     def _params(self, **overrides) -> dict:
         g = self.gen
@@ -244,10 +333,21 @@ class LLM:
         if block is not None and self._send_reasoning:
             p.setdefault("extra_body", {})
             p["extra_body"] = {**p["extra_body"], "reasoning": block}                 if p.get("extra_body") else {"reasoning": block}
+        extras = {}
         if g.get("repetition_penalty") is not None:
+            extras["repetition_penalty"] = g["repetition_penalty"]
+        if g.get("min_p") is not None and self._send_min_p:
+            extras["min_p"] = g["min_p"]
+        route = openrouter_provider(self.profile.base_url, g)
+        if route:
+            extras["provider"] = route
+        if extras:
             eb = dict(p.get("extra_body") or {})
-            eb.setdefault("repetition_penalty", g["repetition_penalty"])
+            for key, value in extras.items():
+                eb.setdefault(key, value)
             p["extra_body"] = eb
+        if not self._send_json_format:
+            p.pop("response_format", None)
         return p
 
     def _wire(self, messages: list[dict]) -> list[dict]:
@@ -284,9 +384,10 @@ class LLM:
         it produces a final answer. Used for the optional memory-lookup tool on
         capable/hosted models. Not streamed."""
         params = self._params(**overrides)
+        params.pop("response_format", None)     # many servers refuse JSON mode alongside tools
         convo = list(self._wire(messages))
         for _ in range(max_rounds):
-            resp = self.client.chat.completions.create(
+            resp = self._create_plain(
                 model=self.profile.model, messages=convo,
                 tools=tools, tool_choice="auto", **params,
             )
@@ -313,7 +414,7 @@ class LLM:
                 convo.append({"role": "tool", "tool_call_id": c.id,
                               "content": str(result)})
         # ran out of rounds: force a final answer without tools
-        resp = self.client.chat.completions.create(
+        resp = self._create_plain(
             model=self.profile.model, messages=convo, **params,
         )
         self._record(getattr(resp, "usage", None))
@@ -378,13 +479,25 @@ JSON_MIN_TOKENS = 8192
 REQUEST_TIMEOUT_S = 300
 
 
+def _may_be_rejection(e) -> bool:
+    """Could this failure be a server turning down an optional field? Auth, network and server errors are not."""
+    status = getattr(e, "status_code", None)
+    text = str(e).lower()
+    return status in (400, 422) or "stream_options" in text or "unknown" in text or "unsupported" in text
+
+
 def _without_reasoning(kw: dict) -> dict:
     """A copy of the request kwargs with the `reasoning` extension removed, for
     the retry after a provider rejects it."""
+    return _without_extra(kw, "reasoning")
+
+
+def _without_extra(kw: dict, name: str) -> dict:
+    """A copy of the request kwargs without one `extra_body` field."""
     eb = kw.get("extra_body")
-    if not isinstance(eb, dict) or "reasoning" not in eb:
-        return kw
-    trimmed = {k: v for k, v in eb.items() if k != "reasoning"}
+    if not isinstance(eb, dict) or name not in eb:
+        return dict(kw)
+    trimmed = {k: v for k, v in eb.items() if k != name}
     out = dict(kw)
     if trimmed:
         out["extra_body"] = trimmed
@@ -476,6 +589,8 @@ def emit_json_ex(llm, system: str, payload: str = "", retry: int = 1,
         overrides.setdefault(
             "max_tokens", max(JSON_MIN_TOKENS,
                               int(llm.gen.get("max_tokens", 0) or 0)))
+        for key, value in json_overrides(llm, convo).items():
+            overrides.setdefault(key, value)
     err = "no attempts made"
     for _ in range(retry + 1):
         try:
