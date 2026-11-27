@@ -117,7 +117,21 @@ Gemma 4 E4B was weaker than `gemma3:4b` at using relationship facts (5 to 8 of 1
 "who is her brother" questions right against 9 to 10) and repeated a secret it
 was holding more readily. These are one or two runs each, and we tested a
 community quantisation of the model, not Google's own release. The numbers are in
-`docs/DECISIONS.md` (D-069 to D-071).
+`docs/DECISIONS.md` (D-069 to D-071). The two memory switches that help with such
+facts, on by default now, made it answer those questions clearly better (D-073).
+
+**Switching models?** From a source install, with Ollama running, this asks the
+model the same questions about an invented story and shows what got worse than the
+last model you checked:
+
+```
+.venv\Scripts\python.exe -m soak check --model <model name>
+```
+
+It looks at memory (who is tied to whom, who carries what, keeping a secret), the
+writing (not speaking for you, no refusals, reply length, copying itself) and
+whether the app can read the model's memory summaries and plans. The report goes to
+the `model-checks` folder, with every reply, so you can read what it scored.
 
 ### Optional: the memory reader
 

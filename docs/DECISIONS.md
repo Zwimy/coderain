@@ -3769,3 +3769,30 @@ that section has no guard.
 probe showing leaks clearly higher with them on, with the model in use.
 
 Tests: `link_follow_test` 14, `tail_ties_test` 9 and `loreweb_api_test` 7.
+
+
+## D-079: A fixed model check to run when switching models, scored by code (built 2026-11-27)
+
+**Why.** Models differ in ways a few turns of play do not show, or show only as a thinner memory: ties and possessions answered wrongly, a told secret
+coming out of the wrong mouth, the player's lines written for them, a memory summary the app cannot read (the turn goes on regardless). The play soak finds
+these at about an hour a run. The check asks the same questions of every model in minutes and compares with the last model checked.
+
+**How.** `python -m soak check --model NAME` (`soak/check.py`). One invented story (the soak's town, with its ties, possessions and two secrets told in a
+fixed six-exchange history) built afresh for each question, so one answer never reaches the next. The real engine, the app's shipped settings (the memory
+switches are not written, so the check runs what the app runs), temperature 0.9. Per round: the 12 graph-probe questions (D-058) with a plain ask, two
+actions with no words of the player's, two tense ones, one action asked short and long, three turns in a row for self-copying, and the three JSON jobs (memory
+summary, first chapter, quad planning step) read by the app's own code. Five checks apply to every reply. Two rounds by default: 42 replies and 6 JSON
+calls. A model call that fails stops the run with no report, since a report of failed calls would read as a bad model.
+
+**Scoring** is code, pass or fail: simple patterns that catch the plain forms and will miss some (a paraphrased leak such as "the northern beacon" counts as
+clean, as in the soak's scorer). So the report quotes failed replies and saves every reply.
+
+**Comparison.** With the newest report of another model by default (`--against` to choose, `none` for no comparison). A check is called worse or better
+only when its share of passes moves by a quarter AND by at least two replies: with a handful of replies, one is chance. A check with one reply a round
+therefore needs two rounds, both going the other way. Reports of another check version are not compared.
+
+**What would change this.** A scorer that is often wrong on a real model's replies: fix it and bump `PACK_VERSION`, which stops old reports being compared
+with new ones. A failure the owner meets in play that no check sees: add a check.
+
+Tests: `tests/soak_check_test.py`: an offline writer that passes every check and one that fails every check, each scorer's edge cases, the comparison's
+thresholds, the refusals, and a model that cannot be called.
