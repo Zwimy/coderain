@@ -50,7 +50,7 @@ CHECKS = {
     "holds": "Answers who is carrying what",
     "two_steps": "Answers two-step questions",
     "remembers": "A character told a secret remembers it",
-    "keeps_quiet": "Characters not told a secret do not say it",
+    "keeps_quiet": "A secret stays unsaid when you ask someone never told it",
     "your_words": "Leaves your words and choices to you",
     "in_story": "Stays in the story (no refusals or assistant talk)",
     "speaks_to_you": "Writes about \"you\", never as \"I\"",

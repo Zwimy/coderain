@@ -14,6 +14,8 @@ measured on another (D-081).
 - Facts switches, Gemma 4 E4B: over two measurements 6 of 20 off against 9 of 20 on (D-073). On by default anyway, the owner's
   call, with the writer rule as the only guard for a fact told in the story (D-078).
 - Story search can quote a secret to someone never told it; 3 against 4 of 10 on its first form. Off (D-075).
+- Open: the told character remembered a secret more often with the facts switches on in all three measurements, and why is
+  unknown (D-073, D-081).
 
 **Ties, who carries what, and two-step questions answered wrongly**
 - With the facts in the prompt the wrong answers are the Writer not using them, not retrieval (D-058 as corrected by D-059; D-071).
@@ -3879,5 +3881,14 @@ forgotten from the one told and as kept from the one not told. The saved D-073 r
 Naming someone by their work ("the keeper of the lighthouse") counts as naming them.
 
 **The habit** is in `CLAUDE.md` ("Measuring") and the index at the top of this file.
+
+**First use** (2026-11-27, Gemma 4 E4B heretic, check version 2, two rounds each; both runs on the code with D-080). The defaults are the new baseline:
+every question right but one two-step answer (3 of 4), the told secret recalled 4 of 4, kept quiet 5 of 8, the status block sent 36 of 42, longer
+replies when asked 1 of 2; the model wrote the status label twice and none reached the reader. Then both facts switches off, compared with it: **6 of 6
+predictions held** (ties, holders, two-step, your words and the status block about the same; keeping quiet not worse, 6 against 5 of 8). **Not
+predicted:** the character who was told remembered the secret in 1 of 4 with the switches off, against 4 of 4 with them on. The two D-073
+measurements leaned the same way (4 to 8 of 10, then 5 to 6 of 10), and the ties line carries no secret, so why is unknown: a new question, not a
+result. **One scored leak was not a character:** the narrator named the secret as the player's own memory while the person asked said something else. A
+secret is scored wherever the reply writes it (D-058's rule), so the check's label now says that.
 
 Tests: `soak_check_test.py` cases 1, 3, 5, 8 and 9.
