@@ -256,6 +256,10 @@ class Engine:
         # Follow one hop from what activated (an item's holder, a person's ties): off until a measured run says it
         # helps (D-059). `is True`, so a hand-written "false" string is not read as on.
         self.follow_links = config.memory.get("follow_links") is True
+        # Fold memory after the reply is handed over, while the next turn may already run (D-077). The web server runs it; every
+        # other front end folds inline as before. `fold_events` collects what background folds did, for the next reply's events.
+        self.background_folds = config.memory.get("background_folds") is True
+        self.fold_events: list[str] = []
         # Search the story's own words for what the action is about, before the history window (D-075). Off until asked for, `is True` as above.
         self.story_search = config.memory.get("story_search") is True
         self._searcher = None
@@ -469,6 +473,11 @@ class Engine:
             every = every[:-1]
         total = len(every)
         turns = every[-self.short_term:] if self.short_term > 0 else every
+        # A summary still being made in the background (D-077) has not covered its turns yet: keep every unsummarized turn, or
+        # the ones it is summarizing would be in neither the history nor memory for the reply written meanwhile.
+        unfolded_from = self._lagging_fold_start(total) if self.background_folds else None
+        if unfolded_from is not None and total - len(turns) > unfolded_from:
+            turns = every[unfolded_from:]
         limit = self.history_tokens * 4          # same chars-per-token estimate
         floor = HISTORY_FLOOR_TURNS              # as the rest of the engine uses
         while len(turns) > floor and \
@@ -479,9 +488,14 @@ class Engine:
         block = min(self.history_block, self.short_term // 4) if self.prompt_layout == "cache" else 0
         if block > 1 and turns:
             cut = -(-(total - len(turns)) // block) * block          # the start, up to the next multiple of the block
-            if total - cut >= floor:
+            if total - cut >= floor and (unfolded_from is None or cut <= unfolded_from):
                 turns = every[cut:]
         return turns
+
+    def _lagging_fold_start(self, total: int) -> int | None:
+        """Where the unsummarized turns start when a fold is overdue, else None."""
+        folded = int(self.store.state().get("folded_turns", 0) or 0)
+        return folded if total - folded > self.summarizer.medium_after else None
 
     def _authors_note_cfg(self) -> tuple[str, int]:
         """ST-21: per-save author's-note placement — depth ('system' | 'tail') and
@@ -1110,6 +1124,15 @@ class Engine:
         events = self._rpg_events + self.summarizer.maybe_fold(on_stage)
         self._rpg_events = []
         return events
+
+    def turn_events(self) -> list[str]:
+        """`maybe_fold` without the fold, for a server that folds in the background (D-077): this turn's mechanics events, and
+        what background folds have done since the last reply."""
+        if self.canon_shadow is not None:
+            self.canon_shadow.kick()
+        events, self._rpg_events = list(self._rpg_events), []
+        done, self.fold_events = self.fold_events, []
+        return events + done
 
     def _expand_authored(self, text: str) -> str:
         """ST-20: expand macros in a verbatim authored string (the opening), with

@@ -53,7 +53,7 @@ def edit_turn(slug: str, i: int, body: dict):
     if not text.strip():
         raise HTTPException(400, "a turn can't be blank: edit the text, or "
                                  "use Undo to remove the exchange")
-    with _exclusive():                       # don't rewrite the transcript mid-turn
+    with _exclusive(edits=False):            # don't rewrite the transcript mid-turn
         if not eng.store.update_turn(i, text):
             raise HTTPException(400, f"no turn at index {i}")
         eng._swipes = None
@@ -64,7 +64,7 @@ def edit_turn(slug: str, i: int, body: dict):
 def impersonate(slug: str):
     """Draft the player's next action (ST-04). Returns text; stores nothing."""
     eng = _engine(slug)
-    with _exclusive():
+    with _exclusive(edits=False):
         try:
             return {"text": eng.impersonate()}
         except HTTPException:
@@ -80,7 +80,7 @@ def swipe_browse(slug: str, body: dict):
     """Browse cached narrator alternates without generating (ST-02)."""
     eng = _engine(slug)
     direction = 1 if int(body.get("dir", 1)) >= 0 else -1
-    with _exclusive():                       # rewrites the tail turn — not mid-gen
+    with _exclusive(edits=False):            # rewrites the tail turn — not mid-gen
         out = eng.swipe_browse(direction)
     if out is None:
         raise HTTPException(400, "nothing to swipe")
@@ -107,7 +107,7 @@ def cancel_generation(slug: str):
 @router.post("/api/saves/{slug}/undo")
 def undo(slug: str):
     eng = _engine(slug)
-    with _exclusive():
+    with _exclusive(edits=False):
         ok = eng.undo_last()
         eng._swipes = None
     return {"ok": ok, "turns": len(eng.store.turns()),

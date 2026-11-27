@@ -3633,3 +3633,43 @@ forced JSON makes a thinking model answer emptily: then strict JSON becomes per 
 
 Tests: `tests/hosted_settings_test.py` (11 cases); 30 breaks tried in copies, all turned it red (one first slipped through and the test was
 strengthened).
+
+## D-077: Memory summaries after the reply, beside the next turn (built 2026-11-27)
+
+**Asked by the owner,** from the second architecture blueprint: summaries must not hold up the next turn, and one made from turns that a retry or a branch has
+since changed must not land. A fold was already run after the prose streamed, but the turn lock and the reply's "done" were held until it finished: on a
+real save, about 4,300 output tokens on 1 turn in 7, with Send refused all that time.
+
+**Three moves, one pipeline.** The fold is split into `next_step` (read what it will summarize), `ask` (the model call, which writes nothing but a health
+line on failure) and `apply_step` (write). The inline fold uses the same three, so the two paths cannot drift; its files and events are byte for byte what
+the step-by-step path produces.
+
+**With `memory.background_folds: true`** (Settings, "Summarize in the background"; off by default, only a real true) the web server sends "done" with this
+turn's mechanics events, then runs due folds on their own thread: the generation lock is held to read and to write, and free while the model answers. A
+turn, retry, swipe, Continue or undo goes ahead meanwhile. A turn that meets the lock during a write waits and says "Finishing the memory summary".
+Changes to the story's memory (files, plan, world, lore web, cast, merge, delete, branch, import) are refused with a plain message, as during a turn, so a
+summary made from the old text cannot overwrite them. Fold events ride the next reply, with "memory: writing a summary in the background" on the one that
+started it. One fold runs at a time. The CLI and the desktop app fold inline as before.
+
+**An outdated step writes nothing.** A scene step applies only if the fold pointer has not moved and the turns it summarized are word for word the same
+(turns added after them do not matter); a chapter that changed meanwhile is not advanced by it. An arc step applies only if the pointer, the scenes it read
+and `arc.md` are unchanged, so a hand-edited arc survives. A dropped step says so in the health log and is made again after a later turn. A fold stays one
+way (invariant 6): nothing is applied that is later undone.
+
+**While a summary is overdue, the history keeps every turn it has not covered**, past the short-term count and past the cache layout's block cut (D-072);
+the token ceiling still applies. Without this, the reply written meanwhile would have had the oldest unsummarized turns in neither history nor memory.
+
+**What stays under the lock:** planning the first chapters on a story's first fold, and planning the next chapter when one completes. Both are model calls,
+once in a while; a turn sent then waits for them.
+
+**Limits.** On a model on the same computer, the summary and the next reply share it: Ollama queues them or runs them side by side, each slower. What a
+local player gains is that the reply is theirs to read and answer at once; with a hosted model the two truly run together. If the app closes while a fold is
+being asked for, nothing was written and it is made again. The events of a fold that ends after the last turn of a session are not shown, though the memory
+is written.
+
+**Not measured:** how much time this saves a player, and whether the extra unsummarized turns in the prompt matter.
+
+**What would change this.** Outdated drops common enough to waste model calls (players who retry right after the turn a fold starts on): then the fold waits
+for the next turn before starting.
+
+Tests: `tests/background_fold_test.py` (10 cases, the server ones with a summary call held open on purpose); 22 breaks tried in copies, all turned it red.

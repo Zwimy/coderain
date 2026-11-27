@@ -24,6 +24,7 @@ keep it going — but everything is here, forever, for everyone.
 - **A real memory system, not a bigger context window.** Salience-ranked,
   alias-triggered lorebook activation; automatic summarization into scenes and an
   arc; optional semantic (vector) recall — all rebuildable from the Markdown.
+  Summaries can be written in the background, after you already have the reply.
 - **A lore web.** Who holds what, who is tied to whom and which entries link to
   each other form one web you can see and edit ("Lore web..."). Optionally, when
   something comes into play the writer is also told about what is connected to

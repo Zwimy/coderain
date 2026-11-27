@@ -273,6 +273,13 @@ export async function renderSettings() {
         has) and quotes them, so an exact line said long ago can come back. Works on its own by keyword; with semantic recall on, by
         meaning too.</p>
       <label>
+        <input type="checkbox" id="mm-bg" ${st.memory.background_folds ? "checked" : ""}>
+        Summarize in the background
+      </label>
+      <p class="muted">Every few turns the story so far is folded into a memory summary. With this on, you get the reply first and the
+        summary is written after it, so you can carry on at once. With a hosted model both can run together; a model on your own computer
+        is shared, so the next reply may be slower while a summary is written. While one is written, changing the story's memory waits.</p>
+      <label>
         <input type="checkbox" id="rt-enabled"
           ${st.retrieval.enabled ? "checked" : ""}>
         Semantic recall (find relevant past scenes by meaning, not just keywords)
@@ -596,6 +603,7 @@ export async function renderSettings() {
         follow_links: $("#mm-follow").checked,
         tail_ties: $("#mm-ties").checked,
         story_search: $("#mm-search").checked,
+        background_folds: $("#mm-bg").checked,
         short_term_turns: $("#mm-short").value,
         medium_fold_after: $("#mm-mafter").value,
         medium_fold_size: $("#mm-msize").value,

@@ -180,7 +180,7 @@ class Summarizer:
         self.long_size = max(1, int(m.get("long_fold_size", 4)))
 
     # --- LLM call: thinking ON, JSON out, one retry ---
-    def _emit_json(self, instruction: str, payload: str) -> dict | None:
+    def _emit_json(self, instruction: str, payload: str, llm=None) -> dict | None:
         """The fold's one model call.
 
         emit_json_ex, not emit_json: the reason a fold's JSON failed is the most
@@ -192,8 +192,9 @@ class Summarizer:
         true, and useless for fixing it.
         """
         rules = self.store.read("memory-rules.md").strip()
-        with llm_stage(self.llm, "fold"):
-            obj, err = emit_json_ex(self.llm, rules + "\n\n" + instruction,
+        llm = self.llm if llm is None else llm
+        with llm_stage(llm, "fold"):
+            obj, err = emit_json_ex(llm, rules + "\n\n" + instruction,
                                     payload)
         if obj is None and err:
             self.store.log_degraded("fold", f"fold JSON failed: {err}"[:400])
@@ -594,14 +595,24 @@ class Summarizer:
     # --- the folds ---
     def _fold_scene(self, turns: list[dict], scene_no: int,
                     start_turn: int) -> list[str]:
-        events = [f"memory: folded scene {scene_no}"]
+        payload, chapter_hint = self._scene_request(turns)
+        obj = self._emit_json(SCENE_INSTRUCTION, payload)
+        return self._apply_scene(obj, turns, scene_no, start_turn, chapter_hint)
+
+    def _scene_request(self, turns: list[dict]) -> tuple[str, str]:
+        """(what a scene fold of `turns` asks the model, the chapter hint it carries)."""
         # Hand the active chapter to the fold so it can report chapter_goal_met for
         # free (no extra call). Empty string when there's no outline.
         chapter_hint = self.planner.active_fold_hint() if self.planner else ""
         payload = self._existing_context(turns) \
             + (("\n\n" + chapter_hint) if chapter_hint else "") \
             + "\n\nTURNS:\n" + _turns_text(turns)
-        obj = self._emit_json(SCENE_INSTRUCTION, payload)
+        return payload, chapter_hint
+
+    def _apply_scene(self, obj: dict | None, turns: list[dict], scene_no: int,
+                     start_turn: int, chapter_hint: str) -> list[str]:
+        """Write what the model answered about `turns`: promotions, clock, facts, the scene, its timeline line, the chapter."""
+        events = [f"memory: folded scene {scene_no}"]
         summary = ""
         shorthand = ""
         if obj:
@@ -802,9 +813,14 @@ class Summarizer:
         None, or those scenes are marked absorbed by a synopsis that never
         mentions them. Unlike a scene fold there is nothing destructive here, so
         a failure can simply be retried on the next fold cycle."""
-        payload = "CURRENT ARC:\n" + (self.store.read("memory/arc.md")) \
+        return self._apply_arc(self._emit_json(ARC_INSTRUCTION, self._arc_request(scenes)))
+
+    def _arc_request(self, scenes: list[Entry]) -> str:
+        return "CURRENT ARC:\n" + (self.store.read("memory/arc.md")) \
             + "\n\nOLDER SCENES:\n" + "\n\n".join(e.render() for e in scenes)
-        obj = self._emit_json(ARC_INSTRUCTION, payload)
+
+    def _apply_arc(self, obj: dict | None) -> list[str] | None:
+        """Write the new synopsis, or None when the model gave nothing usable."""
         if obj and str(obj.get("arc", "")).strip():
             # Demote any `## ` the model put INSIDE its synopsis. _arc_tail
             # preserves everything from the second top-level heading onward as
@@ -850,6 +866,123 @@ class Summarizer:
                 return "\n" + "\n".join(lines[i:]).rstrip("\n") + "\n"
         return ""
 
+    # ---- folds in three moves: prepare, ask, apply (D-077) -------------------------------------------------------
+    # A fold's model call is its slow part. Split from what it writes, it can run while the next turn is generated:
+    # `next_step` and `apply_step` read and write the story (hold the turn lock), `ask` only calls the model. A step
+    # whose story changed while the model answered is refused by `apply_step` and made again later. The ordinary,
+    # inline fold below uses the same three moves, so the two cannot drift apart.
+    def _arc_due(self, state: dict, scenes: list[Entry]) -> bool:
+        # Holding the pointer on a failed arc fold (in apply_step) leaves this
+        # condition true, and folds are checked after EVERY turn — so without a
+        # stall marker a persistently failing arc call re-ran every single turn:
+        # a model call and a full story snapshot each time, and the snapshot
+        # retention pool evicted every real restore point within a few turns.
+        # The payload doesn't shrink between attempts either, so a size-driven
+        # failure never recovers on its own. Retry once per NEW scene instead —
+        # the same cadence it had back when it advanced the pointer.
+        folded_sc = int(state.get("folded_scenes", 0))
+        return (len(scenes) - folded_sc > self.long_after
+                and state.get("arc_fold_stalled_at") != len(scenes)
+                and bool(scenes[folded_sc:folded_sc + self.long_size]))   # nothing to fold: never spin on an empty slice
+
+    def _scene_due(self, state: dict) -> bool:
+        return len(self.store.turns()) - int(state.get("folded_turns", 0)) > self.medium_after
+
+    def due(self) -> bool:
+        state = self.store.state()
+        return self._scene_due(state) or self._arc_due(state, self.store.entries("memory/scenes.md"))
+
+    def prepare(self, snapped: bool, on_stage=None) -> list[str]:
+        """Before a step: one snapshot per run of folds (`snapped` says it is taken), and the chapter plan seeded."""
+        events: list[str] = []
+        if not snapped:
+            self.store.snapshot(keep=self.snapshot_keep)
+        # Seed the chapter plan on the first real fold — bundled with a call the
+        # fold is making anyway, so it's rate-limited to fold cadence rather than
+        # attempted every turn. Idempotent after the first success.
+        if self.planner is not None and self._scene_due(self.store.state()):
+            if self.planner.needs_seed() and on_stage:
+                on_stage("Planning chapters")
+            events += self.planner.ensure_seeded()
+        return events
+
+    def _active_chapter(self) -> str:
+        active = self.planner.active() if self.planner else None
+        return active.slug if active is not None else ""
+
+    def next_step(self) -> dict | None:
+        """What the next due fold will ask the model, with what it was made from; None when nothing is due."""
+        state = self.store.state()
+        if self._scene_due(state):
+            folded = int(state.get("folded_turns", 0))
+            chunk = self.store.turns()[folded:folded + self.medium_size]
+            payload, hint = self._scene_request(chunk)
+            return {"kind": "scene", "folded": folded, "chunk": chunk, "payload": payload, "hint": hint,
+                    "chapter": self._active_chapter(), "note": f"Folding memory: scene {self._next_scene_no()}"}
+        scenes = self.store.entries("memory/scenes.md")
+        if self._arc_due(state, scenes):
+            folded = int(state.get("folded_scenes", 0))
+            chunk = scenes[folded:folded + self.long_size]
+            return {"kind": "arc", "folded": folded, "renders": [e.render() for e in chunk],
+                    "payload": self._arc_request(chunk), "arc": self.store.read("memory/arc.md"),
+                    "note": f"Updating the long-term arc ({len(chunk)} scenes)"}
+        return None
+
+    def ask(self, step: dict, llm=None) -> dict | None:
+        """The step's model call. It writes nothing but a health line when it fails."""
+        instruction = SCENE_INSTRUCTION if step["kind"] == "scene" else ARC_INSTRUCTION
+        if llm is None:
+            return self._emit_json(instruction, step["payload"])
+        return self._emit_json(instruction, step["payload"], llm=llm)
+
+    def apply_step(self, step: dict, obj: dict | None) -> list[str] | None:
+        """Write the step's answer if what it summarized is still what the story holds. None: outdated, nothing written."""
+        state = self.store.state()
+        if step["kind"] == "scene":
+            folded = int(state.get("folded_turns", 0))
+            chunk = self.store.turns()[folded:folded + len(step["chunk"])]
+            if folded != step["folded"] or _turn_keys(chunk) != _turn_keys(step["chunk"]):
+                return None
+            # A chapter changed meanwhile: "its goal has landed" would be about the chapter the model was shown.
+            hint = step["hint"] if self._active_chapter() == step["chapter"] else ""
+            events = self._apply_scene(obj, chunk, self._next_scene_no(), folded + 1, hint)
+            # Advance by the ACTUAL chunk length, never the configured size — a
+            # short tail chunk (or a hand-edited size > after) must not overshoot
+            # and silently drop the turns in between.
+            state = self.store.state()
+            state["folded_turns"] = folded + len(chunk)
+            self.store.write_state(state)
+            return events
+        folded = int(state.get("folded_scenes", 0))
+        scenes = self.store.entries("memory/scenes.md")
+        chunk = scenes[folded:folded + len(step["renders"])]
+        if (folded != step["folded"] or [e.render() for e in chunk] != step["renders"]
+                or self.store.read("memory/arc.md") != step["arc"]):      # an arc edited by hand meanwhile is kept
+            return None
+        events = self._apply_arc(obj)
+        if events is None:
+            # Advancing here marked these scenes "absorbed into the arc" when
+            # the synopsis had not changed at all: they left context the
+            # moment they passed scenes_tail and nothing anywhere recorded
+            # that they were never summarized. Leave the pointer where it is
+            # so a later cycle retries; the stall marker stops it spinning.
+            state["arc_fold_stalled_at"] = len(scenes)
+            self.store.write_state(state)
+            self.store.log_degraded(
+                "arc-fold", f"{len(chunk)} scene(s) produced no synopsis; "
+                            "pointer held, will retry when a new scene folds")
+            return []
+        # By the ACTUAL chunk length, never the configured size — the scene
+        # fold above says exactly this in a comment, and the arc fold once
+        # did the thing that comment warns about. With long_fold_size > long_fold_after
+        # (both accepted by Settings) the counter overshot the scenes that
+        # exist, and everything in the gap was never arc-folded: gone from
+        # context the moment it passed scenes_tail.
+        state["folded_scenes"] = folded + len(chunk)
+        state.pop("arc_fold_stalled_at", None)   # it worked; clear the stall
+        self.store.write_state(state)
+        return events
+
     def maybe_fold(self, on_stage=None) -> list[str]:
         """Run any due folds; returns human-readable event strings.
 
@@ -860,84 +993,25 @@ class Summarizer:
         save: ~4,300 output tokens per fold, on 1 turn in 7). It is a loop, too,
         so a backlog does several in a row.
         """
-        def note(msg: str) -> None:
-            if on_stage:
-                on_stage(msg)
-
         events: list[str] = []
-        turns = self.store.turns()
-        state = self.store.state()
-        folded = int(state.get("folded_turns", 0))
         snapped = False
-
-        while len(turns) - folded > self.medium_after:
-            if not snapped:
-                self.store.snapshot(keep=self.snapshot_keep)
-                snapped = True
-            # Seed the chapter plan on the first real fold — bundled with a call the
-            # fold is making anyway, so it's rate-limited to fold cadence rather than
-            # attempted every turn. Idempotent after the first success.
-            if self.planner is not None:
-                if self.planner.needs_seed():
-                    note("Planning chapters")
-                events += self.planner.ensure_seeded()
-            chunk = turns[folded:folded + self.medium_size]
-            scene_no = self._next_scene_no()
-            note(f"Folding memory: scene {scene_no}")
-            events += self._fold_scene(chunk, scene_no, folded + 1)  # 1-based start
-            # Advance by the ACTUAL chunk length, never the configured size — a
-            # short tail chunk (or a hand-edited size > after) must not overshoot
-            # and silently drop the turns in between.
-            folded += len(chunk)
-            state["folded_turns"] = folded
-            self.store.write_state(state)
-
-        scenes = self.store.entries("memory/scenes.md")
-        folded_sc = int(state.get("folded_scenes", 0))
-        # Holding the pointer on a failed arc fold (below) leaves this loop's
-        # condition true, and maybe_fold runs after EVERY turn — so without a
-        # stall marker a persistently failing arc call re-ran every single turn:
-        # a model call and a full story snapshot each time, and the snapshot
-        # retention pool evicted every real restore point within a few turns.
-        # The payload doesn't shrink between attempts either, so a size-driven
-        # failure never recovers on its own. Retry once per NEW scene instead —
-        # the same cadence it had back when it advanced the pointer.
-        while len(scenes) - folded_sc > self.long_after \
-                and state.get("arc_fold_stalled_at") != len(scenes):
-            if not snapped:
-                self.store.snapshot(keep=self.snapshot_keep)
-                snapped = True
-            chunk = scenes[folded_sc:folded_sc + self.long_size]
-            if not chunk:
-                break              # nothing left to fold; never spin on an empty slice
-            note(f"Updating the long-term arc ({len(chunk)} scenes)")
-            arc_events = self._fold_arc(chunk)
-            if arc_events is None:
-                # Advancing here marked these scenes "absorbed into the arc" when
-                # the synopsis had not changed at all: they left context the
-                # moment they passed scenes_tail and nothing anywhere recorded
-                # that they were never summarized. Leave the pointer where it is
-                # so a later cycle retries, and BREAK rather than continue —
-                # the loop condition is still true, so continuing would spin.
-                state["arc_fold_stalled_at"] = len(scenes)
-                self.store.write_state(state)
-                self.store.log_degraded(
-                    "arc-fold", f"{len(chunk)} scene(s) produced no synopsis; "
-                                "pointer held, will retry when a new scene folds")
+        while self.due():
+            events += self.prepare(snapped, on_stage)
+            snapped = True
+            step = self.next_step()
+            if step is None:
                 break
-            events += arc_events
-            # By the ACTUAL chunk length, never the configured size — the scene
-            # loop above says exactly this in a comment, and this loop did the
-            # thing that comment warns about. With long_fold_size > long_fold_after
-            # (both accepted by Settings) the counter overshot the scenes that
-            # exist, and everything in the gap was never arc-folded: gone from
-            # context the moment it passed scenes_tail.
-            folded_sc += len(chunk)
-            state["folded_scenes"] = folded_sc
-            state.pop("arc_fold_stalled_at", None)   # it worked; clear the stall
-            self.store.write_state(state)
-
+            if on_stage:
+                on_stage(step["note"])
+            got = self.apply_step(step, self.ask(step))
+            if got is None:
+                break          # something else changed the story under it: leave it for the next turn
+            events += got
         return events
+
+
+def _turn_keys(turns: list[dict]) -> list[tuple[str, str]]:
+    return [(t.get("role", ""), t.get("text", "")) for t in turns]
 
 
 def _slugify(s: str) -> str:

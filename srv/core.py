@@ -7,6 +7,7 @@ at import time."""
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import tempfile
 import threading
@@ -60,6 +61,14 @@ _gen_lock = threading.Lock()
 # chunks/stages and bails; closing the inner generator then runs turn()'s
 # cleanup, so a stopped turn leaves no orphan behind.
 _cancel = threading.Event()
+
+# Background memory folds (D-077): at most one at a time. While one is in flight (asking the model or writing), edits to a
+# story are refused as during a turn, but turns, retries, swipes and undo go ahead. It takes the generation lock only to read
+# what it will summarize and to write the answer, so a request that finds the lock held by that wait for it, which
+# `_turn_active` (a streamed turn holds the lock) tells apart from a second turn.
+_fold_busy = threading.Event()
+_turn_active = threading.Event()
+FOLD_WAIT_S = 600      # a fold's write can include planning the next chapter, a model call
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -140,16 +149,66 @@ def _model_error_text(exc: BaseException) -> str:
 
 
 @contextlib.contextmanager
-def _exclusive():
+def _exclusive(edits: bool = True):
     """Run a save-mutating (non-streaming) op under the single generation lock,
     failing fast with 409 rather than blocking if a turn is in flight — so an
-    edit/undo/delete never races a generation nor hangs on a stuck stream."""
-    if not _gen_lock.acquire(blocking=False):
+    edit/undo/delete never races a generation nor hangs on a stuck stream.
+
+    `edits` (the default) is refused while a background fold is in flight (D-077): a
+    summary made from the old text must not overwrite a change made meanwhile. Undo,
+    swipe and turn edits pass False; the fold checks the transcript before writing."""
+    if edits and _fold_busy.is_set():
+        raise HTTPException(409, "a memory summary is still being written, try again in a moment")
+    if not _gen_lock.acquire(blocking=False) and not _wait_for_fold_write():
         raise HTTPException(409, "a turn is generating, try again in a moment")
     try:
         yield
     finally:
         _gen_lock.release()
+
+
+def _wait_for_fold_write() -> bool:
+    """When the lock is held by a background fold's write rather than by a turn, wait for it. -> the lock is ours."""
+    return _fold_busy.is_set() and not _turn_active.is_set() and _gen_lock.acquire(timeout=FOLD_WAIT_S)
+
+
+def _start_background_fold(eng: Engine) -> bool:
+    """Start the due folds on their own thread (D-077). Called with the generation lock held, after a turn."""
+    if _fold_busy.is_set() or not eng.summarizer.due():
+        return False
+    _fold_busy.set()
+    threading.Thread(target=_fold_in_background, args=(eng,), daemon=True, name="coderain-fold").start()
+    return True
+
+
+def _fold_in_background(eng: Engine) -> None:
+    """Run the due folds: read under the lock, ask the model without it, write under it. A step whose story changed while
+    the model answered is dropped (and said so); it is made again after a later turn."""
+    try:
+        llm = copy.copy(eng.llm)        # its own stage label, so a turn running meanwhile is not billed as the fold
+        snapped = False
+        while True:
+            with _gen_lock:
+                if not eng.summarizer.due():
+                    return
+                eng.fold_events += eng.summarizer.prepare(snapped)
+                snapped = True
+                step = eng.summarizer.next_step()
+            if step is None:
+                return
+            answer = eng.summarizer.ask(step, llm=llm)            # the slow part, with the lock free
+            with _gen_lock:
+                got = eng.summarizer.apply_step(step, answer)
+                if got is not None:
+                    eng.fold_events += got
+            if got is None:
+                eng.store.log_degraded("fold", "the story changed while a background summary was written; it was dropped "
+                                               "and will be made again")
+                return
+    except Exception as e:  # noqa: BLE001 - a background thread must not die silently
+        eng.store.log_degraded("fold", f"background summary failed: {type(e).__name__}: {e}"[:400])
+    finally:
+        _fold_busy.clear()
 
 
 def _engine(slug: str) -> Engine:
@@ -236,9 +295,14 @@ def _stream_generation(slug: str, run):
 
     def gen():
         if not _gen_lock.acquire(blocking=False):
-            yield _sse({"t": "error", "code": "busy",
-                        "text": _MODEL_ERROR_TEXT["busy"]})
-            return
+            waiting = _fold_busy.is_set() and not _turn_active.is_set()
+            if waiting:
+                yield _sse({"t": "stage", "text": "Finishing the memory summary"})
+            if not (waiting and _wait_for_fold_write()):
+                yield _sse({"t": "error", "code": "busy",
+                            "text": _MODEL_ERROR_TEXT["busy"]})
+                return
+        _turn_active.set()
         _cancel.clear()
         it = None
         try:
@@ -265,25 +329,31 @@ def _stream_generation(slug: str, run):
             # Run it on a worker and pump its stage notes out as they appear.
             # The turn lock is still held for the whole thing (a fold must not
             # race the next turn), so this changes what the reader SEES, not
-            # when the request completes.
-            fold_out: dict = {}
+            # when the request completes. With background folds (D-077) the reply
+            # is handed over first, and the fold runs after it, beside the next turn.
+            if eng.background_folds:
+                events = eng.turn_events()
+                if _start_background_fold(eng):
+                    events.append("memory: writing a summary in the background")
+            else:
+                fold_out: dict = {}
 
-            def _fold():
-                try:
-                    fold_out["events"] = eng.maybe_fold(notes.append)
-                except Exception as exc:      # noqa: BLE001 — surfaced below
-                    fold_out["error"] = exc
+                def _fold():
+                    try:
+                        fold_out["events"] = eng.maybe_fold(notes.append)
+                    except Exception as exc:      # noqa: BLE001 — surfaced below
+                        fold_out["error"] = exc
 
-            worker = threading.Thread(target=_fold, daemon=True)
-            worker.start()
-            while worker.is_alive() or notes:
-                while notes:
-                    yield _sse({"t": "stage", "text": notes.pop(0)})
-                if worker.is_alive():
-                    worker.join(timeout=0.25)
-            if "error" in fold_out:
-                raise fold_out["error"]
-            events = fold_out.get("events", [])
+                worker = threading.Thread(target=_fold, daemon=True)
+                worker.start()
+                while worker.is_alive() or notes:
+                    while notes:
+                        yield _sse({"t": "stage", "text": notes.pop(0)})
+                    if worker.is_alive():
+                        worker.join(timeout=0.25)
+                if "error" in fold_out:
+                    raise fold_out["error"]
+                events = fold_out.get("events", [])
             # ST-31: hand back the final STORED narrator text so the client can
             # settle the streamed (raw) turn onto the regex-cleaned version.
             tail = eng.store.turns()
@@ -305,6 +375,7 @@ def _stream_generation(slug: str, run):
             # player turn) rather than waiting for GC, then always free the lock.
             if it is not None:
                 it.close()
+            _turn_active.clear()
             _gen_lock.release()
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
