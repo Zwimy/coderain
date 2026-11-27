@@ -3613,7 +3613,8 @@ never the story's own words, and the memory tool resolved only a turn range, a s
 indexed in `<save>/search.db`: SQLite FTS5 with Porter stemming, ranked by BM25. A passage must hold at least two of the action's search words (one if there
 is only one); stop words are not searched. With semantic recall on, the same embedder also ranks passages by meaning (cosine above 0.3, at most 64 new
 embeddings a turn, so a long story catches up over a few turns), and the two lists are merged by reciprocal rank fusion (k 60). The prompt gets at most 3
-passages, one per turn, in story order, at most 1,500 characters, quoted with their turn number, the player's lines marked: the section "From earlier in the
+passages, one per turn, in story order, at most 1,500 characters, quoted with their turn number, the player's lines marked, at most one of them the
+player's, and none that adds no word to the action (both added after the measured run below): the section "From earlier in the
 story", in the per-turn message below the history (D-072) and first to give way under a tight budget. Only turns BEFORE the history window are searched; not
 for Continue, the opening, the move suggestion or the Context panel, whose input is the app's own words. A `{{macro}}` in story text is kept as text. When
 the memory tool's reference matches no timeline line or scene, it is searched for in the story itself. That part is not behind the switch, since it only
@@ -3630,14 +3631,46 @@ Ollama does not add them. Measured on this machine, 16 questions over 30 passage
 (all 16 in the top three, mean reciprocal rank 0.969), with them 13 of 16 first (all 16 in the top three, 0.896). Not added. A larger test that shows a gain
 would change that.
 
-**Not measured:** whether the Writer uses a quoted passage, and how often a search brings an unrelated one into a long story. **Limit:** a passage is the
+**Measured, first form (2026-11-27):** the relationship and secrets probe of D-071 on Gemma 4 E4B, 120 turns, seeds 5 and 6, search on, against the
+`cache` runs of D-072 with it off.
+
+| (both seeds pooled; per seed in brackets) | search off | search on |
+|---|---|---|
+| one-hop answers right | 14 of 24 (8, 6) | 13 of 24 (8, 5) |
+| two-hop answers right | 5 of 10 (3, 2) | 3 of 10 (1, 2) |
+| the told secret recalled | 5 of 10 (3, 2) | 7 of 10 (4, 3) |
+| the secret said by someone not told (leak) | 3 of 10 (1, 2) | 4 of 10 (2, 2) |
+| words a reply, mean | 322, 327 | 314, 309 |
+
+These are small counts and not a verdict either way. Two things limit them. In every recall question the secret was already in the prompt with search
+off, so this probe cannot show the one thing the search is for, bringing back what has left the prompt. And the drop in hop answers was on first asks
+(10 to 6 of 18), not on repeated ones, so the repeats below do not explain it. The health lines (1 and 18) are all fold housekeeping; the search never
+failed.
+
+**What the quotes showed, and the fix.** 136 of 153 quotes were the player's own lines, and 21 of 54 questions had the same question, asked earlier,
+quoted back. An action shares its words with earlier actions, and BM25 ranks short passages high, so they beat the paragraphs that say what happened.
+Now a passage that adds no word to the action (in any form) is left out, one new word being enough so that a short answer survives, and at most one
+quote is the player's, since what the player told someone is theirs. The same two stories replayed through the old and the new code, no model:
+
+| over 54 questions, 162 quotes | before | after |
+|---|---|---|
+| quotes that are the player's own lines | 139 | 54 |
+| questions quoting the same question back | 24 | 0 |
+| recall questions where a quote holds the secret (of 10) | 3 | 5 |
+| leak questions where a quote holds the secret (of 10) | 2 | 3 |
+
+(The replay approximates the history window, hence 139 where the run quoted 136.) The last two rows are one thing seen twice: the better the search
+finds what was told, the more often it puts it in front of someone who was not told.
+
+**Not measured:** the fixed form on a model, whether the Writer uses a quote, and whether a search helps once something has left the prompt, which
+needs a probe whose told fact is gone from memory. **Limit:** a passage is the
 story as the player saw it, so a secret one character whispered can be quoted when someone asks about its subject; nothing tracks who heard what.
 
 **What would change this.** Passages that mislead the Writer more than they help in a measured run, or noise on most turns: then the two-word rule goes up or
 the search runs only when the action asks about the past.
 
-Tests: `tests/storysearch_test.py` (9 cases); 22 breaks tried in copies, 21 turned a test red; the last changes nothing the code can reach, because the
-per-turn list is checked first. Three first slipped through and the tests were strengthened.
+Tests: `tests/storysearch_test.py` (10 cases); 28 breaks tried in copies, all turned it red. The new filter had left an older check, one quote a turn,
+testing nothing (both its passages now added no word); a break that stayed green showed it, and the check was rebuilt.
 
 ## D-076: Hosted model settings: OpenRouter provider choice, Min-p, strict JSON (built 2026-11-27)
 

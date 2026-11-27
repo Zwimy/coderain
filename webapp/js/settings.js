@@ -270,8 +270,8 @@ export async function renderSettings() {
         Search the story's own words
       </label>
       <p class="muted">For each action, finds up to three passages from earlier in the story (before the recent turns the writer already
-        has) and quotes them, so an exact line said long ago can come back. Works on its own by keyword; with semantic recall on, by
-        meaning too.</p>
+        has) and quotes them, so an exact line said long ago can come back. At most one is an earlier line of yours. Works on its own by
+        keyword; with semantic recall on, by meaning too. It can also quote a secret to a character who was never told it.</p>
       <label>
         <input type="checkbox" id="mm-bg" ${st.memory.background_folds ? "checked" : ""}>
         Summarize in the background

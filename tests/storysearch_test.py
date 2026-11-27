@@ -12,6 +12,8 @@
     off by default and for anything but a real true; never for Continue; the first to go under a tight budget; a broken index costs no turn
  8) the memory tool: a reference the timeline does not know is looked up in the story itself
  9) a branch and an export carry no search index, nor SQLite's side files
+10) the player's own lines: a line that adds no word to the action is not quoted, a short answer that adds one is, at most one of
+    the quotes is the player's, and what the player told someone is still found
 """
 import os
 import sqlite3
@@ -96,10 +98,12 @@ def test_keyword():
     assert found(store, "heron") and found(store, "heron")[0][0] == 6, "a single search word needs only itself"
     assert found(store, "salt barge lamp", before=1) == [], "a turn inside the window was searched"
     assert [t for t, _r, _p in found(store, "salt barge lamp", before=2)] == [2]
-    two = "The lamp lamp lamp, the salt barge. " * 12 + "\n\n" + "The salt barge lamp. " * 20           # two passages in one turn
+    # two passages in one turn, each with a word the search does not have, so that either alone would be quoted
+    two = "The lamp lamp lamp, the salt barge, gulls. " * 10 + "\n\n" + "The salt barge lamp, herons. " * 16
     assert len(passages(two)) == 2, "the control proves nothing"
     say(store, ("player", "I ask about the lamp."), ("narrator", two))
     turns = [t for t, _r, _p in found(store, "salt barge lamp")]
+    assert turns.count(len(store.turns())) == 1, ("the turn with two passages is quoted, once", turns)
     assert len(turns) == len(set(turns)) and turns == sorted(turns), ("one per turn, in story order", turns)
     print("3. found by words in any form, only before the window, one per turn in story order; one shared word of many is not enough")
 
@@ -280,6 +284,40 @@ def test_copies():
     print("9. a branch, a duplicate and an export carry no index and none of SQLite's side files")
 
 
+def test_your_own_lines():
+    store = story()
+    say(store,
+        ("player", "I ask who holds the salt ledger!"),                      # the same question, asked before: adds nothing
+        ("narrator", "Corwin holds the salt ledger."),                       # a short answer: one new word
+        ("player", "I tell Dessa the salt ledger is hidden under the north beacon."),
+        ("narrator", "Dessa nods and says nothing."),
+        ("player", "I ask Bram whether the salt ledger holds the ferry debts."),
+        ("narrator", "Bram shrugs at the ferry."),
+        ("player", "I carry the salt ledger down to the quay."))
+    asked = "I ask who holds the salt ledger."
+    got = found(store, asked)
+    turns = [t for t, _r, _p in got]
+    assert 1 not in turns, ("the same question asked before was quoted back", got)
+    assert 2 in turns, ("a short answer with one new word was dropped", got)
+    assert sum(1 for _t, r, _p in got if r == "player") == 1, ("more or fewer than one of the player's lines", got)
+    only_yours = story()
+    say(only_yours, ("player", "I hide the salt ledger in the loft."), ("narrator", "Quiet."),
+        ("player", "I move the salt ledger to the cellar."), ("narrator", "Quiet."))
+    assert len(found(only_yours, "salt ledger")) == 1, found(only_yours, "salt ledger")
+    told = found(store, "I ask Dessa what I told her about the salt ledger.")
+    assert any("north beacon" in p for _t, _r, p in told), ("what the player told someone was not found", told)
+    assert not storysearch.adds_something(storysearch._words("who holds the salt ledger"), "Holding the salt ledgers."),         "another form of the same words is not new"
+    # forty words that share no opening, so the crude word matching cannot take one for a form of another
+    long_action = " ".join(a + b for a in ("brim", "colt", "dusk", "fern", "glow", "hush", "kiln", "moss") for b in
+                           ("ar", "en", "id", "or", "um"))
+    assert len(query_terms(long_action)) == storysearch.MAX_TERMS < len(long_action.split()), "the control proves nothing"
+    assert not storysearch.adds_something(storysearch._words(long_action), long_action), "a long action's own words are not new"
+    again = story()
+    say(again, ("player", long_action), ("narrator", "Quiet."))
+    assert found(again, long_action) == [], ("a long action asked before was quoted back", found(again, long_action))
+    print("10. a line that adds nothing is not quoted, one new word is enough, one quote at most is yours, and what you told is found")
+
+
 test_passages()
 test_terms()
 test_keyword()
@@ -289,4 +327,5 @@ test_block()
 test_engine()
 test_memory_tool()
 test_copies()
+test_your_own_lines()
 print("\nSTORY SEARCH TESTS PASSED")

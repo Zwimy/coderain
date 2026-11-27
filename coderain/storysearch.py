@@ -18,6 +18,7 @@ import sqlite3
 
 PASSAGE_CHARS = 500
 TOP_K = 3
+MAX_YOURS = 1                   # of TOP_K, the player's own earlier lines (see search)
 MAX_CHARS = 1500                # the whole section
 CANDIDATES = 40                 # per ranked list, before the two are merged
 RRF_K = 60
@@ -66,6 +67,11 @@ def passages(text: str) -> list[str]:
 
 
 def query_terms(text: str) -> list[str]:
+    """The words of `text` to search for: the first MAX_TERMS of those worth searching."""
+    return _words(text)[:MAX_TERMS]
+
+
+def _words(text: str) -> list[str]:
     """The words of `text` worth searching for, in order, each once."""
     words = re.findall(r"[^\W_]+(?:'[^\W_]+)?", (text or "").lower())
     out: list[str] = []
@@ -73,7 +79,7 @@ def query_terms(text: str) -> list[str]:
         w = w.split("'")[0]
         if len(w) >= 3 and w not in STOPWORDS and w not in out:
             out.append(w)
-    return out[:MAX_TERMS]
+    return out
 
 
 def _stem(term: str) -> str:
@@ -84,6 +90,13 @@ def _stem(term: str) -> str:
 def matched(terms: list[str], text: str) -> int:
     low = text.lower()
     return sum(1 for t in terms if re.search(r"\b" + re.escape(_stem(t)), low))
+
+
+def adds_something(action_words: list[str], passage: str) -> bool:
+    """Does the passage hold a word worth searching for that the action does not, in any form? One that holds none tells the writer
+    nothing beyond the action it is already reading: an earlier copy of the same question, most of all."""
+    said = " ".join(action_words)
+    return any(not matched([w], said) for w in _words(passage))
 
 
 def _hash(*parts: str) -> str:
@@ -188,7 +201,11 @@ class StorySearch:
         return [i for score, i in scored[:CANDIDATES] if score > 0.3]
 
     def search(self, query: str, before: int, top_k: int = TOP_K) -> list[tuple[int, str, str]]:
-        """Up to `top_k` (turn, role, passage) from the first `before` turns that match `query`, at most one per turn, in story order."""
+        """Up to `top_k` (turn, role, passage) from the first `before` turns that match `query`, at most one per turn, in story order.
+
+        A passage that adds no word to the query is left out, and at most MAX_YOURS are the player's own lines. An action shares its
+        words with the player's earlier actions, which are short and so rank first by keyword: unfiltered, 136 of 153 quotes in two
+        measured runs were the player's own lines (D-075). One of them still has room, since what the player told someone is theirs."""
         if before <= 0:
             return []
         conn = self._connect()
@@ -199,10 +216,16 @@ class StorySearch:
                 for rank, i in enumerate(ranked, 1):
                     fused[i] = fused.get(i, 0.0) + 1.0 / (RRF_K + rank)
             picked: dict[int, tuple[int, str, str]] = {}
+            said, yours = _words(query), 0
             for i, _score in sorted(fused.items(), key=lambda kv: (-kv[1], -kv[0])):
                 turn, role, text = conn.execute("SELECT turn, role, text FROM passage WHERE id=?", (i,)).fetchone()
-                if turn not in picked:
-                    picked[turn] = (turn, role, text)
+                if turn in picked or not adds_something(said, text):
+                    continue
+                if role == "player":
+                    if yours >= MAX_YOURS:
+                        continue
+                    yours += 1
+                picked[turn] = (turn, role, text)
                 if len(picked) >= top_k:
                     break
             return [picked[t] for t in sorted(picked)]
